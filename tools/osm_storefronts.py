@@ -57,6 +57,10 @@ LANDMARK_NAMES = {
     "Corner Market": "pike_market",
     "Sanitary Public Market": "pike_market",
     "Market Heritage Center": "pike_market",
+    # v3: Pioneer Square / Colman Dock
+    "Smith Tower": "smith_tower",
+    "Washington State Ferries Terminal": "ferry_terminal",
+    "Pier 54": "pier_shed",
 }
 
 # Ground-floor bay width (m) by OSM shop / amenity kind

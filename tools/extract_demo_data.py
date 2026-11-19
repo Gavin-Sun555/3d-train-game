@@ -486,7 +486,9 @@ def add_junction_links(nodes, edges, max_gap=25.0):
     return added
 
 
-FROZEN_GRAPH_V1 = os.path.join(ROOT, "tools", "osm_cache", "seattle_graph_v1.json")
+# Id reference: the latest released graph (v2 = v1 downtown/SLU ids + Seattle Center/waterfront ids).
+# Each map extension freezes the previous graph here so every id ever shipped stays valid for saves.
+FROZEN_GRAPH_V1 = os.path.join(ROOT, "tools", "osm_cache", "seattle_graph_v2.json")
 
 
 def stabilize_graph_ids(final_nodes, final_edges, starter_network):
@@ -581,8 +583,9 @@ def build_seattle_expanded():
     # -> Denny Triangle & Amazon Spheres (mid) -> South Lake Union & Lake Union Park (north)!
     # v2: extended west to Seattle Center / Space Needle / Olympic Sculpture Park and south along the
     # Elliott Bay waterfront to the Great Wheel. Origin (cx, cy) unchanged so existing coordinates hold.
+    # v3: further south along the waterfront to Colman Dock (Seattle Ferry Terminal, Pier 52).
     x0, x1 = 1000.0, 2940.0
-    y0, y1 = 1950.0, 4500.0
+    y0, y1 = 1950.0, 4900.0
     cx = 2420.0
     cy = 2960.0
 
@@ -1063,6 +1066,7 @@ def build_seattle_expanded():
         "international_fountain": {"pos": rc([1373.0, 2477.0])},
         "chihuly": {"pos": rc([1487.1, 2705.2])},
         "great_wheel": {"pos": rc([2063.5, 4293.9])},
+        "colman_dock": {"pos": rc([2494.5, 4793.1])},
         "aquarium": {"pos": rc([2023.7, 4105.9])},
         # foot of Pike Street (junction with Pike Place), on the market arcade roof, facing up Pike St
         "pike_market_sign": {"pos": [-220.3, 1062.0], "face": [0.90, -0.43], "roof_h": 8.5},

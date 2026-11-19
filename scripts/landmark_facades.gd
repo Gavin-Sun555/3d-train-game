@@ -34,6 +34,8 @@ const OVERRIDES := {
 	"amazon_reinvent": [0, Color(0.58, 0.66, 0.72), false, 0.0],
 	"amazon_blackfoot": [0, Color(0.48, 0.56, 0.62), false, 0.0],
 	"church": [1, Color(0.62, 0.38, 0.30), false, 0.0],
+	# Smith Tower (1914): white glazed terracotta shaft topped by a pyramid, 148m with the cap
+	"smith_tower": [1, Color(0.92, 0.91, 0.87), true, 128.0],
 }
 
 const ASHLAR_SEED := 62 # building shader: seeds >= 60 draw smooth cut-stone instead of brick
@@ -543,6 +545,7 @@ const TOWER_LOOKS := {
 	"wac": {"fins": [2.0, 0.45, 0.32, Color(0.70, 0.56, 0.42)], "crown": "deco"},
 	"securities": {"fins": [3.2, 0.40, 0.25, Color(0.86, 0.82, 0.72)]},
 	"joshua_green": {"fins": [3.0, 0.40, 0.25, Color(0.92, 0.90, 0.84)]},
+	"smith_tower": {"fins": [2.4, 0.42, 0.30, Color(0.95, 0.94, 0.90)], "crown": "pyramid"},
 }
 
 
@@ -606,6 +609,14 @@ static func _tower_overlay(fst: SurfaceTool, poly: PackedVector2Array, h: float,
 				"deco":
 					StorefrontBuilder._box(ctx, -0.1, w + 0.1, y1 - 4.0, y1 + 0.8, 0.0, 0.4, Color(0.78, 0.66, 0.50))
 					StorefrontBuilder._box(ctx, w * 0.25, w * 0.75, y1 + 0.8, y1 + 3.5, -1.5, -0.6, Color(0.76, 0.64, 0.48))
+				"pyramid":
+					var cen := Vector2.ZERO
+					for q in tpoly:
+						cen += q
+					cen /= float(tpoly.size())
+					var apex := Vector3(cen.x, y1 + 20.0, cen.y)
+					StorefrontBuilder._tri(fst, Vector3(a.x, y1, a.y), Vector3(c.x, y1, c.y), apex, Color(0.93, 0.92, 0.88))
+					StorefrontBuilder._tri(fst, Vector3(a.x, y1, a.y), apex, Vector3(c.x, y1, c.y), Color(0.93, 0.92, 0.88))
 				"gable":
 					StorefrontBuilder._box(ctx, -0.1, w + 0.1, y1 - 0.6, y1 + 0.6, 0.0, 0.5, Color(0.70, 0.52, 0.46))
 					if w > 14.0:

@@ -36,6 +36,8 @@ static func build(parent: Node3D, map_data: Dictionary, lights: Array) -> void:
 		_international_fountain(root, _p(lm["international_fountain"]["pos"]), lights)
 	if lm.has("chihuly"):
 		_chihuly_glasshouse(root, _p(lm["chihuly"]["pos"]), lights)
+	if lm.has("colman_dock"):
+		_colman_dock(root, lights)
 	if lm.has("great_wheel"):
 		_great_wheel(root, _p(lm["great_wheel"]["pos"]), lights)
 	if lm.has("aquarium"):
@@ -470,7 +472,8 @@ static func _mopop(parent: Node3D, b: Dictionary) -> void:
 			var edge := (x % 16 == 0) or (y % 10 == 0)
 			img.set_pixel(x, y, Color(0.82, 0.82, 0.82) if edge else Color(1, 1, 1))
 	var tex := ImageTexture.create_from_image(img)
-	var cols: Array[Color] = [Color(0.62, 0.10, 0.14), Color(0.42, 0.22, 0.58), Color(0.82, 0.64, 0.30), Color(0.78, 0.80, 0.84), Color(0.20, 0.44, 0.72), Color(0.88, 0.40, 0.48)]
+	# Weathered real-world finishes: oxblood red, dusky purple, brushed gold, matte stainless, pale sky blue
+	var cols: Array[Color] = [Color(0.46, 0.17, 0.18), Color(0.38, 0.29, 0.44), Color(0.66, 0.56, 0.38), Color(0.70, 0.71, 0.72), Color(0.38, 0.50, 0.62), Color(0.60, 0.40, 0.42)]
 	var blobs: Array = [
 		[Vector3(-18, 7, -6), Vector3(17, 12, 14), 0],
 		[Vector3(4, 9, -10), Vector3(15, 15, 12), 1],
@@ -481,7 +484,7 @@ static func _mopop(parent: Node3D, b: Dictionary) -> void:
 	]
 	for i in range(blobs.size()):
 		var bl: Array = blobs[i]
-		var m := _mat(cols[int(bl[2])], 0.28, 0.82)
+		var m := _mat(cols[int(bl[2])], 0.42, 0.55)
 		m.albedo_texture = tex
 		m.uv1_scale = Vector3(2, 2, 1)
 		_mi(root, _blob_mesh(bl[1], float(i) * 1.37, -(bl[0] as Vector3).y), m, bl[0])
@@ -892,4 +895,152 @@ static func _plank_mat() -> StandardMaterial3D:
 	m.albedo_texture = ImageTexture.create_from_image(img)
 	m.roughness = 0.88
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return m
+
+
+
+# ---------------------------------------------------------------------------------------------
+# Colman Dock – Seattle Ferry Terminal (Pier 52) with two docked Washington State Ferries
+# ---------------------------------------------------------------------------------------------
+const DOCK_EDGE_X := -122.0 # dock face (water to the west, -X)
+
+
+static func _colman_dock(parent: Node3D, lights: Array) -> void:
+	var root := Node3D.new()
+	root.name = "ColmanDock"
+	parent.add_child(root)
+	var glass := _glass(Color(0.42, 0.55, 0.60), 0.55)
+	var steel := _mat(Color(0.30, 0.32, 0.34), 0.4, 0.6)
+	var roof := _mat(Color(0.82, 0.83, 0.84), 0.5, 0.3)
+	var conc := _mat(Color(0.70, 0.69, 0.66), 0.85, 0.0)
+	var timber := _mat(Color(0.30, 0.25, 0.20), 0.9, 0.0)
+	# Terminal building: two-storey glass hall with a long sloping roof
+	var t_c := Vector3(-62.0, 0.0, 1748.0)
+	_box(root, Vector3(44.0, 0.4, 72.0), t_c + Vector3(0, 0.2, 0), conc)
+	_box(root, Vector3(40.0, 10.0, 68.0), t_c + Vector3(0, 5.2, 0), glass)
+	for k in range(15):
+		var z := -34.0 + float(k) * (68.0 / 14.0)
+		for sx: float in [-20.0, 20.0]:
+			_box(root, Vector3(0.3, 10.0, 0.3), t_c + Vector3(sx, 5.2, z), steel)
+	_box(root, Vector3(40.4, 0.3, 68.4), t_c + Vector3(0, 5.2, 0), steel)
+	var rf := _box(root, Vector3(48.0, 0.6, 76.0), t_c + Vector3(0, 11.4, 0), roof)
+	rf.rotation_degrees = Vector3(0, 0, 4.0)
+	_label(root, "SEATTLE FERRY TERMINAL", t_c + Vector3(20.6, 8.6, 0), Vector3(1, 0, 0), 2.2, Color(0.06, 0.32, 0.22), false)
+	_label(root, "COLMAN DOCK", t_c + Vector3(20.6, 6.6, 0), Vector3(1, 0, 0), 1.4, Color(0.15, 0.15, 0.16), false)
+	_light(root, t_c + Vector3(0, 8.0, 0), Color(1.0, 0.92, 0.8), 30.0, lights)
+	# Dock apron over the water between terminal and slips
+	_box(root, Vector3(10.0, 0.6, 120.0), Vector3(DOCK_EDGE_X + 2.0, 0.35, 1748.0), conc)
+	var slips: Array[float] = [1712.0, 1784.0]
+	var names: Array[String] = ["WENATCHEE", "TACOMA"]
+	for i in range(slips.size()):
+		var z := slips[i]
+		# Transfer span (vehicle ramp) and overhead passenger bridge to the upper deck
+		var ramp := _box(root, Vector3(14.0, 0.5, 11.0), Vector3(DOCK_EDGE_X - 6.0, 1.6, z), steel)
+		ramp.rotation_degrees = Vector3(0, 0, -6.0)
+		for sz: float in [-6.5, 6.5]:
+			_box(root, Vector3(2.0, 9.0, 2.0), Vector3(DOCK_EDGE_X - 11.0, 3.0, z + sz), conc)
+		_box(root, Vector3(44.0, 3.2, 3.6), Vector3(-104.0, 10.4, z - 3.0), glass)
+		_box(root, Vector3(44.2, 0.3, 3.8), Vector3(-104.0, 12.1, z - 3.0), roof)
+		for bx: float in [-118.0, -96.0]:
+			_box(root, Vector3(0.6, 8.8, 0.6), Vector3(bx, 4.4, z - 3.0), steel)
+		# Timber wing walls + mooring dolphins guiding the ferry into the slip
+		for side: float in [-1.0, 1.0]:
+			for k in range(6):
+				var cyl := CylinderMesh.new()
+				cyl.top_radius = 0.35
+				cyl.bottom_radius = 0.38
+				cyl.height = 8.0
+				_mi(root, cyl, timber, Vector3(DOCK_EDGE_X - 18.0 - float(k) * 9.0, 1.0, z + side * (15.5 + float(k) * 0.9)))
+			_box(root, Vector3(48.0, 1.2, 0.8), Vector3(DOCK_EDGE_X - 40.0, 3.6, z + side * 17.5), timber)
+		_wsf_ferry(root, Vector3(DOCK_EDGE_X - 14.0 - 70.0, 0.0, z), names[i], lights)
+
+
+# Washington State Ferries Jumbo-class style double-ended ferry, ~140m x 27m, lying along X.
+static func _wsf_ferry(parent: Node3D, c: Vector3, ship_name: String, lights: Array) -> void:
+	var root := Node3D.new()
+	root.name = "Ferry_" + ship_name
+	root.position = c
+	parent.add_child(root)
+	var white := _mat(Color(0.94, 0.94, 0.93), 0.45, 0.1)
+	var green := _mat(Color(0.05, 0.36, 0.24), 0.45, 0.1)
+	var dark := _mat(Color(0.10, 0.12, 0.13), 0.5, 0.1)
+	var win := _mat(Color(0.12, 0.17, 0.20), 0.15, 0.4)
+	var L := 140.0
+	var W := 27.0
+	# Hull: rounded double-ended deck outline, green boot-top band + white topsides
+	var outline := PackedVector2Array()
+	for k in range(25):
+		var a := -PI * 0.5 + PI * float(k) / 24.0
+		outline.append(Vector2(L * 0.5 - W * 0.5 + cos(a) * W * 0.5, sin(a) * W * 0.5))
+	for k in range(25):
+		var a := PI * 0.5 + PI * float(k) / 24.0
+		outline.append(Vector2(-L * 0.5 + W * 0.5 + cos(a) * W * 0.5, sin(a) * W * 0.5))
+	_mi(root, _prism(outline, -2.0, 1.2), green)
+	_mi(root, _prism(outline, 1.2, 4.0), white)
+	# Open car deck (dark interior with white posts) and the white passenger deck above
+	var inner := PackedVector2Array()
+	for p in outline:
+		inner.append(p * Vector2(0.97, 0.9))
+	_mi(root, _prism(inner, 4.0, 8.6), dark)
+	for k in range(15):
+		var x := -L * 0.42 + float(k) * L * 0.06
+		for sz: float in [-1.0, 1.0]:
+			_box(root, Vector3(0.6, 4.6, 0.4), Vector3(x, 6.3, sz * W * 0.43), white)
+	_mi(root, _prism(outline, 8.6, 9.4), white)
+	var pass_out := PackedVector2Array()
+	for p in outline:
+		pass_out.append(p * Vector2(0.86, 0.92))
+	_mi(root, _prism(pass_out, 9.4, 13.6), white)
+	for sz: float in [-1.0, 1.0]:
+		_box(root, Vector3(L * 0.72, 1.7, 0.2), Vector3(0, 11.6, sz * W * 0.46), win)
+		_box(root, Vector3(L * 0.86, 0.5, 0.15), Vector3(0, 2.6, sz * (W * 0.5 + 0.02)), green)
+		_label(root, "WASHINGTON STATE FERRIES", Vector3(0, 6.0, sz * (W * 0.5 + 0.08)), Vector3(0, 0, sz), 2.0, Color(0.05, 0.36, 0.24), false)
+	# Sun deck, double-ended pilothouses, twin stacks and masts
+	var sun := PackedVector2Array()
+	for p in outline:
+		sun.append(p * Vector2(0.62, 0.8))
+	_mi(root, _prism(sun, 13.6, 14.2), white)
+	for ex: float in [-1.0, 1.0]:
+		_box(root, Vector3(7.0, 4.0, 15.0), Vector3(ex * L * 0.33, 16.2, 0), white)
+		_box(root, Vector3(0.2, 1.6, 14.2), Vector3(ex * (L * 0.33 + 3.55), 16.6, 0), win)
+		_label(root, ship_name, Vector3(ex * (L * 0.33 + 3.62), 14.9, 0), Vector3(ex, 0, 0), 1.1, Color(0.05, 0.36, 0.24), false)
+		var stack := CylinderMesh.new()
+		stack.top_radius = 2.2
+		stack.bottom_radius = 2.5
+		stack.height = 8.0
+		var sm := _mi(root, stack, white, Vector3(ex * 18.0, 18.2, 0))
+		sm.scale = Vector3(1.6, 1.0, 1.0)
+		var band := CylinderMesh.new()
+		band.top_radius = 2.25
+		band.bottom_radius = 2.25
+		band.height = 1.4
+		var bm := _mi(root, band, green, Vector3(ex * 18.0, 20.6, 0))
+		bm.scale = Vector3(1.62, 1.0, 1.02)
+		var top := CylinderMesh.new()
+		top.top_radius = 2.2
+		top.bottom_radius = 2.2
+		top.height = 0.6
+		var tm := _mi(root, top, dark, Vector3(ex * 18.0, 22.4, 0))
+		tm.scale = Vector3(1.6, 1.0, 1.0)
+		_box(root, Vector3(0.3, 7.0, 0.3), Vector3(ex * L * 0.33, 21.7, 0), white)
+	_light(root, Vector3(0, 12.0, 0), Color(1.0, 0.93, 0.82), 40.0, lights)
+
+
+# Vertical prism of a 2D outline (x, z) between y0 and y1, with top cap
+static func _prism(outline: PackedVector2Array, y0: float, y1: float) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var n := outline.size()
+	for i in range(n):
+		var a := outline[i]
+		var b := outline[(i + 1) % n]
+		for v: Vector3 in [Vector3(a.x, y0, a.y), Vector3(b.x, y0, b.y), Vector3(b.x, y1, b.y), Vector3(a.x, y0, a.y), Vector3(b.x, y1, b.y), Vector3(a.x, y1, a.y)]:
+			st.add_vertex(v)
+	var idx := Geometry2D.triangulate_polygon(outline)
+	for i in range(0, idx.size(), 3):
+		for k: int in [0, 1, 2]:
+			var p := outline[idx[i + k]]
+			st.add_vertex(Vector3(p.x, y1, p.y))
+	st.generate_normals()
+	var m := st.commit()
 	return m

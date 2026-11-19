@@ -1559,21 +1559,32 @@ static func _build_furniture(parent: Node3D, furn: Dictionary) -> void:
 	mat.vertex_color_use_as_albedo = true
 	mat.roughness = 0.6
 	mat.metallic = 0.3
+	# Chunked (~120m) so each batch is frustum- and distance-culled on its own
 	for key: String in furn.keys():
 		var tfs: Array = furn[key]
 		if tfs.is_empty():
 			continue
-		var mm := MultiMesh.new()
-		mm.transform_format = MultiMesh.TRANSFORM_3D
-		mm.mesh = _furn_mesh(key)
-		mm.instance_count = tfs.size()
-		for i in range(tfs.size()):
-			mm.set_instance_transform(i, tfs[i])
-		var mmi := MultiMeshInstance3D.new()
-		mmi.name = "Furniture_" + key
-		mmi.multimesh = mm
-		mmi.material_override = mat
-		root.add_child(mmi)
+		var chunks := {}
+		for tf: Transform3D in tfs:
+			var ck := Vector2i(int(floor(tf.origin.x / 120.0)), int(floor(tf.origin.z / 120.0)))
+			if not chunks.has(ck):
+				chunks[ck] = []
+			(chunks[ck] as Array).append(tf)
+		for ck: Vector2i in chunks.keys():
+			var ctfs: Array = chunks[ck]
+			var mm := MultiMesh.new()
+			mm.transform_format = MultiMesh.TRANSFORM_3D
+			mm.mesh = _furn_mesh(key)
+			mm.instance_count = ctfs.size()
+			for i in range(ctfs.size()):
+				mm.set_instance_transform(i, ctfs[i])
+			var mmi := MultiMeshInstance3D.new()
+			mmi.name = "Furniture_%s_%d_%d" % [key, ck.x, ck.y]
+			mmi.multimesh = mm
+			mmi.material_override = mat
+			mmi.visibility_range_end = 240.0
+			mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF if key == "cover" else GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+			root.add_child(mmi)
 
 
 static func _box_into(st: SurfaceTool, c: Vector3, sz: Vector3, col: Color) -> void:

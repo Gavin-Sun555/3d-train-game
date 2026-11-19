@@ -48,10 +48,10 @@ for p in out_pois:
     k = (p['name'], round(p['pos'][0]), round(p['pos'][1]))
     if k in seen: continue
     seen.add(k)
-    if -1430 <= p['pos'][0] <= 530 and -1020 <= p['pos'][1] <= 1550: dd.append(p)
-bl = [b for b in named_bld if -1430 <= b['center'][0] <= 530 and -1020 <= b['center'][1] <= 1550]
-pk = [p for p in parks if any(-1430 <= q[0] <= 530 and -1020 <= q[1] <= 1550 for q in p['poly'])]
-piers = [p for p in piers if any(-1430 <= q[0] <= 530 and -1020 <= q[1] <= 1550 for q in p['poly'])]
+    if -1430 <= p['pos'][0] <= 530 and -1020 <= p["pos"][1] <= 1960: dd.append(p)
+bl = [b for b in named_bld if -1430 <= b['center'][0] <= 530 and -1020 <= b["center"][1] <= 1960]
+pk = [p for p in parks if any(-1430 <= q[0] <= 530 and -1020 <= q[1] <= 1960 for q in p['poly'])]
+piers = [p for p in piers if any(-1430 <= q[0] <= 530 and -1020 <= q[1] <= 1960 for q in p['poly'])]
 json.dump({'pois': dd, 'buildings': bl, 'parks': pk, 'piers': piers}, open('seattle_osm_extra.json', 'w'))
 print(len(piers), 'piers', sorted(set(p['name'] for p in piers if p['name']))[:30])
 print(len(dd), 'pois', len(bl), 'named/tagged buildings', len(pk), 'parks')
