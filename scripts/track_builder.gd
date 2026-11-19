@@ -1573,6 +1573,8 @@ static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> vo
 	rail_st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var pier_st := SurfaceTool.new()
 	pier_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var steel_st := SurfaceTool.new()
+	steel_st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var top := MONORAIL_BEAM_TOP - EMBED_RAIL_TOP
 	var bot := top - MONO_BEAM_D
 	var hw := MONO_BEAM_W * 0.5
@@ -1610,25 +1612,38 @@ static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> vo
 			var sep := geom_sep_at(g, ps) if bool(g["is_double"]) else 0.0
 			_mono_pier(pier_st, pf, sep, bot)
 			ps += 28.0
-		# Beam switch for a crossover (diagonal beams like the tram crossover)
+		# Monorail crossover = one switch girder: a single steel diagonal beam (the route always runs it from
+		# the left guideway at the low-s end to the right one at the high-s end), steel flexible switch sections
+		# on both main beams where it joins, and switch-machine piers under each end.
 		var xo := edge_crossover_span(graph, eid, g)
 		if not xo.is_empty():
-			var dirs: Array[float] = [1.0]
-			if int(graph.crossovers.get(eid, 0)) != NetworkGraph.CrossoverType.SINGLE:
-				dirs = [-1.0, 1.0]
-			for xd: float in dirs:
-				var prev := Transform3D.IDENTITY
-				var prev_lat := 0.0
-				for xk in range(17):
-					var u := float(xk) / 16.0
-					var sx := lerpf(float(xo["s_mid"]) - float(xo["x_half"]), float(xo["s_mid"]) + float(xo["x_half"]), u)
-					var tf := sample_track_frame(c, sx, clen, false)
-					var herm := 3.0 * u * u - 2.0 * u * u * u
-					var lat := xd * lerpf(-geom_sep_at(g, sx), geom_sep_at(g, sx), herm)
-					if xk > 0:
-						_mono_beam_segment(beam_st, rail_st, prev, tf, prev_lat, lat, top - 0.01, bot, hw)
-					prev = tf
-					prev_lat = lat
+			var xs0 := float(xo["s_mid"]) - float(xo["x_half"])
+			var xs1 := float(xo["s_mid"]) + float(xo["x_half"])
+			var prev := Transform3D.IDENTITY
+			var prev_lat := 0.0
+			for xk in range(25):
+				var u := float(xk) / 24.0
+				var sx := lerpf(xs0, xs1, u)
+				var tf := sample_track_frame(c, sx, clen, false)
+				var herm := 3.0 * u * u - 2.0 * u * u * u
+				var lat := lerpf(-geom_sep_at(g, sx), geom_sep_at(g, sx), herm)
+				if xk > 0:
+					_mono_beam_segment(steel_st, rail_st, prev, tf, prev_lat, lat, top + 0.01, top - 1.1, hw + 0.02)
+				prev = tf
+				prev_lat = lat
+			for end_i in range(2):
+				var se := xs0 if end_i == 0 else xs1
+				var lane := -1.0 if end_i == 0 else 1.0
+				var sw0 := se - 7.0 if end_i == 0 else se - 1.0
+				var sw1 := se + 1.0 if end_i == 0 else se + 7.0
+				var fa := sample_track_frame(c, sw0, clen, false)
+				var fb := sample_track_frame(c, sw1, clen, false)
+				_mono_beam_segment(steel_st, rail_st, fa, fb, lane * geom_sep_at(g, sw0), lane * geom_sep_at(g, sw1), top + 0.02, top - 1.2, hw + 0.06)
+				var pf := sample_track_frame(c, se, clen, false)
+				_mono_pier(pier_st, pf, geom_sep_at(g, se), bot)
+				var mb := pf
+				mb.origin += pf.basis.x * (lane * geom_sep_at(g, se)) + Vector3.UP * (top - 1.9)
+				_mono_box(steel_st, mb, Vector3(1.6, 0.8, 2.4))
 	if not any:
 		return
 	# Junction connectors between monorail edges (same rule as the route compiler)
@@ -1696,6 +1711,16 @@ static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> vo
 	rail_mi.mesh = rail_st.commit()
 	rail_mi.material_override = rm
 	parent.add_child(rail_mi)
+	steel_st.generate_normals()
+	var sm := StandardMaterial3D.new()
+	sm.albedo_color = Color(0.36, 0.40, 0.44)
+	sm.metallic = 0.65
+	sm.roughness = 0.42
+	var steel_mi := MeshInstance3D.new()
+	steel_mi.name = "MonorailSwitchGirders"
+	steel_mi.mesh = steel_st.commit()
+	steel_mi.material_override = sm
+	parent.add_child(steel_mi)
 	pier_st.generate_normals()
 	var pm := StandardMaterial3D.new()
 	pm.albedo_color = Color(0.74, 0.73, 0.70)
@@ -1749,3 +1774,15 @@ static func _mono_pier(st: SurfaceTool, f: Transform3D, sep: float, bot: float) 
 		box.call(0.0, bot - 0.35, sep * 2.0 + 1.6, 0.7, 1.4)
 	else:
 		box.call(0.0, bot - 0.3, 1.8, 0.6, 1.4)
+
+
+
+static func _mono_box(st: SurfaceTool, f: Transform3D, sz: Vector3) -> void:
+	var r := f.basis.x.normalized() * (sz.x * 0.5)
+	var u := Vector3.UP * (sz.y * 0.5)
+	var w := -f.basis.z.normalized() * (sz.z * 0.5)
+	var o := f.origin
+	var v := [o - r - u - w, o + r - u - w, o + r + u - w, o - r + u - w, o - r - u + w, o + r - u + w, o + r + u + w, o - r + u + w]
+	for fc: Array in [[0, 1, 2, 3], [5, 4, 7, 6], [4, 0, 3, 7], [1, 5, 6, 2], [3, 2, 6, 7], [4, 5, 1, 0]]:
+		for idx: int in [0, 1, 2, 0, 2, 3]:
+			st.add_vertex(v[fc[idx]])

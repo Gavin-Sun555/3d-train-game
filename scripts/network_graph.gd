@@ -174,6 +174,8 @@ func import_state(state: Dictionary) -> void:
 		var bst := int(t_item["bed_style"])
 		var tmode := int(t_item.get("track_mode", TrackMode.SINGLE))
 		var xover := int(t_item.get("crossover", CrossoverType.NONE))
+		if TrackBuilder.is_monorail_style(bst) and xover > CrossoverType.SINGLE:
+			xover = CrossoverType.SINGLE
 		if edges.has(eid):
 			built_tracks[eid] = bst
 			built_track_modes[eid] = tmode
@@ -240,6 +242,9 @@ func set_crossover_on_edge(edge_id: int, xover_type: int) -> bool:
 		return false
 	if float(edges[edge_id]["length"]) < 26.0:
 		return false
+	# Monorail switches are single movable beams: no scissors (X) crossovers on a guideway
+	if xover_type > CrossoverType.NONE and TrackBuilder.is_monorail_style(int(built_tracks.get(edge_id, -1))):
+		xover_type = CrossoverType.SINGLE
 	if xover_type <= CrossoverType.NONE:
 		crossovers.erase(edge_id)
 	else:
@@ -1372,7 +1377,7 @@ func seed_seattle_monorail(start_xz: Vector2, end_xz: Vector2, model_key: String
 	# Scissors beam switch inward of each terminal for the turnback onto the other guideway
 	for idx: Array in [range(1, path.size() - 1), range(path.size() - 2, 0, -1)]:
 		for k: int in idx:
-			if set_crossover_on_edge(int(path[k]), CrossoverType.DOUBLE):
+			if set_crossover_on_edge(int(path[k]), CrossoverType.SINGLE):
 				break
 	var ids: Array[int] = [sa, sb, sa]
 	return create_line(ids, model_key, 2, 2, "西雅图中心单轨")

@@ -15,6 +15,7 @@ var manual_drive := false
 var _anim_time := 0.0
 var operating_seconds := 0.0
 var line_dist_m: Dictionary = {} # line_id -> float (total distance traveled by trams on this line)
+var _last_tram_of_line: Dictionary = {} # line_id -> tram index last watched on that line
 var line_variants: Dictionary = {} # line_id -> {variant_key: compiled route} (one per terminal platform combination)
 
 
@@ -190,10 +191,49 @@ func get_active_tram() -> Dictionary:
 	return trams[active_tram_idx]
 
 
+# Previous / next train on the SAME line as the currently watched train.
 func cycle_active_tram(delta_i: int = 1) -> void:
 	if trams.is_empty():
 		return
-	active_tram_idx = posmod(active_tram_idx + delta_i, trams.size())
+	var lid := int(get_active_tram().get("line_id", -1))
+	var same := line_tram_indices(lid)
+	if same.size() <= 1:
+		return
+	var pos := maxi(0, same.find(active_tram_idx))
+	active_tram_idx = int(same[posmod(pos + delta_i, same.size())])
+	_last_tram_of_line[lid] = active_tram_idx
+
+
+# Previous / next line (in line-id order); returns to the train last watched on that line.
+func cycle_active_line(delta_i: int = 1) -> void:
+	var lids := line_ids_in_service()
+	if lids.size() <= 1:
+		return
+	var cur := int(get_active_tram().get("line_id", -1))
+	var pos := maxi(0, lids.find(cur))
+	var nl := int(lids[posmod(pos + delta_i, lids.size())])
+	_last_tram_of_line[cur] = active_tram_idx
+	var idxs := line_tram_indices(nl)
+	var prefer := int(_last_tram_of_line.get(nl, -1))
+	active_tram_idx = prefer if idxs.has(prefer) else int(idxs[0])
+
+
+func line_ids_in_service() -> Array:
+	var out: Array = []
+	for tr: Dictionary in trams:
+		var lid := int(tr["line_id"])
+		if not out.has(lid):
+			out.append(lid)
+	out.sort()
+	return out
+
+
+func line_tram_indices(lid: int) -> Array:
+	var out: Array = []
+	for i in range(trams.size()):
+		if int(trams[i]["line_id"]) == lid:
+			out.append(i)
+	return out
 
 
 func apply_night_lights(night_factor: float) -> void:

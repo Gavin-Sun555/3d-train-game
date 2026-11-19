@@ -506,6 +506,18 @@ func _sync_landmark_monorail() -> void:
 				(car as Node3D).visible = true
 
 
+func _switch_line(delta_i: int) -> void:
+	var before := int(_transit_sim.get_active_tram().get("line_id", -1))
+	_transit_sim.cycle_active_line(delta_i)
+	var tr := _transit_sim.get_active_tram()
+	if tr.is_empty():
+		return
+	if int(tr["line_id"]) == before:
+		_show_toast("当前只有一条线路在运营")
+	else:
+		_show_toast("已切换到线路：%s（%d 列车）" % [str(tr["line_name"]), _transit_sim.line_tram_indices(int(tr["line_id"])).size()])
+
+
 func _get_traffic_focus_pos() -> Vector3:
 	if _transit_sim != null and not _transit_sim.trams.is_empty():
 		var tr := _transit_sim.get_active_tram()
@@ -1238,6 +1250,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				KEY_C: _set_cam_mode((_cam_mode + 1) % 5)
 				KEY_F:
 					_transit_sim.cycle_active_tram(1)
+				KEY_L:
+					_switch_line(1)
 				KEY_P:
 					var lvl := _pax_sim.cycle_spawn_level()
 					_btn_pax_rate.text = "客流: %s (P)" % PassengerSim.SPAWN_LEVEL_NAMES[lvl]
@@ -2358,8 +2372,10 @@ func _build_ui() -> void:
 	var rt_btns := HBoxContainer.new()
 	rt_btns.add_theme_constant_override("separation", 6)
 	rt_vbox.add_child(rt_btns)
-	rt_btns.add_child(_make_btn("◀ 上一列车", func(): _transit_sim.cycle_active_tram(-1)))
-	rt_btns.add_child(_make_btn("下一列车(F) ▶", func(): _transit_sim.cycle_active_tram(1)))
+	rt_btns.add_child(_make_btn("◀ 上一线路", func(): _switch_line(-1)))
+	rt_btns.add_child(_make_btn("下一线路(L) ▶", func(): _switch_line(1)))
+	rt_btns.add_child(_make_btn("◀ 本线上一列", func(): _transit_sim.cycle_active_tram(-1)))
+	rt_btns.add_child(_make_btn("本线下一列(F) ▶", func(): _transit_sim.cycle_active_tram(1)))
 	_btn_pax_rate = _make_btn("客流: 3档 标准 (P)", func():
 		var lvl := _pax_sim.cycle_spawn_level()
 		_btn_pax_rate.text = "客流: %s (P)" % PassengerSim.SPAWN_LEVEL_NAMES[lvl]
@@ -3430,10 +3446,11 @@ func _update_run_hud() -> void:
 	var pax_n: int = (tr["pax_dests"] as Array).size()
 	var cap: int = int(tr["capacity"])
 	var mode_str := "【手动驾驶】" if _transit_sim.manual_drive else "【AI 运营】"
-	_lbl_tram_info.text = "%s [%d/%d] · %s · 车上乘客：%d/%d 人 %s" % [
+	var same_line := _transit_sim.line_tram_indices(int(tr["line_id"]))
+	_lbl_tram_info.text = "%s 第%d/%d列 · %s · 车上乘客：%d/%d 人 %s" % [
 		str(tr["line_name"]),
-		_transit_sim.active_tram_idx + 1,
-		_transit_sim.trams.size(),
+		same_line.find(_transit_sim.active_tram_idx) + 1,
+		same_line.size(),
 		str(spec.get("name_zh", "")),
 		pax_n,
 		cap,
