@@ -1278,8 +1278,32 @@ func _unhandled_input(event: InputEvent) -> void:
 					_transit_sim.manual_set_notch(0)
 				KEY_R:
 					_do_cab_change()
+				KEY_G:
+					_do_throw_switch()
 				KEY_H:
 					_ring_tram_bell()
+
+
+# Manual driving (monorail): throw the next switch ahead for this train's route
+func _do_throw_switch() -> void:
+	if not _transit_sim.manual_drive:
+		_show_toast("⚠ 自动运营时道岔由调度按进路自动排列；切换手动驾驶 (Q) 后可手动扳道岔")
+		return
+	match _transit_sim.manual_throw_switch(_graph):
+		"diverge":
+			_sound.play_notch_click()
+			_show_toast("🔀 前方道岔扳向【侧向/渡线】，转辙约 4 秒，锁闭后信号开放")
+		"straight":
+			_sound.play_notch_click()
+			_show_toast("⬆ 前方道岔扳向【直向】，转辙约 4 秒，锁闭后信号开放")
+		"busy":
+			_show_toast("⚠ 前方道岔已被其他列车的进路占用，请在信号机前停车等待")
+		"locked":
+			_show_toast("⚠ 列车正在道岔上，道岔已锁闭不能扳动")
+		"not_mono":
+			_show_toast("⚠ 有轨电车线路没有可扳动的道岔（仅单轨线路）")
+		_:
+			_show_toast("前方 260 m 内没有道岔")
 
 
 # Manual cab change: the driver walks to the other cab; at a terminal the tram then departs back the way it came
@@ -2402,7 +2426,7 @@ func _build_ui() -> void:
 	cam_hbox.add_child(_make_btn("5 鸟瞰全局", func(): _set_cam_mode(CamMode.BIRD)))
 
 	var cam_hint := Label.new()
-	cam_hint.text = "↑↓←→ 方向键移动/旋转视角 · W/S 牵引与制动 · O 开关车门"
+	cam_hint.text = "↑↓←→ 方向键移动/旋转视角 · W/S 牵引与制动 · O 开关车门 · G 扳道岔(单轨)"
 	cam_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	cam_hint.add_theme_font_size_override("font_size", 12)
 	cam_hint.add_theme_color_override("font_color", Color(0.75, 0.82, 0.88))
@@ -2465,6 +2489,7 @@ func _build_ui() -> void:
 	_btn_drive_mode = _make_btn("切换手动驾驶 (Q)", func(): _transit_sim.manual_drive = not _transit_sim.manual_drive)
 	act_row.add_child(_btn_drive_mode)
 	act_row.add_child(_make_btn("换端折返 (R)", func(): _do_cab_change()))
+	act_row.add_child(_make_btn("扳道岔 (G)", func(): _do_throw_switch()))
 
 	# 5. HOME SCREEN OVERLAY (Map Selection + Progress Summary + Actions)
 	_build_home_screen_ui(master_root)
@@ -3526,6 +3551,26 @@ func _update_run_hud() -> void:
 			else:
 				sig_badge_txt = "电车灯 ┃ 通行(%.0fm)" % sd
 
+		if bool(tr.get("elevated", false)):
+			var swi := _transit_sim.switch_ahead_info(tr, _transit_sim.active_tram_idx)
+			sig_badge_txt = "道岔信号 ┃ 通行"
+			if not swi.is_empty() and float(swi["dist"]) < 220.0:
+				var sd2 := maxf(0.0, float(swi["dist"]) - TransitSim.SW_SIGNAL_BACK + 2.0)
+				var need_txt := "侧向(渡线)" if float(swi["need"]) > 0.5 else "直向"
+				var cur_txt := "侧向(渡线)" if float(swi["target"]) > 0.5 else "直向"
+				if bool(swi["green"]):
+					sig_badge_txt = "道岔信号 ┃ 通行(%.0fm)" % sd2
+					hazard_msg = "▸ 前方 %.0fm 道岔已排列【%s】并锁闭 · 信号开放" % [float(swi["dist"]), cur_txt]
+				else:
+					sig_badge_txt = "道岔信号 ━ 停车(%.0fm)" % sd2
+					if bool(swi["busy"]):
+						hazard_msg = "● 前方 %.0fm 道岔被其他列车占用 · 信号【━ 停车】，请在信号机前停车等待" % float(swi["dist"])
+					elif bool(swi["moving"]):
+						hazard_msg = "● 前方 %.0fm 道岔转辙中 → %s · 信号【━ 停车】" % [float(swi["dist"]), cur_txt]
+					elif _transit_sim.manual_drive and _transit_sim.active_tram_idx >= 0:
+						hazard_msg = "● 前方 %.0fm 道岔在【%s】，本次进路需要【%s】· 按 G 扳道岔，否则驶入将脱轨！" % [float(swi["dist"]), cur_txt, need_txt]
+					else:
+						hazard_msg = "● 前方 %.0fm 道岔信号【━ 停车】· 等待道岔排列 %s" % [float(swi["dist"]), need_txt]
 		var f0 := secs_h[0] as Node3D
 		var car_haz := {"has_hazard": false} if bool(tr.get("elevated", false)) else _traffic_sim.find_hazard_ahead_of_tram(f0.global_position, -f0.global_transform.basis.z, 36.0)
 		if bool(car_haz["has_hazard"]):
@@ -3608,6 +3653,11 @@ func _trigger_game_over_accident(ev: Dictionary) -> void:
 		_lbl_gameover_title.text = "【撞击车挡脱轨 · 本局运营中止】"
 		_lbl_gameover_detail.text = "地图：%s\n电车以 %.1f km/h 冲过终点站停车位置，撞上轨道尽头的车挡后脱轨！（车挡只能承受 %.0f km/h 以下的轻触）\n（您建设的轨道、车站、线路及所有存档均完整保留）" % [
 			map_nm, spd_kmh, TransitSim.BUFFER_SAFE_KMH
+		]
+	elif acc_type == "switch":
+		_lbl_gameover_title.text = "【驶入未开通道岔脱轨 · 本局运营中止】"
+		_lbl_gameover_detail.text = "地图：%s\n单轨列车以 %.1f km/h 冒进红色道岔信号，驶入%s的道岔，走行轮离开轨道梁脱轨！（手动驾驶请按 G 把前方道岔扳到本次进路方向，待信号开放后再通过）\n（您建设的轨道、车站、线路及所有存档均完整保留）" % [
+			map_nm, spd_kmh, "正在转辙" if bool(ev.get("moving", false)) else "方向不对"
 		]
 	elif acc_type == "tram_collision":
 		_lbl_gameover_title.text = "【电车相撞事故 · 本局运营中止】"

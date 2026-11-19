@@ -1603,9 +1603,11 @@ static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> vo
 		var xo := edge_crossover_span(graph, eid, g)
 		var gap0 := 1e9
 		var gap1 := -1e9
+		var gapm := 1e9
 		if not xo.is_empty():
 			gap0 = float(xo["s_mid"]) - float(xo["x_half"])
 			gap1 = float(xo["s_mid"]) + float(xo["x_half"])
+			gapm = float(xo["s_mid"])
 		# Break the beam exactly at the switch span ends so the moving beam fits the gap
 		var cuts: Array[float] = []
 		for k in range(n + 1):
@@ -1613,6 +1615,7 @@ static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> vo
 		if not xo.is_empty():
 			cuts.append(gap0)
 			cuts.append(gap1)
+			cuts.append(gapm)
 			cuts.sort()
 		for k in range(cuts.size() - 1):
 			var sa := cuts[k]
@@ -1622,8 +1625,10 @@ static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> vo
 			var fa := sample_track_frame(c, sa, clen, false)
 			var fb := sample_track_frame(c, sb, clen, false)
 			for ln: float in lanes:
-				if ln < 0.0 and sa >= gap0 - 0.01 and sb <= gap1 + 0.01:
-					continue # this stretch of the guideway IS the movable switch beam
+				if ln < 0.0 and sa >= gap0 - 0.01 and sb <= gapm + 0.01:
+					continue # movable half-beam A of the switch
+				if ln > 0.0 and sa >= gapm - 0.01 and sb <= gap1 + 0.01:
+					continue # movable half-beam B of the switch
 				var la := ln * geom_sep_at(g, sa)
 				var lb := ln * geom_sep_at(g, sb)
 				_mono_beam_segment(beam_st, rail_st, fa, fb, la, lb, top, bot, hw)
@@ -1649,8 +1654,13 @@ static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> vo
 			sw.set("bot", bot)
 			sw.set("half_w", hw)
 			switch_nodes.append(sw)
-			switch_setup.append([sw, frames_sw, seps_sw])
-			for se: float in [gap0, gap1]:
+			var sig_frames: Array[Transform3D] = []
+			var sig_seps := PackedFloat32Array()
+			for ss: float in [maxf(s0 + 0.5, gap0 - 10.0), minf(s1 - 0.5, gap1 + 10.0)]:
+				sig_frames.append(sample_track_frame(c, ss, clen, false))
+				sig_seps.append(geom_sep_at(g, ss))
+			switch_setup.append([sw, frames_sw, seps_sw, sig_frames, sig_seps])
+			for se: float in [gap0, gapm, gap1]:
 				var pf := sample_track_frame(c, se, clen, false)
 				_mono_pier(pier_st, pf, geom_sep_at(g, se), bot)
 				var mb := pf
@@ -1726,7 +1736,7 @@ static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> vo
 	for item: Array in switch_setup:
 		var sw_node: Node3D = item[0]
 		parent.add_child(sw_node)
-		sw_node.call("setup", item[1], item[2], bm, rm)
+		sw_node.call("setup", item[1], item[2], item[3], item[4], bm, rm)
 	graph.set_meta("monorail_switches", switch_nodes)
 	pier_st.generate_normals()
 	var pm := StandardMaterial3D.new()

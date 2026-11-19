@@ -281,6 +281,8 @@ func step_all_trams(
 			_step_ai_driver(tr, i, dt, graph, pax_sim, traffic_sim, sound, i == active_tram_idx)
 
 		var derail_ev := _step_tram_physics_and_doors(tr, i, dt, graph, pax_sim, sound, i == active_tram_idx, is_player_manual)
+		if derail_ev.is_empty() and is_player_manual and bool(tr.get("elevated", false)):
+			derail_ev = _check_switch_entry(tr, i)
 		_position_tram_3d(tr)
 
 		if not derail_ev.is_empty():
@@ -797,8 +799,9 @@ func _step_ai_driver(
 			tr["notch"] = 8
 		return
 
-	# 0. Terminal interlocking: wait before the crossover until a platform track is free
-	var term_hold_d := _terminal_hold_distance(tr)
+	# 0. Terminal interlocking: wait before the crossover until a platform track is free;
+	#    monorail: stop at a red switch signal until the switch is set and locked for this train
+	var term_hold_d := minf(_terminal_hold_distance(tr), _switch_hold_distance(tr))
 	if term_hold_d < 1e8:
 		if term_hold_d <= 1.2:
 			tr["notch"] = 1
@@ -1544,50 +1547,250 @@ func _update_terminal_interlocking() -> void:
 
 
 
-# Moving-beam monorail switches: each switch is thrown for the nearest monorail train whose route
-# (including the train already standing on it) passes through it - diverging if the route uses the
-# crossover, straight if it runs through on the switch's own guideway.
+# ---------------------------------------------------------------------------------------------
+# Monorail switch interlocking. Each crossover is two moving half-beams (monorail_switch.gd) protected
+# by four signals. A switch is reserved by one train at a time (the nearest ready train whose route runs
+# through it), thrown for that train's route (automatically for AI trains, by the driver with G in manual
+# mode), and only then is that train's entry signal cleared. Other trains stop at their red signal.
+# ---------------------------------------------------------------------------------------------
+const SW_SCAN_AHEAD := 170.0
+const SW_SIGNAL_BACK := 12.0 # stop point: 2 m before the signal mast, which stands 10 m before the span
+
+func _sw_ready(tr: Dictionary) -> bool:
+	if bool(tr.get("derailed", false)) or bool(tr.get("crashed", false)):
+		return false
+	if bool(tr["doors_target_open"]) or float(tr["door_ratio"]) > 0.02 or bool(tr.get("ai_depart_pending", false)):
+		return false
+	return _terminal_hold_distance(tr) >= 1e8
+
+
+# Where this train's route meets each switch: {sw, need (0 straight / 1 crossover), entry (signal index),
+# d_entry (m ahead of the head, <=0 once inside), s_entry (route s of the entry point)}. Nearest first.
+func _scan_switches(tr: Dictionary, switches: Array, ahead: float = SW_SCAN_AHEAD) -> Array:
+	var out: Array = []
+	var curve: Curve3D = tr["curve"]
+	var rlen := float(tr["route_len"])
+	var is_loop := bool(tr["is_loop"])
+	var dir := float(tr["dir"])
+	var s0 := float(tr["s"])
+	var back := _consist_length(tr) + 1.5
+	var cands: Array = []
+	var head := curve.sample_baked(s0, false)
+	for sw in switches:
+		if is_instance_valid(sw) and Vector2(head.x - sw.diverge_mid.x, head.z - sw.diverge_mid.z).length() < ahead + 80.0:
+			cands.append({"sw": sw, "need": -1.0, "entry": -1, "d_entry": -1e9, "s_entry": 0.0, "occ": false, "d_probe": 1e9})
+	if cands.is_empty():
+		return out
+	var d := -back
+	while d <= ahead:
+		var sk := s0 + dir * d
+		if is_loop:
+			sk = fposmod(sk, rlen)
+		elif sk < 0.0 or sk > rlen:
+			d += 1.0
+			continue
+		var p := curve.sample_baked(sk, false)
+		for c: Dictionary in cands:
+			if float(c["need"]) >= 0.0:
+				continue
+			var sw = c["sw"]
+			var dm: Vector3 = sw.diverge_mid
+			var dx := p.x - dm.x
+			var dz := p.z - dm.z
+			if dx * dx + dz * dz > 60.0 * 60.0:
+				continue
+			var ents: Array = sw.entries
+			for ei in range(ents.size()):
+				var e: Vector3 = ents[ei]
+				if Vector2(p.x - e.x, p.z - e.z).length() < 0.8:
+					c["occ"] = true
+					if d > float(c["d_entry"]) + 3.0:
+						c["entry"] = ei
+						c["d_entry"] = d
+						c["s_entry"] = sk
+			if Vector2(dx, dz).length() < 1.3:
+				c["need"] = 1.0
+			elif Vector2(p.x - sw.straight_a.x, p.z - sw.straight_a.z).length() < 1.3 \
+					or Vector2(p.x - sw.straight_b.x, p.z - sw.straight_b.z).length() < 1.3:
+				c["need"] = 0.0
+			if float(c["need"]) >= 0.0:
+				c["occ"] = true
+				c["d_probe"] = d
+				if float(c["d_entry"]) > d:
+					c["d_entry"] = -1e9 # entry hit belongs to a later pass
+		d += 1.0
+	for c: Dictionary in cands:
+		if bool(c["occ"]):
+			if float(c["d_entry"]) < -1e8:
+				c["d_entry"] = minf(0.0, float(c["d_probe"])) if float(c["need"]) >= 0.0 else -1.0
+			out.append(c)
+	out.sort_custom(func(x, y): return float(x["d_entry"]) < float(y["d_entry"]))
+	return out
+
+
 func _update_monorail_switches(graph: NetworkGraph) -> void:
 	if graph == null or not graph.has_meta("monorail_switches"):
 		return
 	var switches: Array = graph.get_meta("monorail_switches")
 	if switches.is_empty():
 		return
+	var infos := {} # train idx -> {sw -> info}
+	for ti in range(trams.size()):
+		var tr: Dictionary = trams[ti]
+		tr["sw_hold_s"] = -1.0
+		if not bool(tr.get("elevated", false)):
+			continue
+		var lst := _scan_switches(tr, switches)
+		tr["sw_next"] = {}
+		var per := {}
+		for c: Dictionary in lst:
+			per[c["sw"]] = c
+		infos[ti] = per
+		for c: Dictionary in lst:
+			if float(c["d_entry"]) > 0.0 and float(c["need"]) >= 0.0:
+				tr["sw_next"] = c
+				break
 	for sw in switches:
 		if not is_instance_valid(sw):
 			continue
-		var dm: Vector3 = sw.get("diverge_mid")
-		var sm: Vector3 = sw.get("straight_mid")
-		var dm2 := Vector2(dm.x, dm.z)
-		var sm2 := Vector2(sm.x, sm.z)
-		var best_d := 1e9
-		var want := -1.0
-		for tr: Dictionary in trams:
-			if not bool(tr.get("elevated", false)):
-				continue
-			var curve: Curve3D = tr["curve"]
-			var rlen := float(tr["route_len"])
-			var is_loop := bool(tr["is_loop"])
-			var dir := float(tr["dir"])
-			var s0 := float(tr["s"])
-			var d := -_consist_length(tr)
-			while d <= 140.0 and d < best_d:
-				var sk := s0 + dir * d
-				if is_loop:
-					sk = fposmod(sk, rlen)
-				elif sk < 0.0 or sk > rlen:
-					d += 2.0
+		var cur := int(sw.owner_idx)
+		if cur >= trams.size():
+			cur = -1
+		if cur >= 0:
+			var ci: Dictionary = (infos.get(cur, {}) as Dictionary).get(sw, {})
+			var cur_manual := cur == active_tram_idx and manual_drive
+			if ci.is_empty():
+				cur = -1 # tail has cleared the span
+			elif float(ci["d_entry"]) > 0.5 and not cur_manual and not _sw_ready(trams[cur]):
+				cur = -1 # not entered yet and now dwelling / held: let others through meanwhile
+			elif float(ci["need"]) >= 0.0 and float(ci["d_entry"]) > 0.0:
+				sw.owner_need = float(ci["need"])
+				sw.owner_entry = int(ci["entry"])
+		if cur < 0:
+			var best_key := 1e9
+			for ti: int in infos.keys():
+				var c: Dictionary = (infos[ti] as Dictionary).get(sw, {})
+				if c.is_empty() or float(c["need"]) < 0.0:
 					continue
-				var p := curve.sample_baked(sk, false)
-				var p2 := Vector2(p.x, p.z)
-				if p2.distance_to(dm2) < 1.3:
-					best_d = d
-					want = 1.0
-					break
-				if p2.distance_to(sm2) < 1.3:
-					best_d = d
-					want = 0.0
-					break
-				d += 2.0
-		if want >= 0.0:
-			sw.set("target", want)
+				var de := float(c["d_entry"])
+				if de > 0.0 and not _sw_ready(trams[ti]):
+					continue
+				var key := de - (1000.0 if de <= SW_SIGNAL_BACK else 0.0) # committed trains first
+				if key < best_key:
+					best_key = key
+					cur = ti
+			if cur >= 0:
+				var c2: Dictionary = (infos[cur] as Dictionary)[sw]
+				sw.owner_need = float(c2["need"])
+				sw.owner_entry = int(c2["entry"])
+		sw.owner_idx = cur
+		if cur >= 0 and not (cur == active_tram_idx and manual_drive):
+			sw.target = sw.owner_need
+		sw.update_signals()
+	# Stop points for trains whose next switch is not (yet) set and cleared for them
+	for ti: int in infos.keys():
+		var tr: Dictionary = trams[ti]
+		var nx: Dictionary = tr.get("sw_next", {})
+		if nx.is_empty():
+			continue
+		var sw = nx["sw"]
+		if int(sw.owner_idx) == ti and sw.signal_green(int(nx["entry"])):
+			continue
+		var de := float(nx["d_entry"])
+		var hold := de - SW_SIGNAL_BACK
+		if hold < 0.0:
+			hold = maxf(0.0, de - 1.5)
+		tr["sw_hold_s"] = fposmod(float(tr["s"]) + float(tr["dir"]) * hold, float(tr["route_len"])) if bool(tr["is_loop"]) else float(tr["s"]) + float(tr["dir"]) * hold
+
+
+func _switch_hold_distance(tr: Dictionary) -> float:
+	var hs := float(tr.get("sw_hold_s", -1.0))
+	if hs < 0.0:
+		return 1e9
+	var d := (hs - float(tr["s"])) * float(tr["dir"])
+	if bool(tr["is_loop"]):
+		d = fposmod(d, float(tr["route_len"]))
+		return d if d < float(tr["route_len"]) * 0.5 else 0.0
+	return maxf(0.0, d)
+
+
+# Driver's view of the next switch: {} or {dist, need, set_ok, moving, green, mine, throw}
+func switch_ahead_info(tr: Dictionary, me: int) -> Dictionary:
+	var nx: Dictionary = tr.get("sw_next", {})
+	if nx.is_empty() or not is_instance_valid(nx["sw"]):
+		return {}
+	var sw = nx["sw"]
+	var de := (float(nx["s_entry"]) - float(tr["s"])) * float(tr["dir"])
+	if bool(tr["is_loop"]):
+		de = fposmod(de, float(tr["route_len"]))
+	return {
+		"dist": de,
+		"need": float(nx["need"]),
+		"target": float(sw.target),
+		"moving": absf(float(sw.throw) - float(sw.target)) > 0.001,
+		"green": int(sw.owner_idx) == me and sw.signal_green(int(nx["entry"])),
+		"mine": int(sw.owner_idx) == me,
+		"busy": int(sw.owner_idx) >= 0 and int(sw.owner_idx) != me,
+	}
+
+
+# Manual driving: throw the next switch ahead of the active train (G). Returns a status string.
+func manual_throw_switch(graph: NetworkGraph) -> String:
+	var tr := get_active_tram()
+	if tr.is_empty() or not bool(tr.get("elevated", false)):
+		return "not_mono"
+	if graph == null or not graph.has_meta("monorail_switches"):
+		return "none"
+	var lst := _scan_switches(tr, graph.get_meta("monorail_switches"), 260.0)
+	var me := active_tram_idx
+	for c: Dictionary in lst:
+		if float(c["need"]) < 0.0:
+			continue
+		var sw = c["sw"]
+		if float(c["d_entry"]) <= 2.0:
+			if int(sw.owner_idx) == me:
+				continue # the train is on it: locked, look at the next one
+			return "locked"
+		if int(sw.owner_idx) >= 0 and int(sw.owner_idx) != me:
+			return "busy"
+		sw.owner_idx = me
+		sw.owner_need = float(c["need"])
+		sw.owner_entry = int(c["entry"])
+		sw.target = 0.0 if float(sw.target) > 0.5 else 1.0
+		tr["sw_next"] = c
+		return "diverge" if float(sw.target) > 0.5 else "straight"
+	return "none"
+
+
+# Player-driven train entering a switch span that is not set and cleared for it -> derailment
+func _check_switch_entry(tr: Dictionary, tram_idx: int) -> Dictionary:
+	var nx: Dictionary = tr.get("sw_next", {})
+	if nx.is_empty() or not is_instance_valid(nx["sw"]):
+		return {}
+	var de := (float(nx["s_entry"]) - float(tr["s"])) * float(tr["dir"])
+	if bool(tr["is_loop"]):
+		de = fposmod(de, float(tr["route_len"]))
+		if de > float(tr["route_len"]) * 0.5:
+			de -= float(tr["route_len"])
+	if de > 0.0 or de < -6.0:
+		return {}
+	var sw = nx["sw"]
+	var need := float(nx["need"])
+	tr["sw_next"] = {}
+	if absf(float(sw.throw) - need) < 0.02:
+		return {}
+	tr["derailed"] = true
+	tr["rollover_sign"] = 1.0
+	tr["rollover_progress"] = 0.06
+	var kmh := float(tr["speed_mps"]) * 3.6
+	tr["speed_mps"] = 0.0
+	var secs: Array = tr["tram_info"]["sections"]
+	return {
+		"accident": true,
+		"type": "switch",
+		"tram_idx": tram_idx,
+		"world_pos": (secs[0] as Node3D).global_position if not secs.is_empty() else Vector3.ZERO,
+		"speed_kmh": kmh,
+		"moving": absf(float(sw.throw) - float(sw.target)) > 0.001,
+	}
+
