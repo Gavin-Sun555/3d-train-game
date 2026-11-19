@@ -15,6 +15,7 @@ var manual_drive := false
 var _anim_time := 0.0
 var operating_seconds := 0.0
 var line_dist_m: Dictionary = {} # line_id -> float (total distance traveled by trams on this line)
+var _switch_timer := 0.0
 var _last_tram_of_line: Dictionary = {} # line_id -> tram index last watched on that line
 var line_variants: Dictionary = {} # line_id -> {variant_key: compiled route} (one per terminal platform combination)
 
@@ -263,6 +264,14 @@ func step_all_trams(
 	operating_seconds += dt
 	sound.overspeed_squeal = 0.0
 	_update_terminal_interlocking()
+	_switch_timer -= dt
+	if _switch_timer <= 0.0:
+		_switch_timer = 0.25
+		_update_monorail_switches(graph)
+	if graph != null and graph.has_meta("monorail_switches"):
+		for sw_n in graph.get_meta("monorail_switches"):
+			if is_instance_valid(sw_n):
+				sw_n.call("advance", dt)
 
 	for i in range(trams.size()):
 		var tr: Dictionary = trams[i]
@@ -1532,3 +1541,53 @@ func _update_terminal_interlocking() -> void:
 			res[sid] = {"platform": pick, "phase": "in"}
 			_switch_terminal_platform(tr, sid, pick)
 		tr["term_init_done"] = true
+
+
+
+# Moving-beam monorail switches: each switch is thrown for the nearest monorail train whose route
+# (including the train already standing on it) passes through it - diverging if the route uses the
+# crossover, straight if it runs through on the switch's own guideway.
+func _update_monorail_switches(graph: NetworkGraph) -> void:
+	if graph == null or not graph.has_meta("monorail_switches"):
+		return
+	var switches: Array = graph.get_meta("monorail_switches")
+	if switches.is_empty():
+		return
+	for sw in switches:
+		if not is_instance_valid(sw):
+			continue
+		var dm: Vector3 = sw.get("diverge_mid")
+		var sm: Vector3 = sw.get("straight_mid")
+		var dm2 := Vector2(dm.x, dm.z)
+		var sm2 := Vector2(sm.x, sm.z)
+		var best_d := 1e9
+		var want := -1.0
+		for tr: Dictionary in trams:
+			if not bool(tr.get("elevated", false)):
+				continue
+			var curve: Curve3D = tr["curve"]
+			var rlen := float(tr["route_len"])
+			var is_loop := bool(tr["is_loop"])
+			var dir := float(tr["dir"])
+			var s0 := float(tr["s"])
+			var d := -_consist_length(tr)
+			while d <= 140.0 and d < best_d:
+				var sk := s0 + dir * d
+				if is_loop:
+					sk = fposmod(sk, rlen)
+				elif sk < 0.0 or sk > rlen:
+					d += 2.0
+					continue
+				var p := curve.sample_baked(sk, false)
+				var p2 := Vector2(p.x, p.z)
+				if p2.distance_to(dm2) < 1.3:
+					best_d = d
+					want = 1.0
+					break
+				if p2.distance_to(sm2) < 1.3:
+					best_d = d
+					want = 0.0
+					break
+				d += 2.0
+		if want >= 0.0:
+			sw.set("target", want)

@@ -1566,15 +1566,19 @@ const MONO_BEAM_W := 0.9
 const MONO_BEAM_D := 1.5
 
 
+const MonorailSwitchScript := preload("res://scripts/monorail_switch.gd")
+
+
 static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> void:
+	graph.set_meta("monorail_switches", [])
 	var beam_st := SurfaceTool.new()
 	beam_st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var rail_st := SurfaceTool.new()
 	rail_st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var pier_st := SurfaceTool.new()
 	pier_st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var steel_st := SurfaceTool.new()
-	steel_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var switch_nodes: Array = []
+	var switch_setup: Array = []
 	var top := MONORAIL_BEAM_TOP - EMBED_RAIL_TOP
 	var bot := top - MONO_BEAM_D
 	var hw := MONO_BEAM_W * 0.5
@@ -1596,12 +1600,30 @@ static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> vo
 		var lanes: Array[float] = [0.0]
 		if bool(g["is_double"]):
 			lanes = [-1.0, 1.0]
-		for k in range(n):
-			var sa := lerpf(s0, s1, float(k) / float(n))
-			var sb := lerpf(s0, s1, float(k + 1) / float(n))
+		var xo := edge_crossover_span(graph, eid, g)
+		var gap0 := 1e9
+		var gap1 := -1e9
+		if not xo.is_empty():
+			gap0 = float(xo["s_mid"]) - float(xo["x_half"])
+			gap1 = float(xo["s_mid"]) + float(xo["x_half"])
+		# Break the beam exactly at the switch span ends so the moving beam fits the gap
+		var cuts: Array[float] = []
+		for k in range(n + 1):
+			cuts.append(lerpf(s0, s1, float(k) / float(n)))
+		if not xo.is_empty():
+			cuts.append(gap0)
+			cuts.append(gap1)
+			cuts.sort()
+		for k in range(cuts.size() - 1):
+			var sa := cuts[k]
+			var sb := cuts[k + 1]
+			if sb - sa < 0.01:
+				continue
 			var fa := sample_track_frame(c, sa, clen, false)
 			var fb := sample_track_frame(c, sb, clen, false)
 			for ln: float in lanes:
+				if ln < 0.0 and sa >= gap0 - 0.01 and sb <= gap1 + 0.01:
+					continue # this stretch of the guideway IS the movable switch beam
 				var la := ln * geom_sep_at(g, sa)
 				var lb := ln * geom_sep_at(g, sb)
 				_mono_beam_segment(beam_st, rail_st, fa, fb, la, lb, top, bot, hw)
@@ -1612,38 +1634,28 @@ static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> vo
 			var sep := geom_sep_at(g, ps) if bool(g["is_double"]) else 0.0
 			_mono_pier(pier_st, pf, sep, bot)
 			ps += 28.0
-		# Monorail crossover = one switch girder: a single steel diagonal beam (the route always runs it from
-		# the left guideway at the low-s end to the right one at the high-s end), steel flexible switch sections
-		# on both main beams where it joins, and switch-machine piers under each end.
-		var xo := edge_crossover_span(graph, eid, g)
+		# Monorail crossover = an articulated moving-beam switch: the anchored guideway's beam over this span
+		# flexes across to the other guideway when a train needs to cross (driven by TransitSim).
 		if not xo.is_empty():
-			var xs0 := float(xo["s_mid"]) - float(xo["x_half"])
-			var xs1 := float(xo["s_mid"]) + float(xo["x_half"])
-			var prev := Transform3D.IDENTITY
-			var prev_lat := 0.0
-			for xk in range(25):
-				var u := float(xk) / 24.0
-				var sx := lerpf(xs0, xs1, u)
-				var tf := sample_track_frame(c, sx, clen, false)
-				var herm := 3.0 * u * u - 2.0 * u * u * u
-				var lat := lerpf(-geom_sep_at(g, sx), geom_sep_at(g, sx), herm)
-				if xk > 0:
-					_mono_beam_segment(steel_st, rail_st, prev, tf, prev_lat, lat, top + 0.01, top - 1.1, hw + 0.02)
-				prev = tf
-				prev_lat = lat
-			for end_i in range(2):
-				var se := xs0 if end_i == 0 else xs1
-				var lane := -1.0 if end_i == 0 else 1.0
-				var sw0 := se - 7.0 if end_i == 0 else se - 1.0
-				var sw1 := se + 1.0 if end_i == 0 else se + 7.0
-				var fa := sample_track_frame(c, sw0, clen, false)
-				var fb := sample_track_frame(c, sw1, clen, false)
-				_mono_beam_segment(steel_st, rail_st, fa, fb, lane * geom_sep_at(g, sw0), lane * geom_sep_at(g, sw1), top + 0.02, top - 1.2, hw + 0.06)
+			var frames_sw: Array[Transform3D] = []
+			var seps_sw := PackedFloat32Array()
+			for i in range(MonorailSwitchScript.SEGMENTS + 1):
+				var su := lerpf(gap0, gap1, float(i) / float(MonorailSwitchScript.SEGMENTS))
+				frames_sw.append(sample_track_frame(c, su, clen, false))
+				seps_sw.append(geom_sep_at(g, su))
+			var sw: Node3D = MonorailSwitchScript.new()
+			sw.name = "MonorailSwitch_%d" % eid
+			sw.set("top", top)
+			sw.set("bot", bot)
+			sw.set("half_w", hw)
+			switch_nodes.append(sw)
+			switch_setup.append([sw, frames_sw, seps_sw])
+			for se: float in [gap0, gap1]:
 				var pf := sample_track_frame(c, se, clen, false)
 				_mono_pier(pier_st, pf, geom_sep_at(g, se), bot)
 				var mb := pf
-				mb.origin += pf.basis.x * (lane * geom_sep_at(g, se)) + Vector3.UP * (top - 1.9)
-				_mono_box(steel_st, mb, Vector3(1.6, 0.8, 2.4))
+				mb.origin += Vector3.UP * (bot - 0.75)
+				_mono_box(pier_st, mb, Vector3(2.0 * geom_sep_at(g, se) + 1.2, 0.5, 2.2))
 	if not any:
 		return
 	# Junction connectors between monorail edges (same rule as the route compiler)
@@ -1711,16 +1723,11 @@ static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> vo
 	rail_mi.mesh = rail_st.commit()
 	rail_mi.material_override = rm
 	parent.add_child(rail_mi)
-	steel_st.generate_normals()
-	var sm := StandardMaterial3D.new()
-	sm.albedo_color = Color(0.36, 0.40, 0.44)
-	sm.metallic = 0.65
-	sm.roughness = 0.42
-	var steel_mi := MeshInstance3D.new()
-	steel_mi.name = "MonorailSwitchGirders"
-	steel_mi.mesh = steel_st.commit()
-	steel_mi.material_override = sm
-	parent.add_child(steel_mi)
+	for item: Array in switch_setup:
+		var sw_node: Node3D = item[0]
+		parent.add_child(sw_node)
+		sw_node.call("setup", item[1], item[2], bm, rm)
+	graph.set_meta("monorail_switches", switch_nodes)
 	pier_st.generate_normals()
 	var pm := StandardMaterial3D.new()
 	pm.albedo_color = Color(0.74, 0.73, 0.70)
