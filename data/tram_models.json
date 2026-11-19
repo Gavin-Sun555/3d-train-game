@@ -1,0 +1,564 @@
+{
+  "models": [
+    {
+      "key": "siemens-s700",
+      "name_zh": "西门子 S700 轻轨电车",
+      "name_en": "Siemens S700 LRV",
+      "era": "modern",
+      "origin": "美国 · 北美主力轻轨",
+      "year": 2020,
+      "max_speed_kmh": 90,
+      "accel": 1.3,
+      "decel": 1.45,
+      "width": 2.65,
+      "default_sections": 3,
+      "section_len": 9.4,
+      "cap_per_section": 68,
+      "nose": "streamlined",
+      "roof": "lrv_pods",
+      "panto": "single_arm",
+      "vintage": false,
+      "single_headlamp": false,
+      "body_color": [
+        0.9,
+        0.93,
+        0.96
+      ],
+      "accent_color": [
+        0.08,
+        0.42,
+        0.68
+      ],
+      "roof_color": [
+        0.25,
+        0.28,
+        0.32
+      ],
+      "seat_color": [
+        0.14,
+        0.38,
+        0.62
+      ]
+    },
+    {
+      "key": "inekon-trio",
+      "name_zh": "Inekon 12 Trio 西湖电车",
+      "name_en": "Inekon 12 Trio",
+      "era": "modern",
+      "origin": "捷克/美国 · 西雅图街车",
+      "year": 2007,
+      "max_speed_kmh": 70,
+      "accel": 1.22,
+      "decel": 1.35,
+      "width": 2.46,
+      "default_sections": 3,
+      "section_len": 8.2,
+      "cap_per_section": 54,
+      "nose": "panoramic",
+      "roof": "compact",
+      "panto": "single_arm",
+      "vintage": false,
+      "single_headlamp": false,
+      "body_color": [
+        0.94,
+        0.95,
+        0.96
+      ],
+      "accent_color": [
+        0.84,
+        0.34,
+        0.14
+      ],
+      "roof_color": [
+        0.22,
+        0.25,
+        0.28
+      ],
+      "seat_color": [
+        0.72,
+        0.3,
+        0.16
+      ]
+    },
+    {
+      "key": "crrc-suzhou",
+      "name_zh": "中车长客 · 苏州高新电车",
+      "name_en": "CRRC Suzhou Low-Floor",
+      "era": "modern",
+      "origin": "中国 · 100%低地板",
+      "year": 2018,
+      "max_speed_kmh": 70,
+      "accel": 1.25,
+      "decel": 1.35,
+      "width": 2.65,
+      "default_sections": 3,
+      "section_len": 9.2,
+      "cap_per_section": 64,
+      "nose": "sleek",
+      "roof": "shrouded",
+      "panto": "single_arm",
+      "vintage": false,
+      "single_headlamp": false,
+      "body_color": [
+        0.93,
+        0.96,
+        0.95
+      ],
+      "accent_color": [
+        0.18,
+        0.68,
+        0.52
+      ],
+      "roof_color": [
+        0.24,
+        0.28,
+        0.31
+      ],
+      "seat_color": [
+        0.16,
+        0.56,
+        0.44
+      ]
+    },
+    {
+      "key": "crrc-haizhu",
+      "name_zh": "中车株机 · 海珠超级电容电车",
+      "name_en": "CRRC Haizhu Supercap",
+      "era": "modern",
+      "origin": "中国 · 广州木棉号",
+      "year": 2015,
+      "max_speed_kmh": 70,
+      "accel": 1.2,
+      "decel": 1.35,
+      "width": 2.65,
+      "default_sections": 3,
+      "section_len": 9.0,
+      "cap_per_section": 62,
+      "nose": "panoramic",
+      "roof": "battery",
+      "panto": "single_arm",
+      "vintage": false,
+      "single_headlamp": false,
+      "body_color": [
+        0.96,
+        0.96,
+        0.97
+      ],
+      "accent_color": [
+        0.82,
+        0.18,
+        0.2
+      ],
+      "roof_color": [
+        0.26,
+        0.27,
+        0.3
+      ],
+      "seat_color": [
+        0.74,
+        0.22,
+        0.22
+      ]
+    },
+    {
+      "key": "citadis-x05",
+      "name_zh": "阿尔斯通 Citadis X05",
+      "name_en": "Alstom Citadis X05",
+      "era": "modern",
+      "origin": "法国 · 欧洲全景电车",
+      "year": 2021,
+      "max_speed_kmh": 80,
+      "accel": 1.3,
+      "decel": 1.4,
+      "width": 2.4,
+      "default_sections": 3,
+      "section_len": 9.0,
+      "cap_per_section": 60,
+      "nose": "sleek",
+      "roof": "shrouded",
+      "panto": "single_arm",
+      "vintage": false,
+      "single_headlamp": false,
+      "body_color": [
+        0.92,
+        0.93,
+        0.95
+      ],
+      "accent_color": [
+        0.16,
+        0.54,
+        0.68
+      ],
+      "roof_color": [
+        0.16,
+        0.19,
+        0.22
+      ],
+      "seat_color": [
+        0.18,
+        0.46,
+        0.58
+      ]
+    },
+    {
+      "key": "siemens-avenio",
+      "name_zh": "西门子 Avenio 现代电车",
+      "name_en": "Siemens Avenio",
+      "era": "modern",
+      "origin": "德国 · 慕尼黑/多哈款",
+      "year": 2019,
+      "max_speed_kmh": 80,
+      "accel": 1.25,
+      "decel": 1.4,
+      "width": 2.65,
+      "default_sections": 3,
+      "section_len": 9.1,
+      "cap_per_section": 65,
+      "nose": "faceted",
+      "roof": "lrv_pods",
+      "panto": "single_arm",
+      "vintage": false,
+      "single_headlamp": false,
+      "body_color": [
+        0.2,
+        0.38,
+        0.62
+      ],
+      "accent_color": [
+        0.88,
+        0.9,
+        0.94
+      ],
+      "roof_color": [
+        0.2,
+        0.23,
+        0.27
+      ],
+      "seat_color": [
+        0.22,
+        0.36,
+        0.56
+      ]
+    },
+    {
+      "key": "hu300-lightline",
+      "name_zh": "宇都宫 HU300 雷都线",
+      "name_en": "Utsunomiya HU300 Lightline",
+      "era": "modern",
+      "origin": "日本 · 现代黑金轻轨",
+      "year": 2023,
+      "max_speed_kmh": 70,
+      "accel": 1.25,
+      "decel": 1.35,
+      "width": 2.65,
+      "default_sections": 3,
+      "section_len": 9.2,
+      "cap_per_section": 60,
+      "nose": "sleek",
+      "roof": "shrouded",
+      "panto": "single_arm",
+      "vintage": false,
+      "single_headlamp": false,
+      "body_color": [
+        0.18,
+        0.2,
+        0.23
+      ],
+      "accent_color": [
+        0.95,
+        0.76,
+        0.14
+      ],
+      "roof_color": [
+        0.14,
+        0.15,
+        0.18
+      ],
+      "seat_color": [
+        0.76,
+        0.6,
+        0.16
+      ]
+    },
+    {
+      "key": "hiroden-5200",
+      "name_zh": "广岛电铁 5200形 APEX",
+      "name_en": "Hiroden 5200 Green Mover",
+      "era": "modern",
+      "origin": "日本 · 路面低地板",
+      "year": 2019,
+      "max_speed_kmh": 60,
+      "accel": 1.15,
+      "decel": 1.3,
+      "width": 2.45,
+      "default_sections": 3,
+      "section_len": 8.4,
+      "cap_per_section": 52,
+      "nose": "boxy",
+      "roof": "battery",
+      "panto": "single_arm",
+      "vintage": false,
+      "single_headlamp": false,
+      "body_color": [
+        0.93,
+        0.95,
+        0.93
+      ],
+      "accent_color": [
+        0.18,
+        0.58,
+        0.28
+      ],
+      "roof_color": [
+        0.24,
+        0.27,
+        0.25
+      ],
+      "seat_color": [
+        0.2,
+        0.5,
+        0.28
+      ]
+    },
+    {
+      "key": "pcc-1936",
+      "name_zh": "PCC 流线型古典电车 (1936)",
+      "name_en": "PCC Streamliner (1936)",
+      "era": "vintage",
+      "origin": "美国 · 1936 传奇流线电车",
+      "year": 1936,
+      "max_speed_kmh": 65,
+      "accel": 1.3,
+      "decel": 1.35,
+      "width": 2.54,
+      "default_sections": 1,
+      "section_len": 14.2,
+      "cap_per_section": 58,
+      "nose": "streamlined",
+      "roof": "vintage_arch",
+      "panto": "trolley_pole",
+      "vintage": true,
+      "single_headlamp": true,
+      "body_color": [
+        0.95,
+        0.91,
+        0.78
+      ],
+      "accent_color": [
+        0.76,
+        0.22,
+        0.15
+      ],
+      "roof_color": [
+        0.42,
+        0.39,
+        0.34
+      ],
+      "seat_color": [
+        0.48,
+        0.26,
+        0.15
+      ]
+    },
+    {
+      "key": "dalian-3000-1935",
+      "name_zh": "大连 3000型有轨电车 (1935)",
+      "name_en": "Dalian 3000 Classic (1935)",
+      "era": "vintage",
+      "origin": "中国 · 1935 历史木质老电车",
+      "year": 1935,
+      "max_speed_kmh": 45,
+      "accel": 0.85,
+      "decel": 1.05,
+      "width": 2.4,
+      "default_sections": 1,
+      "section_len": 13.6,
+      "cap_per_section": 50,
+      "nose": "panoramic",
+      "roof": "clerestory",
+      "panto": "diamond",
+      "vintage": true,
+      "single_headlamp": true,
+      "body_color": [
+        0.15,
+        0.34,
+        0.22
+      ],
+      "accent_color": [
+        0.93,
+        0.88,
+        0.72
+      ],
+      "roof_color": [
+        0.3,
+        0.26,
+        0.22
+      ],
+      "seat_color": [
+        0.54,
+        0.34,
+        0.18
+      ]
+    },
+    {
+      "key": "lisbon-1930",
+      "name_zh": "里斯本 Remodelado 老电车 (1930)",
+      "name_en": "Lisbon Remodelado 28E (1930)",
+      "era": "vintage",
+      "origin": "葡萄牙 · 1930 经典山城电车",
+      "year": 1930,
+      "max_speed_kmh": 45,
+      "accel": 0.95,
+      "decel": 1.2,
+      "width": 2.28,
+      "default_sections": 1,
+      "section_len": 10.8,
+      "cap_per_section": 38,
+      "nose": "panoramic",
+      "roof": "clerestory",
+      "panto": "trolley_pole",
+      "vintage": true,
+      "single_headlamp": true,
+      "body_color": [
+        0.94,
+        0.74,
+        0.14
+      ],
+      "accent_color": [
+        0.96,
+        0.95,
+        0.9
+      ],
+      "roof_color": [
+        0.38,
+        0.36,
+        0.33
+      ],
+      "seat_color": [
+        0.56,
+        0.36,
+        0.18
+      ]
+    },
+    {
+      "key": "perley-thomas-1923",
+      "name_zh": "新奥尔良 900型铛铛车 (1923)",
+      "name_en": "Perley Thomas 900 (1923)",
+      "era": "vintage",
+      "origin": "美国 · 1923 圣查尔斯老电车",
+      "year": 1923,
+      "max_speed_kmh": 45,
+      "accel": 0.82,
+      "decel": 1.08,
+      "width": 2.44,
+      "default_sections": 1,
+      "section_len": 14.0,
+      "cap_per_section": 52,
+      "nose": "panoramic",
+      "roof": "clerestory",
+      "panto": "trolley_pole",
+      "vintage": true,
+      "single_headlamp": true,
+      "body_color": [
+        0.14,
+        0.28,
+        0.18
+      ],
+      "accent_color": [
+        0.68,
+        0.24,
+        0.16
+      ],
+      "roof_color": [
+        0.26,
+        0.23,
+        0.2
+      ],
+      "seat_color": [
+        0.6,
+        0.4,
+        0.2
+      ]
+    },
+    {
+      "key": "berlin-t24-1924",
+      "name_zh": "柏林 T24型古典电车 (1924)",
+      "name_en": "Berlin T24 Classic (1924)",
+      "era": "vintage",
+      "origin": "德国 · 1924 魏玛时代电车",
+      "year": 1924,
+      "max_speed_kmh": 50,
+      "accel": 0.88,
+      "decel": 1.12,
+      "width": 2.24,
+      "default_sections": 2,
+      "section_len": 11.2,
+      "cap_per_section": 42,
+      "nose": "boxy",
+      "roof": "vintage_arch",
+      "panto": "diamond",
+      "vintage": true,
+      "single_headlamp": true,
+      "body_color": [
+        0.92,
+        0.86,
+        0.68
+      ],
+      "accent_color": [
+        0.22,
+        0.24,
+        0.28
+      ],
+      "roof_color": [
+        0.3,
+        0.29,
+        0.27
+      ],
+      "seat_color": [
+        0.52,
+        0.32,
+        0.16
+      ]
+    },
+    {
+      "key": "hiroden-650-1942",
+      "name_zh": "广岛电铁 650形老电车 (1942)",
+      "name_en": "Hiroden 650 Classic (1942)",
+      "era": "vintage",
+      "origin": "日本 · 1942 昭和古董电车",
+      "year": 1942,
+      "max_speed_kmh": 45,
+      "accel": 0.82,
+      "decel": 1.1,
+      "width": 2.4,
+      "default_sections": 1,
+      "section_len": 12.8,
+      "cap_per_section": 46,
+      "nose": "boxy",
+      "roof": "vintage_arch",
+      "panto": "diamond",
+      "vintage": true,
+      "single_headlamp": true,
+      "body_color": [
+        0.88,
+        0.84,
+        0.72
+      ],
+      "accent_color": [
+        0.18,
+        0.42,
+        0.28
+      ],
+      "roof_color": [
+        0.28,
+        0.27,
+        0.25
+      ],
+      "seat_color": [
+        0.22,
+        0.44,
+        0.3
+      ]
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+
+config_version=5
+
+[application]
+
+config/name="3D Train Mode · 有轨电车建设与模拟驾驶"
+config/description="Standalone 3D streetcar simulation built with Godot 4 Forward+."
+run/main_scene="res://scenes/main.tscn"
+config/features=PackedStringArray("4.4")
+
+[display]
+
+window/size/viewport_width=1440
+window/size/viewport_height=900
+window/stretch/mode="canvas_items"
+window/dpi/allow_hidpi=true
+
+[rendering]
+
+scaling_3d/scale=0.85
+anti_aliasing/quality/msaa_3d=1
+anti_aliasing/quality/screen_space_aa=0
+anti_aliasing/quality/use_taa=true
+lights_and_shadows/directional_shadow/size=4096
+lights_and_shadows/directional_shadow/soft_shadow_filter_quality=2
+environment/ssao/quality=1
