@@ -15,6 +15,7 @@ static func build_tram(spec: Dictionary, override_sections: int = -1) -> Diction
 	var roof_kind := str(spec.get("roof", "shrouded"))
 	var panto_kind := str(spec.get("panto", "single_arm"))
 	var single_lamp := bool(spec.get("single_headlamp", false))
+	var monorail := bool(spec.get("monorail", false))
 
 	var b_arr: Array = spec.get("body_color", [0.92, 0.95, 0.94])
 	var a_arr: Array = spec.get("accent_color", [0.12, 0.45, 0.72])
@@ -399,14 +400,22 @@ static func build_tram(spec: Dictionary, override_sections: int = -1) -> Diction
 			bogie_offsets.append(hl * 0.32)
 		else:
 			bogie_offsets.append(0.0)
-		for bz: float in bogie_offsets:
-			_build_detailed_bogie(sec, bz, mat_dark, mat_steel, mat_accent)
+		if monorail:
+			# Straddle-beam monorail: body skirts wrap both flanks of the 0.9m guideway beam (running and
+			# guide wheels are hidden inside), with an accent band along the skirt bottom
+			for sk: float in [-1.0, 1.0]:
+				_add_box(sec, Vector3(hw - 0.50, 1.45, sec_len - 0.30), Vector3(sk * (0.50 + (hw - 0.50) * 0.5), -0.30, 0.0), mat_body)
+				_add_box(sec, Vector3(hw - 0.48, 0.22, sec_len - 0.28), Vector3(sk * (0.50 + (hw - 0.50) * 0.5), -0.92, 0.0), mat_accent)
+			_add_box(sec, Vector3(1.0, 0.25, sec_len - 0.3), Vector3(0.0, 0.42, 0.0), mat_dark)
+		else:
+			for bz: float in bogie_offsets:
+				_build_detailed_bogie(sec, bz, mat_dark, mat_steel, mat_accent)
 
 		# 6. Rooftop Shrouds / HVAC / Supercap Pods / Vintage Clerestory Lantern Roof
 		_build_roof_equipment(sec, width, sec_len, roof_kind, vintage, mat_roof, mat_body, mat_dark, mat_cove_light)
 
 		var panto_sec_idx := 1 if sections_count >= 3 else 0
-		if idx == panto_sec_idx:
+		if idx == panto_sec_idx and not monorail:
 			_build_pantograph(sec, panto_kind, mat_dark, mat_steel, mat_brass)
 
 		# 7. Sculpted Front Cab Cockpit & Nose

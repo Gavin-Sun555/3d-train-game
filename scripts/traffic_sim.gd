@@ -143,7 +143,7 @@ func _build_intersection_signals(graph: NetworkGraph) -> void:
 			continue
 		var node_has_track := false
 		for x: Dictionary in nbs_chk:
-			if graph.built_tracks.has(int(x["edge_id"])):
+			if _is_tram_edge(graph, int(x["edge_id"])):
 				node_has_track = true
 				break
 		if not node_has_track:
@@ -163,11 +163,11 @@ func _build_intersection_signals(graph: NetworkGraph) -> void:
 		var nb_arr: Array = graph.adj.get(b, [])
 		var ta := 0
 		for x: Dictionary in na:
-			if graph.built_tracks.has(int(x["edge_id"])):
+			if _is_tram_edge(graph, int(x["edge_id"])):
 				ta += 1
 		var tb := 0
 		for x: Dictionary in nb_arr:
-			if graph.built_tracks.has(int(x["edge_id"])):
+			if _is_tram_edge(graph, int(x["edge_id"])):
 				tb += 1
 		var score_a := ta * 10 + na.size()
 		var score_b := tb * 10 + nb_arr.size()
@@ -185,7 +185,7 @@ func _build_intersection_signals(graph: NetworkGraph) -> void:
 		var has_track := false
 		for nb: Dictionary in nbs:
 			var eid := int(nb["edge_id"])
-			if graph.built_tracks.has(eid):
+			if _is_tram_edge(graph, eid):
 				primary_axis = _edge_outward_dir_2d(graph, eid, nid)
 				has_track = true
 				break
@@ -222,7 +222,7 @@ func _build_intersection_signals(graph: NetworkGraph) -> void:
 		for nb: Dictionary in nbs:
 			var eid := int(nb["edge_id"])
 			var ed: Dictionary = graph.edges[eid]
-			var edge_has_track := graph.built_tracks.has(eid)
+			var edge_has_track := _is_tram_edge(graph, eid)
 			var elen_sig := float(ed["length"])
 			if elen_sig < (12.0 if edge_has_track else 22.0):
 				continue
@@ -287,6 +287,19 @@ func _build_intersection_signals(graph: NetworkGraph) -> void:
 		}
 		signals[nid] = sig_entry
 		_refresh_signal_visuals(sig_entry)
+
+
+# Street-running tram track (monorail guideways are elevated and do not interact with road traffic)
+static func _is_tram_edge(graph: NetworkGraph, eid: int) -> bool:
+	return graph.built_tracks.has(eid) and not TrackBuilder.is_monorail_style(int(graph.built_tracks[eid]))
+
+
+static func _ground_trams(trams: Array[Dictionary]) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for t: Dictionary in trams:
+		if not bool(t.get("elevated", false)):
+			out.append(t)
+	return out
 
 
 static func _is_pole_clear_of_tracks(graph: NetworkGraph, pt2: Vector2) -> bool:
@@ -448,7 +461,7 @@ func get_signal_aspect(node_id: int, approach_fwd_2d: Vector2) -> String:
 # Queries the nearest signalized intersection ahead of a tram's FRONT NOSE along its actual curve (works on curves too!)
 func get_upcoming_tram_signal(tr: Dictionary, graph: NetworkGraph) -> Dictionary:
 	var secs: Array = tr["tram_info"]["sections"]
-	if secs.is_empty() or signals.is_empty():
+	if secs.is_empty() or signals.is_empty() or bool(tr.get("elevated", false)):
 		return {"has_signal": false, "aspect": "green", "dist": 999.0, "stop_line": 11.2}
 
 	var curve: Curve3D = tr.get("curve")
@@ -524,6 +537,7 @@ func step_traffic(
 	_manual_drive: bool,
 	focus_pos: Vector3
 ) -> void:
+	trams = _ground_trams(trams)
 	# 1. Advance all Intersection Signal Controllers (+ gentle Transit Signal Priority for approaching trams)
 	for nid: int in signals.keys():
 		var sig: Dictionary = signals[nid]
@@ -786,6 +800,8 @@ static func _intersection_stop_line(graph: NetworkGraph, nid: int, my_eid: int) 
 
 
 func find_hazard_along_tram_curve(tr: Dictionary, max_lookahead: float = 48.0) -> Dictionary:
+	if bool(tr.get("elevated", false)):
+		return {"has_hazard": false, "dist": 999.0}
 	var curve: Curve3D = tr.get("curve")
 	var rlen := float(tr.get("route_len", 10.0))
 	var is_loop := bool(tr.get("is_loop", false))
@@ -841,6 +857,8 @@ func find_hazard_ahead_of_tram(tram_pos: Vector3, tram_fwd: Vector3, max_lookahe
 func check_tram_collisions(trams: Array[Dictionary]) -> Dictionary:
 	for ti in range(trams.size()):
 		var tr: Dictionary = trams[ti]
+		if bool(tr.get("elevated", false)):
+			continue
 		var tinfo: Dictionary = tr["tram_info"]
 		var secs: Array = tinfo["sections"]
 		var sec_hl := float(tinfo.get("section_len", 9.2)) * 0.5 - 0.20
@@ -992,7 +1010,7 @@ func _pick_spawn_edge(graph: NetworkGraph, edge_ids: Array, focus_pos: Vector3, 
 
 
 static func _is_transit_mall_double_track(graph: NetworkGraph, eid: int) -> bool:
-	if not graph.built_tracks.has(eid):
+	if not _is_tram_edge(graph, eid):
 		return false
 	if int(graph.built_track_modes.get(eid, NetworkGraph.TrackMode.SINGLE)) != NetworkGraph.TrackMode.DOUBLE:
 		return false
@@ -1047,7 +1065,7 @@ static func _edge_frame(graph: NetworkGraph, eid: int, s: float, elen: float, di
 static func _safe_motor_lane_offset(graph: NetworkGraph, eid: int) -> float:
 	var w := float(graph.edges[eid]["width"])
 	# On streets with tram tracks, motor vehicles stay strictly clear of trams & median/island platforms!
-	if graph.built_tracks.has(eid):
+	if _is_tram_edge(graph, eid):
 		var sep := graph.get_edge_track_half_sep(eid)
 		if sep > 2.0:
 			return maxf(6.25, w * 0.40)
@@ -1058,7 +1076,7 @@ static func _safe_motor_lane_offset(graph: NetworkGraph, eid: int) -> float:
 
 
 static func _edge_side_has_station(graph: NetworkGraph, eid: int, car_dir: float) -> bool:
-	if not graph.built_tracks.has(eid):
+	if not _is_tram_edge(graph, eid):
 		return false
 	for sid: int in graph.stations.keys():
 		var st: Dictionary = graph.stations[sid]

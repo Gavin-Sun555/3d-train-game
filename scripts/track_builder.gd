@@ -13,7 +13,20 @@ enum BedStyle {
 	GRASS_EMBED = 2,   # 绿茵草皮 · 齐平槽型嵌轨
 	STONE_SLAB = 3,    # 花岗岩步行街板
 	BALLAST = 4,       # 传统碎石道砟 · 工字轨枕木
+	MONORAIL = 5,      # 高架单轨梁 · 跨座式单轨 (separate track system)
 }
+
+const MONORAIL_BEAM_TOP := 7.2 # rail-top reference for straddle-beam monorail (beam top ~7.1m above street)
+const MONORAIL_HALF_SEP := 2.4 # twin guideway beams 4.8m apart (cars 2.9m wide)
+
+
+static func is_monorail_style(style: int) -> bool:
+	return style == BedStyle.MONORAIL
+
+
+# 0 = tram (street-running rails), 1 = monorail (elevated beam). Systems never connect to each other.
+static func edge_system(graph: NetworkGraph, eid: int) -> int:
+	return 1 if is_monorail_style(int(graph.built_tracks.get(eid, -1))) else 0
 
 
 static func create_smooth_curve(raw_pts: Array, closed_loop: bool) -> Curve3D:
@@ -88,18 +101,18 @@ static func _is_cusp_point(p_prev: Vector3, p_curr: Vector3, p_next: Vector3) ->
 # always ride exactly on the rails that are drawn (edge curves, junction connector arcs, crossovers).
 # ---------------------------------------------------------------------------------------------
 
-static func built_edges_at_node(graph: NetworkGraph, nid: int) -> Array:
+static func built_edges_at_node(graph: NetworkGraph, nid: int, sys: int = -1) -> Array:
 	var out: Array = []
 	for nb: Dictionary in graph.adj.get(nid, []):
 		var eid := int(nb["edge_id"])
-		if graph.built_tracks.has(eid) and not out.has(eid):
+		if graph.built_tracks.has(eid) and not out.has(eid) and (sys < 0 or edge_system(graph, eid) == sys):
 			out.append(eid)
 	return out
 
 
 # {bare: bool (trimmed + connector arcs), trim: float, edges: Array}
-static func node_track_info(graph: NetworkGraph, nid: int) -> Dictionary:
-	var elist := built_edges_at_node(graph, nid)
+static func node_track_info(graph: NetworkGraph, nid: int, sys: int = 0) -> Dictionary:
+	var elist := built_edges_at_node(graph, nid, sys)
 	var is_bare := _is_bare_junction_node(graph, nid, elist)
 	var has_sep_change := false
 	if elist.size() == 2:
@@ -132,8 +145,9 @@ static func edge_track_geom(graph: NetworkGraph, eid: int) -> Dictionary:
 		return {}
 	var na_id := int(ed["a"])
 	var nb_id := int(ed["b"])
-	var info_a := node_track_info(graph, na_id)
-	var info_b := node_track_info(graph, nb_id)
+	var e_sys := edge_system(graph, eid)
+	var info_a := node_track_info(graph, na_id, e_sys)
+	var info_b := node_track_info(graph, nb_id, e_sys)
 	var is_bare_a := bool(info_a["bare"]) or ((graph.adj.get(na_id, []) as Array).size() >= 3)
 	var is_bare_b := bool(info_b["bare"]) or ((graph.adj.get(nb_id, []) as Array).size() >= 3)
 	var s_start := minf(float(info_a["trim"]), clen * 0.44) if is_bare_a else 0.0
@@ -224,8 +238,9 @@ static func build_track_clearance_index(graph: NetworkGraph) -> Dictionary:
 				var sep := geom_sep_at(g, sx)
 				for xd: float in [-1.0, 1.0]:
 					_clear_add(grid, tf2.origin + tf2.basis.x * (xd * lerpf(-sep, sep, herm)))
-	for nid: int in graph.nodes.keys():
-		var info := node_track_info(graph, nid)
+	for nid_sys: Vector2i in _node_sys_pairs(graph):
+		var nid := nid_sys.x
+		var info := node_track_info(graph, nid, nid_sys.y)
 		var el: Array = info["edges"]
 		if el.size() < 2 or (not bool(info["bare"]) and el.size() == 2):
 			continue
@@ -261,6 +276,14 @@ static func build_track_clearance_index(graph: NetworkGraph) -> Dictionary:
 						_clear_add(grid, jc.sample_baked(js, true))
 						js += 0.5
 	return {"grid": grid}
+
+
+static func _node_sys_pairs(graph: NetworkGraph) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	for nid: int in graph.nodes.keys():
+		for sys in range(2):
+			out.append(Vector2i(nid, sys))
+	return out
 
 
 static func _clear_add(grid: Dictionary, p: Vector3) -> void:
@@ -368,9 +391,11 @@ static func edge_crossover_span(graph: NetworkGraph, eid: int, geom: Dictionary)
 	var span := float(geom["s_end"]) - float(geom["s_start"])
 	if span < 10.0:
 		return {}
+	# Monorail beams sit 4.8m apart: a long beam switch keeps the S-bend gentle (real switches are long, slow)
+	var max_half := 20.0 if edge_system(graph, eid) == 1 else 9.5
 	return {
 		"s_mid": (float(geom["s_start"]) + float(geom["s_end"])) * 0.5,
-		"x_half": minf(9.5, span * 0.44),
+		"x_half": minf(max_half, span * 0.44),
 	}
 
 
@@ -394,6 +419,8 @@ static func is_vignole_style(style: int) -> bool:
 
 
 static func rail_top_for_style(style: int) -> float:
+	if is_monorail_style(style):
+		return MONORAIL_BEAM_TOP
 	return VIGNOLE_RAIL_TOP if is_vignole_style(style) else EMBED_RAIL_TOP
 
 
@@ -475,6 +502,8 @@ static func build_network_tracks_and_stations(
 	# Build smooth curved junction connector arcs wherever >= 2 built track edges meet!
 	var node_built_edges: Dictionary = {}
 	for eid: int in graph.built_tracks.keys():
+		if is_monorail_style(int(graph.built_tracks[eid])):
+			continue # monorail guideways are built separately (_build_monorail_guideways)
 		var ed: Dictionary = graph.edges[eid]
 		var na := int(ed["a"])
 		var nb := int(ed["b"])
@@ -522,6 +551,8 @@ static func build_network_tracks_and_stations(
 			frames.append(sample_track_frame(curve, s_here, clen, false))
 			s_vals.append(s_here)
 		edge_end_frames[eid] = {"a_tf": frames[0], "b_tf": frames[frames.size() - 1]}
+		if is_monorail_style(seg_st):
+			continue
 
 		# Grass bed rule: only lay grass if usable span >= 2x grass bed width (prevents tiny grass patches in boulevard medians/short stubs!)
 		var eff_seg_st := seg_st
@@ -924,10 +955,11 @@ static func build_network_tracks_and_stations(
 		var sview := StationBuilder.build_detailed_station(parent, st_d, rtop, cjk_font, station_lights)
 		station_views[sid] = sview
 		# Side platforms take the motor lane: cut the kerb back into a tapered bay so traffic shifts outward
-		if int(st_d["side"]) != 0:
+		if int(st_d["side"]) != 0 and not is_monorail_style(bst):
 			bays.append(station_bay(graph, st_d, sep_st))
 	graph.set_meta("station_bays", bays)
 	_build_buffer_stops(parent, graph, station_lights)
+	_build_monorail_guideways(parent, graph)
 
 	return {
 		"stations": station_views,
@@ -1352,6 +1384,9 @@ static func _build_buffer_stops(parent: Node3D, graph: NetworkGraph, lights: Arr
 				var sp := geom_sep_at(g, s_rail)
 				lanes = [-sp, sp]
 			var y0 := rail_top_for_style(int(graph.built_tracks[eid]))
+			var mono := is_monorail_style(int(graph.built_tracks[eid]))
+			if mono:
+				y0 = MONORAIL_BEAM_TOP - EMBED_RAIL_TOP
 			for lat: float in lanes:
 				var pos := tf.origin + tf.basis.x * lat + Vector3.UP * y0
 				var root := Node3D.new()
@@ -1359,7 +1394,10 @@ static func _build_buffer_stops(parent: Node3D, graph: NetworkGraph, lights: Arr
 				# Local -Z points back toward the approaching tram
 				root.transform = Transform3D(Basis.looking_at(-face, Vector3.UP), pos)
 				holder.add_child(root)
-				_build_one_buffer(root, mats, lights)
+				if mono:
+					_build_monorail_bumper(root, mats, lights)
+				else:
+					_build_one_buffer(root, mats, lights)
 
 
 static var _buffer_mat_cache: Dictionary = {}
@@ -1486,3 +1524,228 @@ static func _build_one_buffer(root: Node3D, mats: Dictionary, lights: Array[Omni
 	ol.position = Vector3(0.0, 1.2, -0.7)
 	root.add_child(ol)
 	lights.append(ol)
+
+
+
+# Monorail end-of-guideway bumper: concrete end block on the beam with a hydraulic buffer, chevron board,
+# red lamp and the round "no entry" board (local -Z faces the approaching train; origin at beam top).
+static func _build_monorail_bumper(root: Node3D, mats: Dictionary, lights: Array[OmniLight3D]) -> void:
+	var conc := StandardMaterial3D.new()
+	conc.albedo_color = Color(0.70, 0.69, 0.66)
+	conc.roughness = 0.85
+	_bbox(root, Vector3(1.3, 2.4, 1.6), Vector3(0, -0.2, 0.8), conc)
+	_bbox(root, Vector3(1.6, 0.9, 0.24), Vector3(0, 0.75, -0.1), mats["stripe"])
+	_bcyl(root, 0.12, 0.4, Vector3(0, 0.75, -0.42), mats["chrome"], Vector3(90, 0, 0))
+	_bcyl(root, 0.2, 0.06, Vector3(0, 0.75, -0.64), mats["yellow"], Vector3(90, 0, 0))
+	_bcyl(root, 0.09, 0.08, Vector3(0, 1.35, -0.14), mats["lamp"], Vector3(90, 0, 0))
+	_bbox(root, Vector3(0.08, 1.4, 0.08), Vector3(0, 1.9, 0.2), mats["steel"])
+	var sign := MeshInstance3D.new()
+	var q := QuadMesh.new()
+	q.size = Vector2(0.9, 0.9)
+	sign.mesh = q
+	sign.material_override = mats["sign"]
+	sign.position = Vector3(0, 2.6, 0.12)
+	sign.rotation_degrees = Vector3(0, 180, 0)
+	root.add_child(sign)
+	var ol := OmniLight3D.new()
+	ol.light_color = Color(1.0, 0.15, 0.1)
+	ol.light_energy = 0.0
+	ol.visible = false
+	ol.omni_range = 4.0
+	ol.position = Vector3(0, 1.3, -0.7)
+	root.add_child(ol)
+	lights.append(ol)
+
+
+# ---------------------------------------------------------------------------------------------
+# Monorail guideways: straddle beams (0.9m wide, 1.5m deep, top 7.1m) on T-piers in the street median,
+# curved beam connectors at junctions and beam switches for crossovers. Shares geometry with the route
+# compiler (edge_track_geom / junction_connector_curve), so trains always ride exactly on the beams.
+# ---------------------------------------------------------------------------------------------
+const MONO_BEAM_W := 0.9
+const MONO_BEAM_D := 1.5
+
+
+static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> void:
+	var beam_st := SurfaceTool.new()
+	beam_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var rail_st := SurfaceTool.new()
+	rail_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var pier_st := SurfaceTool.new()
+	pier_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var top := MONORAIL_BEAM_TOP - EMBED_RAIL_TOP
+	var bot := top - MONO_BEAM_D
+	var hw := MONO_BEAM_W * 0.5
+	var any := false
+	var geoms := {}
+	for eid: int in graph.built_tracks.keys():
+		if not is_monorail_style(int(graph.built_tracks[eid])):
+			continue
+		var g := edge_track_geom(graph, eid)
+		if g.is_empty():
+			continue
+		geoms[eid] = g
+		any = true
+		var c: Curve3D = g["curve"]
+		var clen := float(g["clen"])
+		var s0 := float(g["s_start"])
+		var s1 := float(g["s_end"])
+		var n := maxi(2, int(ceil((s1 - s0) / 1.5)))
+		var lanes: Array[float] = [0.0]
+		if bool(g["is_double"]):
+			lanes = [-1.0, 1.0]
+		for k in range(n):
+			var sa := lerpf(s0, s1, float(k) / float(n))
+			var sb := lerpf(s0, s1, float(k + 1) / float(n))
+			var fa := sample_track_frame(c, sa, clen, false)
+			var fb := sample_track_frame(c, sb, clen, false)
+			for ln: float in lanes:
+				var la := ln * geom_sep_at(g, sa)
+				var lb := ln * geom_sep_at(g, sb)
+				_mono_beam_segment(beam_st, rail_st, fa, fb, la, lb, top, bot, hw)
+		# T-piers every ~28m in the median (single column + cap beam under both guideways)
+		var ps := s0 + 9.0
+		while ps < s1 - 6.0:
+			var pf := sample_track_frame(c, ps, clen, false)
+			var sep := geom_sep_at(g, ps) if bool(g["is_double"]) else 0.0
+			_mono_pier(pier_st, pf, sep, bot)
+			ps += 28.0
+		# Beam switch for a crossover (diagonal beams like the tram crossover)
+		var xo := edge_crossover_span(graph, eid, g)
+		if not xo.is_empty():
+			var dirs: Array[float] = [1.0]
+			if int(graph.crossovers.get(eid, 0)) != NetworkGraph.CrossoverType.SINGLE:
+				dirs = [-1.0, 1.0]
+			for xd: float in dirs:
+				var prev := Transform3D.IDENTITY
+				var prev_lat := 0.0
+				for xk in range(17):
+					var u := float(xk) / 16.0
+					var sx := lerpf(float(xo["s_mid"]) - float(xo["x_half"]), float(xo["s_mid"]) + float(xo["x_half"]), u)
+					var tf := sample_track_frame(c, sx, clen, false)
+					var herm := 3.0 * u * u - 2.0 * u * u * u
+					var lat := xd * lerpf(-geom_sep_at(g, sx), geom_sep_at(g, sx), herm)
+					if xk > 0:
+						_mono_beam_segment(beam_st, rail_st, prev, tf, prev_lat, lat, top - 0.01, bot, hw)
+					prev = tf
+					prev_lat = lat
+	if not any:
+		return
+	# Junction connectors between monorail edges (same rule as the route compiler)
+	for nid: int in graph.nodes.keys():
+		var info := node_track_info(graph, nid, 1)
+		var el: Array = info["edges"]
+		if el.size() < 2 or (not bool(info["bare"]) and el.size() == 2):
+			continue
+		for ia in range(el.size()):
+			for ib in range(ia + 1, el.size()):
+				var ea := int(el[ia])
+				var eb := int(el[ib])
+				if not geoms.has(ea) or not geoms.has(eb):
+					continue
+				var ga: Dictionary = geoms[ea]
+				var gb: Dictionary = geoms[eb]
+				var ea_is_a := int(graph.edges[ea]["a"]) == nid
+				var eb_is_a := int(graph.edges[eb]["a"]) == nid
+				var s_a := float(ga["s_start"]) if ea_is_a else float(ga["s_end"])
+				var s_b := float(gb["s_start"]) if eb_is_a else float(gb["s_end"])
+				var tf_a := sample_track_frame(ga["curve"], s_a, float(ga["clen"]), false)
+				var tf_b := sample_track_frame(gb["curve"], s_b, float(gb["clen"]), false)
+				var out_a := (-tf_a.basis.z if ea_is_a else tf_a.basis.z).normalized()
+				var out_b := (-tf_b.basis.z if eb_is_a else tf_b.basis.z).normalized()
+				if out_a.dot(out_b) > 0.72 and el.size() > 2:
+					continue
+				var right_a := (tf_a.basis.x if ea_is_a else -tf_a.basis.x).normalized()
+				var right_b := (tf_b.basis.x if eb_is_a else -tf_b.basis.x).normalized()
+				var dbl_a := bool(ga["is_double"])
+				var dbl_b := bool(gb["is_double"])
+				var lanes: Array[float] = [0.0]
+				if dbl_a or dbl_b:
+					lanes = [-1.0, 1.0]
+				for lane: float in lanes:
+					var pa := tf_a.origin - right_a * (lane * geom_sep_at(ga, s_a) if dbl_a else 0.0)
+					var pb := tf_b.origin + right_b * (lane * geom_sep_at(gb, s_b) if dbl_b else 0.0)
+					var jc := junction_connector_curve(pa, -out_a, pb, out_b)
+					if jc == null:
+						continue
+					var jl := jc.get_baked_length()
+					var jn := maxi(2, int(ceil(jl / 1.2)))
+					var prev_f := sample_track_frame(jc, 0.0, jl, false)
+					for k in range(1, jn + 1):
+						var f := sample_track_frame(jc, jl * float(k) / float(jn), jl, false)
+						_mono_beam_segment(beam_st, rail_st, prev_f, f, 0.0, 0.0, top, bot, hw)
+						prev_f = f
+				var mid_f := sample_track_frame(ga["curve"], s_a, float(ga["clen"]), false)
+				_mono_pier(pier_st, mid_f, 0.0, bot)
+	beam_st.generate_normals()
+	var bm := StandardMaterial3D.new()
+	bm.albedo_color = Color(0.80, 0.79, 0.76)
+	bm.roughness = 0.75
+	var beam_mi := MeshInstance3D.new()
+	beam_mi.name = "MonorailGuidewayBeams"
+	beam_mi.mesh = beam_st.commit()
+	beam_mi.material_override = bm
+	parent.add_child(beam_mi)
+	rail_st.generate_normals()
+	var rm := StandardMaterial3D.new()
+	rm.albedo_color = Color(0.22, 0.23, 0.24)
+	rm.metallic = 0.6
+	rm.roughness = 0.4
+	var rail_mi := MeshInstance3D.new()
+	rail_mi.name = "MonorailPowerRails"
+	rail_mi.mesh = rail_st.commit()
+	rail_mi.material_override = rm
+	parent.add_child(rail_mi)
+	pier_st.generate_normals()
+	var pm := StandardMaterial3D.new()
+	pm.albedo_color = Color(0.74, 0.73, 0.70)
+	pm.roughness = 0.85
+	var pier_mi := MeshInstance3D.new()
+	pier_mi.name = "MonorailPiers"
+	pier_mi.mesh = pier_st.commit()
+	pier_mi.material_override = pm
+	parent.add_child(pier_mi)
+
+
+static func _mono_beam_segment(beam_st: SurfaceTool, rail_st: SurfaceTool, fa: Transform3D, fb: Transform3D, la: float, lb: float, top: float, bot: float, hw: float) -> void:
+	var ra := fa.basis.x.normalized()
+	var rb := fb.basis.x.normalized()
+	var ca := fa.origin + ra * la
+	var cb := fb.origin + rb * lb
+	var c := func(cc: Vector3, r: Vector3, x: float, y: float) -> Vector3: return cc + r * x + Vector3.UP * y
+	var quads := [
+		[c.call(ca, ra, -hw, top), c.call(cb, rb, -hw, top), c.call(cb, rb, hw, top), c.call(ca, ra, hw, top)],
+		[c.call(ca, ra, hw, top), c.call(cb, rb, hw, top), c.call(cb, rb, hw, bot), c.call(ca, ra, hw, bot)],
+		[c.call(ca, ra, -hw, bot), c.call(cb, rb, -hw, bot), c.call(cb, rb, -hw, top), c.call(ca, ra, -hw, top)],
+		[c.call(ca, ra, hw, bot), c.call(cb, rb, hw, bot), c.call(cb, rb, -hw, bot), c.call(ca, ra, -hw, bot)],
+	]
+	for q: Array in quads:
+		for idx: int in [0, 1, 2, 0, 2, 3]:
+			beam_st.add_vertex(q[idx])
+	# Power / guide rails along both beam flanks
+	for sd: float in [-1.0, 1.0]:
+		var x := sd * (hw + 0.03)
+		var q2 := [c.call(ca, ra, x, top - 0.25), c.call(cb, rb, x, top - 0.25), c.call(cb, rb, x, top - 0.45), c.call(ca, ra, x, top - 0.45)]
+		for idx: int in ([0, 1, 2, 0, 2, 3] if sd > 0.0 else [0, 2, 1, 0, 3, 2]):
+			rail_st.add_vertex(q2[idx])
+
+
+static func _mono_pier(st: SurfaceTool, f: Transform3D, sep: float, bot: float) -> void:
+	var r := f.basis.x.normalized()
+	var fw := -f.basis.z.normalized()
+	var o := f.origin
+	var box := func(cx: float, cy: float, sx: float, sy: float, sz: float) -> void:
+		var cc := o + r * cx + Vector3.UP * cy
+		var hx := r * (sx * 0.5)
+		var hy := Vector3.UP * (sy * 0.5)
+		var hz := fw * (sz * 0.5)
+		var v := [cc - hx - hy - hz, cc + hx - hy - hz, cc + hx + hy - hz, cc - hx + hy - hz, cc - hx - hy + hz, cc + hx - hy + hz, cc + hx + hy + hz, cc - hx + hy + hz]
+		for fc: Array in [[0, 1, 2, 3], [5, 4, 7, 6], [4, 0, 3, 7], [1, 5, 6, 2], [3, 2, 6, 7]]:
+			for idx: int in [0, 1, 2, 0, 2, 3]:
+				st.add_vertex(v[fc[idx]])
+	box.call(0.0, bot * 0.5, 1.3, bot, 1.3)
+	box.call(0.0, 0.25, 1.9, 0.5, 1.9)
+	if sep > 0.1:
+		box.call(0.0, bot - 0.35, sep * 2.0 + 1.6, 0.7, 1.4)
+	else:
+		box.call(0.0, bot - 0.3, 1.8, 0.6, 1.4)

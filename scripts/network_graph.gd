@@ -44,6 +44,7 @@ var lines: Dictionary = {}             # line_id (int) -> {id, name, color: Colo
 
 var next_station_id := 1
 var next_line_id := 1
+var monorail_seeded := false # the Seattle Center Monorail line has been offered once for this save
 
 const LINE_PALETTE: Array[Color] = [
 	Color(0.12, 0.54, 0.88),
@@ -67,6 +68,7 @@ func load_from_map_data(map_data: Dictionary, use_starter: bool = true) -> void:
 	lines.clear()
 	next_station_id = 1
 	next_line_id = 1
+	monorail_seeded = false
 
 	for n_raw in map_data.get("graph_nodes", []):
 		var nid := int(n_raw["id"])
@@ -159,11 +161,13 @@ func export_state() -> Dictionary:
 		"tracks": tr_arr,
 		"stations": st_arr,
 		"lines": ln_arr,
+		"monorail_seeded": monorail_seeded,
 	}
 
 
 func import_state(state: Dictionary) -> void:
 	clear_player_network()
+	monorail_seeded = bool(state.get("monorail_seeded", false))
 
 	for t_item in state.get("tracks", []):
 		var eid := int(t_item["edge_id"])
@@ -259,6 +263,11 @@ func remove_track_on_edge(edge_id: int) -> void:
 func get_edge_track_half_sep(edge_id: int) -> float:
 	if int(built_track_modes.get(edge_id, TrackMode.SINGLE)) != TrackMode.DOUBLE:
 		return 0.0
+	if TrackBuilder.is_monorail_style(int(built_tracks.get(edge_id, -1))):
+		for sid_m: int in stations.keys():
+			if int(stations[sid_m]["edge_id"]) == edge_id and int(stations[sid_m].get("side", 1)) == 0:
+				return ISLAND_TRACK_HALF_SEP
+		return TrackBuilder.MONORAIL_HALF_SEP
 	for sid: int in stations.keys():
 		var st: Dictionary = stations[sid]
 		if int(st["edge_id"]) == edge_id and (int(st.get("kind", StationKind.SIDE_SINGLE)) == StationKind.ISLAND or int(st.get("side", 1)) == 0):
@@ -272,9 +281,10 @@ func buffer_stop_at_edge_end(eid: int, at_b_end: bool) -> Dictionary:
 	if not built_tracks.has(eid) or not edges.has(eid):
 		return {}
 	var nid := int(edges[eid]["b"]) if at_b_end else int(edges[eid]["a"])
+	var sys := TrackBuilder.edge_system(self, eid)
 	for nb: Dictionary in adj.get(nid, []):
 		var oe := int(nb["edge_id"])
-		if oe != eid and built_tracks.has(oe):
+		if oe != eid and built_tracks.has(oe) and TrackBuilder.edge_system(self, oe) == sys:
 			return {}
 	var g := TrackBuilder.edge_track_geom(self, eid)
 	if g.is_empty():
@@ -448,11 +458,12 @@ func _insert_edge_into_grid(eid: int, pts: Array[Vector2]) -> void:
 func get_built_track_degree(node_id: int) -> int:
 	if not adj.has(node_id):
 		return 0
-	var deg := 0
+	var deg := [0, 0]
 	for nb: Dictionary in adj[node_id]:
-		if built_tracks.has(int(nb["edge_id"])):
-			deg += 1
-	return deg
+		var e := int(nb["edge_id"])
+		if built_tracks.has(e):
+			deg[TrackBuilder.edge_system(self, e)] += 1
+	return maxi(int(deg[0]), int(deg[1]))
 
 
 func get_turnout_world_positions() -> Array[Vector3]:
@@ -563,7 +574,7 @@ func find_closest_station(xz: Vector2, max_dist: float) -> int:
 	return best_id
 
 
-func shortest_street_path(node_a: int, node_b: int, only_built: bool) -> Array[int]:
+func shortest_street_path(node_a: int, node_b: int, only_built: bool, sys: int = -1) -> Array[int]:
 	if node_a == node_b or not nodes.has(node_a) or not nodes.has(node_b):
 		return []
 	var dist := {node_a: 0.0}
@@ -590,6 +601,8 @@ func shortest_street_path(node_a: int, node_b: int, only_built: bool) -> Array[i
 		for nb: Dictionary in adj[best_u]:
 			var eid := int(nb["edge_id"])
 			if only_built and not built_tracks.has(eid):
+				continue
+			if sys >= 0 and TrackBuilder.edge_system(self, eid) != sys:
 				continue
 			var v := int(nb["to"])
 			var nc := best_c + float(nb["length"])
@@ -630,6 +643,10 @@ func _station_path_spans(sid_a: int, sid_b: int) -> Array:
 	var eid_b := int(st_b["edge_id"])
 	if not built_tracks.has(eid_a) or not built_tracks.has(eid_b):
 		return []
+	# Trams and monorails are separate systems: a path never changes between them
+	var sys := TrackBuilder.edge_system(self, eid_a)
+	if TrackBuilder.edge_system(self, eid_b) != sys:
+		return []
 
 	if eid_a == eid_b:
 		return [{"eid": eid_a, "t0": float(st_a["t"]), "t1": float(st_b["t"])}]
@@ -651,7 +668,7 @@ func _station_path_spans(sid_a: int, sid_b: int) -> Array:
 			var mid_eids: Array[int] = []
 			var mid_cost := 0.0
 			if na != nb:
-				mid_eids = shortest_street_path(na, nb, true)
+				mid_eids = shortest_street_path(na, nb, true, sys)
 				if mid_eids.is_empty():
 					continue
 				for me: int in mid_eids:
@@ -1163,7 +1180,7 @@ func _route_junction_points(sp_a: Dictionary, sp_b: Dictionary, cache: Dictionar
 			nid = n_a
 	if nid < 0:
 		return out
-	var info := TrackBuilder.node_track_info(self, nid)
+	var info := TrackBuilder.node_track_info(self, nid, TrackBuilder.edge_system(self, int(sp_a["eid"])))
 	if not bool(info["bare"]) and (info["edges"] as Array).size() <= 2:
 		return out # Plain bend: the two edges' rails meet directly at the node
 	var g_a := _route_geom(cache, int(sp_a["eid"]))
@@ -1307,3 +1324,55 @@ static func _refine_cusp_offset(curve: Curve3D, total_len: float, is_loop: bool,
 			best_s = s_c
 		k += 1
 	return fposmod(best_s, total_len) if is_loop else clampf(best_s, 0.0, total_len)
+
+
+
+# ---------------------------------------------------------------------------------------------
+# Seattle Center Monorail: lay the real 5th Avenue / 5th Ave N route as a double straddle-beam guideway
+# with island terminals (beam-switch crossovers for the turnback) and a two-train line. Only edges nobody
+# has built on are used; returns the new line id or -1.
+# ---------------------------------------------------------------------------------------------
+func seed_seattle_monorail(start_xz: Vector2, end_xz: Vector2, model_key: String) -> int:
+	var na := find_closest_node(start_xz, 40.0)
+	var nb := find_closest_node(end_xz, 40.0)
+	if na < 0 or nb < 0:
+		return -1
+	var path := shortest_street_path(na, nb, false)
+	if path.size() < 3:
+		return -1
+	for e: int in path:
+		if built_tracks.has(e):
+			return -1
+	# Terminal edges must hold a 27m platform plus its tail track
+	while path.size() > 2 and float(edges[path[0]]["length"]) < 45.0:
+		na = int(edges[path[0]]["b"]) if int(edges[path[0]]["a"]) == na else int(edges[path[0]]["a"])
+		path.remove_at(0)
+	while path.size() > 2 and float(edges[path[path.size() - 1]]["length"]) < 45.0:
+		path.remove_at(path.size() - 1)
+	if path.size() < 3:
+		return -1
+	for e: int in path:
+		set_track_on_edge(e, TrackBuilder.BedStyle.MONORAIL, TrackMode.DOUBLE)
+	# Stations: ~24m in from the dead end of each terminal edge
+	var e0 := int(path[0])
+	var e1 := int(path[path.size() - 1])
+	var t0 := 24.0 / float(edges[e0]["length"])
+	if int(edges[e0]["a"]) != na:
+		t0 = 1.0 - t0
+	var end_node := na
+	for e: int in path:
+		end_node = int(edges[e]["b"]) if int(edges[e]["a"]) == end_node else int(edges[e]["a"])
+	var t1 := 24.0 / float(edges[e1]["length"])
+	if int(edges[e1]["a"]) != end_node:
+		t1 = 1.0 - t1
+	var sa := add_station_on_edge(e0, t0, 0, "西湖中心站（单轨）", StationKind.ISLAND)
+	var sb := add_station_on_edge(e1, t1, 0, "西雅图中心站（单轨）", StationKind.ISLAND)
+	if sa < 0 or sb < 0:
+		return -1
+	# Scissors beam switch inward of each terminal for the turnback onto the other guideway
+	for idx: Array in [range(1, path.size() - 1), range(path.size() - 2, 0, -1)]:
+		for k: int in idx:
+			if set_crossover_on_edge(int(path[k]), CrossoverType.DOUBLE):
+				break
+	var ids: Array[int] = [sa, sb, sa]
+	return create_line(ids, model_key, 2, 2, "西雅图中心单轨")

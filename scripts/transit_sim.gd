@@ -46,8 +46,14 @@ func rebuild_fleet(
 		var stops: Array = compiled["stops"]
 		var cap := sec_cnt * int(spec.get("cap_per_section", 58))
 		var rev_cusps: Array = compiled.get("turnbacks", [])
+		# The Seattle Center Monorail runs one red and one blue Alweg train
+		var spec_line := spec
+		var spec_alt: Dictionary = {}
+		if str(spec.get("key", "")) == "seattle-alweg-red":
+			spec_alt = _find_model_spec(catalogue, "seattle-alweg-blue")
 
 		for ti in range(fleet_n):
+			spec = spec_alt if (ti % 2 == 1 and not spec_alt.is_empty()) else spec_line
 			var tinfo := TramBuilder.build_tram(spec, sec_cnt)
 			add_child(tinfo["root"] as Node3D)
 
@@ -77,6 +83,7 @@ func rebuild_fleet(
 				"line_name": str(ln["name"]),
 				"line_color": ln["color"],
 				"spec": spec,
+				"elevated": bool(spec.get("monorail", false)),
 				"tram_info": tinfo,
 				"curve": compiled["curve"],
 				"route_len": route_len,
@@ -896,8 +903,8 @@ func _distance_to_tram_ahead(tr: Dictionary, my_idx: int) -> float:
 	var my_pos := (my_secs[0] as Node3D).global_position
 	var cands: Array[Vector2] = []
 	for j in range(trams.size()):
-		if j == my_idx:
-			continue
+		if j == my_idx or bool(trams[j].get("elevated", false)) != bool(tr.get("elevated", false)):
+			continue # trams and monorails run on separate levels
 		var oth_secs: Array = trams[j]["tram_info"]["sections"]
 		for sec: Node3D in oth_secs:
 			var gp := sec.global_position
@@ -1128,6 +1135,8 @@ func _check_tram_to_tram_collisions() -> Dictionary:
 
 		for j in range(i + 1, n):
 			var tr_b: Dictionary = trams[j]
+			if bool(tr_a.get("elevated", false)) != bool(tr_b.get("elevated", false)):
+				continue
 			var info_b: Dictionary = tr_b["tram_info"]
 			var secs_b: Array = info_b["sections"]
 			var hlb := float(info_b.get("section_len", 9.2)) * 0.5 - 0.22

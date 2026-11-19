@@ -38,7 +38,16 @@ static func build_detailed_station(
 	var plat_top := plat_h
 
 	# 1. Platform deck (triplanar granite pavers), edge coping, tactile warning strip, rubbing strip
-	_box(st_node, Vector3(plat_w, plat_h, plat_len), Vector3(plat_cx, plat_h * 0.5, 0.0), mats["paver"])
+	# Elevated (monorail) stations: platform slab on twin columns, stairs + lift tower to the street
+	var elevated := plat_h > 3.0
+	if elevated:
+		_box(st_node, Vector3(plat_w, 0.55, plat_len), Vector3(plat_cx, plat_h - 0.275, 0.0), mats["paver"])
+		_box(st_node, Vector3(plat_w + 0.3, 0.35, plat_len + 0.3), Vector3(plat_cx, plat_h - 0.72, 0.0), mats["coping"])
+		for cz in range(-12, 13, 6):
+			for cx_off: float in ([-0.8, 0.8] if plat_w > 2.0 else [0.0]):
+				_cyl(st_node, 0.32, plat_h - 0.9, Vector3(plat_cx + cx_off, (plat_h - 0.9) * 0.5, float(cz)), mats["coping"])
+	else:
+		_box(st_node, Vector3(plat_w, plat_h, plat_len), Vector3(plat_cx, plat_h * 0.5, 0.0), mats["paver"])
 	var edges: Array[float] = []
 	if is_island:
 		edges.assign([-1.0, 1.0])
@@ -49,7 +58,8 @@ static func build_detailed_station(
 		var track_dir := e_s if is_island else -side
 		var edge_x := (e_s * plat_w * 0.5) if is_island else inner_edge_x
 		_box(st_node, Vector3(0.32, 0.05, plat_len), Vector3(edge_x - track_dir * 0.16, plat_top + 0.002, 0.0), mats["coping"])
-		_box(st_node, Vector3(0.04, plat_h * 0.7, plat_len), Vector3(edge_x + track_dir * 0.005, plat_h * 0.42, 0.0), mats["rubber"])
+		var rub_h := 0.5 if elevated else plat_h * 0.7
+		_box(st_node, Vector3(0.04, rub_h, plat_len), Vector3(edge_x + track_dir * 0.005, plat_h - rub_h * 0.5 - 0.04, 0.0), mats["rubber"])
 		_box(st_node, Vector3(0.30, 0.012, plat_len - 0.6), Vector3(edge_x - track_dir * 0.55, plat_top + 0.006, 0.0), mats["tactile"])
 		# Door-position boarding marks every 0.25 platform length
 		for mz: float in [-9.6, -3.2, 3.2, 9.6]:
@@ -67,7 +77,25 @@ static func build_detailed_station(
 	# 2. Ramps at both ends with stainless handrails
 	var ramp_len := 3.4
 	var ramp_angle := atan2(plat_h, ramp_len)
-	for end_sign: float in [-1.0, 1.0]:
+	var stair_x := plat_cx if is_island else (outer_edge_x - side * 1.0)
+	var stair_run := plat_h / 0.62
+	if elevated:
+		# Straight stair down from the +Z platform end (rise 0.155m, tread 0.32m per step)
+		var n_steps := int(ceil(plat_h / 0.155))
+		var tread := stair_run / float(n_steps)
+		for k in range(n_steps):
+			var y_top := plat_h - float(k) * 0.155
+			_box(st_node, Vector3(1.9, 0.155, tread + 0.02), Vector3(stair_x, y_top - 0.0775, plat_len * 0.5 + (float(k) + 0.5) * tread), mats["coping"])
+		var stringer := _box(st_node, Vector3(2.1, 0.35, sqrt(stair_run * stair_run + plat_h * plat_h)), Vector3(stair_x, plat_h * 0.5 - 0.3, plat_len * 0.5 + stair_run * 0.5), mats["steel_dark"])
+		stringer.rotation.x = atan2(plat_h, stair_run)
+		for hs: float in [-1.0, 1.0]:
+			var hr2 := _box(st_node, Vector3(0.05, 0.05, sqrt(stair_run * stair_run + plat_h * plat_h)), Vector3(stair_x + hs * 0.98, plat_h * 0.5 + 0.95, plat_len * 0.5 + stair_run * 0.5), mats["stainless"])
+			hr2.rotation.x = atan2(plat_h, stair_run)
+		# Glass lift tower at the -Z end
+		_box(st_node, Vector3(2.4, plat_h + 3.2, 2.4), Vector3(stair_x, (plat_h + 3.2) * 0.5, -plat_len * 0.5 - 1.4), mats["glass"])
+		_box(st_node, Vector3(2.6, 0.4, 2.6), Vector3(stair_x, plat_h + 3.3, -plat_len * 0.5 - 1.4), mats["accent"])
+		_box(st_node, Vector3(plat_w, 0.5, 3.0), Vector3(plat_cx, plat_h - 0.25, -plat_len * 0.5 - 1.4), mats["paver"])
+	for end_sign: float in ([] if elevated else [-1.0, 1.0]):
 		var rz := end_sign * (plat_len * 0.5 + ramp_len * 0.48)
 		var ramp := _box(st_node, Vector3(plat_w - 0.12, plat_h * 0.65, ramp_len), Vector3(plat_cx, plat_h * 0.32, rz), mats["paver"])
 		ramp.rotation.x = end_sign * ramp_angle
@@ -249,6 +277,8 @@ static func build_detailed_station(
 			waiting_slots.append(tf * Vector3(wx_local, plat_h, wz_local))
 
 	var ramp_world := tf * Vector3(plat_cx, 0.04, (plat_len * 0.5 + ramp_len + 1.0))
+	if elevated:
+		ramp_world = tf * Vector3(stair_x, 0.2, plat_len * 0.5 + stair_run + 1.0)
 	var board_edge_center := tf * Vector3(0.0 if is_island else (inner_edge_x + side * 0.28), plat_h, 0.0)
 
 	return {

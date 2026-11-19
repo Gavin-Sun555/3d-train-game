@@ -6,6 +6,7 @@ const BED_STYLE_NAMES := [
 	"齐平绿茵草皮",
 	"花岗岩专用道",
 	"碎石工字枕木",
+	"高架单轨梁 (单轨系统)",
 ]
 
 const MAP_ORDER: Array[String] = ["grid", "seattle"]
@@ -107,6 +108,7 @@ var _pan_limit_z := 1050.0
 # Monorail background landmark animation
 var _monorail_curve: Curve3D = null
 var _monorail_cars: Array = []
+var _monorail_cars_hidden := false
 var _monorail_s := 55.0
 var _monorail_dir := 1.0
 var _monorail_pause := 0.0
@@ -441,6 +443,13 @@ func _build_city_world() -> void:
 
 
 func _rebuild_tracks_and_operations(seed_pax: bool = false) -> void:
+	# Seattle: offer the real Seattle Center Monorail as a playable line once per save (5th Ave & Stewart
+	# -> 5th Ave N & Harrison). Kept off any street the player already built on.
+	if _current_map_key == "seattle" and not _graph.monorail_seeded:
+		_graph.monorail_seeded = true
+		var mono_lid := _graph.seed_seattle_monorail(Vector2(-7.57, 583.6), Vector2(-737.9, -424.2), "seattle-alweg-red")
+		if mono_lid > 0:
+			_show_toast("🚝 西雅图中心单轨已作为一条线路加入，可在线路列表中选择并驾驶")
 	for c in _track_root.get_children():
 		c.queue_free()
 
@@ -451,6 +460,7 @@ func _rebuild_tracks_and_operations(seed_pax: bool = false) -> void:
 		_grass_track_mat
 	)
 	_station_views = built["stations"]
+	_sync_landmark_monorail()
 	CityBuilder.apply_track_clearance(_city_root, _graph.get_meta("track_clear_idx", {}), _graph.get_meta("station_bays", []))
 	CityBuilder.apply_station_bays(_city_root, _graph.get_meta("station_bays", []))
 	_track_lights.clear()
@@ -467,6 +477,33 @@ func _rebuild_tracks_and_operations(seed_pax: bool = false) -> void:
 		_traffic_sim.rebuild_traffic(_graph, _get_traffic_focus_pos())
 	_apply_lighting_from_clock()
 	_refresh_lines_list_ui()
+
+
+# Once the player network has a real monorail guideway, the decorative (non-playable) landmark monorail is retired
+func _sync_landmark_monorail() -> void:
+	var has_mono := false
+	for eid: int in _graph.built_tracks.keys():
+		if TrackBuilder.is_monorail_style(int(_graph.built_tracks[eid])):
+			has_mono = true
+			break
+	var stack: Array = [_city_root]
+	while not stack.is_empty():
+		var nd: Node = stack.pop_back()
+		for ch in nd.get_children():
+			if str(ch.name) in ["SeattleCenterMonorail", "SeattleCenterMonorailTerminal"] and ch is Node3D:
+				(ch as Node3D).visible = not has_mono
+			elif ch.get_child_count() > 0 and ch.get_child_count() < 400:
+				stack.append(ch)
+	if has_mono:
+		_monorail_cars_hidden = true
+		for car in _monorail_cars:
+			if is_instance_valid(car):
+				(car as Node3D).visible = false
+	else:
+		_monorail_cars_hidden = false
+		for car in _monorail_cars:
+			if is_instance_valid(car):
+				(car as Node3D).visible = true
 
 
 func _get_traffic_focus_pos() -> Vector3:
@@ -1605,6 +1642,7 @@ func _rebuild_tracks_only_visual() -> void:
 		_grass_track_mat
 	)
 	_station_views = built["stations"]
+	_sync_landmark_monorail()
 	CityBuilder.apply_track_clearance(_city_root, _graph.get_meta("track_clear_idx", {}), _graph.get_meta("station_bays", []))
 	CityBuilder.apply_station_bays(_city_root, _graph.get_meta("station_bays", []))
 	_track_lights.clear()
@@ -1801,7 +1839,7 @@ func _handle_run_arrow_camera_keys(dt: float) -> void:
 
 
 func _update_monorail(dt: float) -> void:
-	if _monorail_curve == null or _monorail_cars.is_empty():
+	if _monorail_curve == null or _monorail_cars.is_empty() or _monorail_cars_hidden:
 		return
 	var mlen := _monorail_curve.get_baked_length()
 	if mlen < 40.0:
@@ -2253,9 +2291,10 @@ func _build_ui() -> void:
 	var flt_row := HBoxContainer.new()
 	flt_row.add_theme_constant_override("separation", 6)
 	p_vbox.add_child(flt_row)
-	flt_row.add_child(_make_btn("全部车型(14)", func(): _set_era_filter("all")))
+	flt_row.add_child(_make_btn("全部车型(17)", func(): _set_era_filter("all")))
 	flt_row.add_child(_make_btn("现代电车(8)", func(): _set_era_filter("modern")))
 	flt_row.add_child(_make_btn("古典老车(6)", func(): _set_era_filter("vintage")))
+	flt_row.add_child(_make_btn("单轨(3)", func(): _set_era_filter("monorail")))
 
 	var car_sel_row := HBoxContainer.new()
 	car_sel_row.add_theme_constant_override("separation", 6)
@@ -3312,6 +3351,16 @@ func _commit_draft_line() -> void:
 		_show_toast("请至少在地图上依次点击 2 座已连通轨道的车站！")
 		return
 	var m: Dictionary = _tram_models[_plan_model_idx]
+	# Trams run on street track, monorails only on the elevated guideway: match the vehicle to the system
+	var st0: Dictionary = _graph.stations.get(_draft_station_ids[0], {})
+	var on_mono := not st0.is_empty() and TrackBuilder.is_monorail_style(int(_graph.built_tracks.get(int(st0["edge_id"]), -1)))
+	if on_mono != bool(m.get("monorail", false)):
+		for mi_k in range(_tram_models.size()):
+			if bool(_tram_models[mi_k].get("monorail", false)) == on_mono:
+				m = _tram_models[mi_k]
+				_plan_model_idx = mi_k
+				break
+		_show_toast("已自动换成%s车型：%s" % ["单轨" if on_mono else "电车", str(m.get("name_zh", ""))])
 	var lid := _graph.create_line(_draft_station_ids, str(m["key"]), _plan_fleet_count, _plan_sections)
 	if lid < 0:
 		_show_toast("无法生成线路：站点间缺少连通轨道！")
@@ -3461,7 +3510,7 @@ func _update_run_hud() -> void:
 				sig_badge_txt = "电车灯 ┃ 通行(%.0fm)" % sd
 
 		var f0 := secs_h[0] as Node3D
-		var car_haz := _traffic_sim.find_hazard_ahead_of_tram(f0.global_position, -f0.global_transform.basis.z, 36.0)
+		var car_haz := {"has_hazard": false} if bool(tr.get("elevated", false)) else _traffic_sim.find_hazard_ahead_of_tram(f0.global_position, -f0.global_transform.basis.z, 36.0)
 		if bool(car_haz["has_hazard"]):
 			hazard_msg = "⚠ 前方 %.0fm 路口有小车通行！请制动(S)避让" % float(car_haz["dist"])
 
