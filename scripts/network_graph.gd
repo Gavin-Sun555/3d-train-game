@@ -15,7 +15,18 @@ const ZONE_LABELS := ["正线", "缓弯", "弯道", "急弯", "直向道岔", "�
 enum TrackMode {
 	SINGLE = 0,
 	DOUBLE = 1,
+	QUAD = 2, # 四轨：内侧两条快车线 + 外侧两条慢车线（独立路权）
 }
+
+# Four-track (express / local) corridor geometry, after the 2D game's design: the inner express pair runs
+# like an ordinary double track (DOUBLE_TRACK_HALF_SEP) and stays straight through stations; the outer local
+# pair sits one track spacing further out, flares outward around twin island platforms and merges into the
+# express pair wherever the four-track section ends.
+const QUAD_LOCAL_HALF_SEP := 4.95
+const QUAD_ISLAND_LOCAL_SEP := 7.75 # local track at a twin-island stop: 1.65 + 2 x 3.05 (an island each side)
+const QUAD_ISLAND_CENTER := 4.70 # island centre line between express (1.65) and flared local (7.75)
+const QUAD_ISLAND_TAPER := 18.0 # local tracks ease out / back over this length beyond the platform
+const QUAD_MERGE_RAMP := 36.0 # local tracks join the express tracks over this length at a section end
 
 enum CrossoverType {
 	NONE = 0,
@@ -43,9 +54,31 @@ var crossover_t: Dictionary = {}       # edge_id (int) -> float (normalized posi
 var stations: Dictionary = {}          # station_id (int) -> {id, name, edge_id, t, side, pos: Vector3, fwd: Vector3}
 var lines: Dictionary = {}             # line_id (int) -> {id, name, color: Color, model_key, trams_count, sections, station_ids: Array[int]}
 
+func is_multi_track(eid: int) -> bool:
+	return int(built_track_modes.get(eid, TrackMode.SINGLE)) >= TrackMode.DOUBLE
+
+
+func is_quad(eid: int) -> bool:
+	return int(built_track_modes.get(eid, TrackMode.SINGLE)) == TrackMode.QUAD
+
+
+# Twin-island stop on a four-track edge (express and local trains of one direction share an island)
+func is_quad_island(sid: int) -> bool:
+	if not stations.has(sid):
+		return false
+	var st: Dictionary = stations[sid]
+	return is_quad(int(st["edge_id"])) and int(st.get("side", 1)) == 0
+
+
 var next_station_id := 1
 var next_line_id := 1
-var monorail_seeded := false # the Seattle Center Monorail line has been offered once for this save
+var monorail_seeded := false
+# Player road / land edits on top of the map, replayed in order on load (ids are stored so they never drift):
+#   {op: "node", id, pos} | {op: "edge", id, a, b, pts, width, lf, lb, name, no_cars}
+#   {op: "split", eid, t, nid, eid2} | {op: "remove", eid} | {op: "lanes", eid, lf, lb, width}
+var road_edits: Array = []
+var demolished_buildings: Dictionary = {} # map building index -> true
+var _base_geo: Dictionary = {} # untouched map graph (nodes / edges / adj) the edits are applied to # the Seattle Center Monorail line has been offered once for this save
 
 const LINE_PALETTE: Array[Color] = [
 	Color(0.12, 0.54, 0.88),
@@ -96,6 +129,8 @@ func load_from_map_data(map_data: Dictionary, use_starter: bool = true) -> void:
 			"b": b,
 			"name": str(e_raw.get("name", "Street")),
 			"width": float(e_raw.get("width", 12.0)),
+			"lanes_f": int(e_raw.get("lanes_f", 1)), # motor lanes along a -> b
+			"lanes_b": int(e_raw.get("lanes_b", 1)), # motor lanes along b -> a (0 / 0: one-way street)
 			"length": elen,
 			"pts": pts2,
 		}
@@ -105,6 +140,10 @@ func load_from_map_data(map_data: Dictionary, use_starter: bool = true) -> void:
 			adj[b].append({"to": a, "edge_id": eid, "length": elen})
 		_insert_edge_into_grid(eid, pts2)
 
+	_base_geo = {"nodes": nodes.duplicate(true), "edges": edges.duplicate(true), "adj": adj.duplicate(true)}
+	road_edits.clear()
+	demolished_buildings.clear()
+
 	if use_starter:
 		var starter: Dictionary = map_data.get("starter_network", {})
 		if not starter.is_empty():
@@ -112,6 +151,10 @@ func load_from_map_data(map_data: Dictionary, use_starter: bool = true) -> void:
 
 
 func clear_player_network() -> void:
+	if not road_edits.is_empty():
+		_restore_base_geometry()
+	road_edits.clear()
+	demolished_buildings.clear()
 	built_tracks.clear()
 	built_track_modes.clear()
 	crossovers.clear()
@@ -160,6 +203,7 @@ func export_state() -> Dictionary:
 			"trams_count": ln["trams_count"],
 			"sections": ln["sections"],
 			"station_ids": ln["station_ids"],
+			"express": bool(ln.get("express", false)),
 		})
 
 	return {
@@ -168,12 +212,20 @@ func export_state() -> Dictionary:
 		"lines": ln_arr,
 		"monorail_seeded": monorail_seeded,
 		"mono_two_way": true,
+		"road_edits": road_edits.duplicate(true),
+		"demolished_buildings": demolished_buildings.keys(),
 	}
 
 
 func import_state(state: Dictionary) -> void:
 	clear_player_network()
 	monorail_seeded = bool(state.get("monorail_seeded", false))
+	# Roads / open-ground track first: tracks and stations refer to their edge ids
+	for op in state.get("road_edits", []):
+		if typeof(op) == TYPE_DICTIONARY:
+			_record((op as Dictionary).duplicate(true))
+	for bi in state.get("demolished_buildings", []):
+		demolished_buildings[int(bi)] = true
 
 	for t_item in state.get("tracks", []):
 		var eid := int(t_item["edge_id"])
@@ -183,7 +235,7 @@ func import_state(state: Dictionary) -> void:
 		if edges.has(eid):
 			built_tracks[eid] = bst
 			built_track_modes[eid] = tmode
-			if tmode == TrackMode.DOUBLE and xover > CrossoverType.NONE:
+			if tmode == TrackMode.DOUBLE and xover > CrossoverType.NONE: # four-track sections take no crossovers
 				crossovers[eid] = xover
 				crossover_t[eid] = clampf(float(t_item.get("crossover_t", 0.5)), 0.05, 0.95)
 
@@ -233,6 +285,7 @@ func import_state(state: Dictionary) -> void:
 			"trams_count": clampi(int(l_item.get("trams_count", 2)), 1, 8),
 			"sections": clampi(int(l_item.get("sections", 3)), 1, 4),
 			"station_ids": sids,
+			"express": bool(l_item.get("express", false)),
 		}
 		next_line_id = maxi(next_line_id, lid + 1)
 
@@ -250,7 +303,7 @@ func set_track_on_edge(edge_id: int, bed_style: int, track_mode: int = TrackMode
 	built_tracks[edge_id] = bed_style
 	built_track_modes[edge_id] = track_mode
 	if track_mode != TrackMode.DOUBLE:
-		crossovers.erase(edge_id)
+		crossovers.erase(edge_id) # single track has none; four-track turns back on its double-track ends
 	return true
 
 
@@ -292,8 +345,11 @@ func remove_track_on_edge(edge_id: int) -> void:
 
 
 func get_edge_track_half_sep(edge_id: int) -> float:
-	if int(built_track_modes.get(edge_id, TrackMode.SINGLE)) != TrackMode.DOUBLE:
+	var mode := int(built_track_modes.get(edge_id, TrackMode.SINGLE))
+	if mode == TrackMode.SINGLE:
 		return 0.0
+	if mode == TrackMode.QUAD:
+		return DOUBLE_TRACK_HALF_SEP # express pair; the local pair is laid outside it (TrackBuilder lsep)
 	if TrackBuilder.is_monorail_style(int(built_tracks.get(edge_id, -1))):
 		for sid_m: int in stations.keys():
 			if int(stations[sid_m]["edge_id"]) == edge_id and int(stations[sid_m].get("side", 1)) == 0:
@@ -359,7 +415,7 @@ func add_station_on_edge(
 		return -1
 	var plat_len := clampf(platform_len, 20.0, 56.0)
 	var t_clamped := clampf(t_val, 0.15, 0.85)
-	var is_dbl := (int(built_track_modes.get(edge_id, TrackMode.SINGLE)) == TrackMode.DOUBLE)
+	var is_dbl := is_multi_track(edge_id)
 	var eff_kind := kind if is_dbl else StationKind.SIDE_SINGLE
 	# Never allow building a station overlapping an existing crossover/switch!
 	if TrackBuilder.station_overlaps_crossover(self, edge_id, t_clamped, eff_kind, plat_len):
@@ -420,7 +476,8 @@ func create_line(
 	model_key: String,
 	trams_count: int,
 	sections: int,
-	custom_name: String = ""
+	custom_name: String = "",
+	express: bool = false
 ) -> int:
 	if station_ids.size() < 2:
 		return -1
@@ -443,12 +500,13 @@ func create_line(
 		"trams_count": clampi(trams_count, 1, 8),
 		"sections": clampi(sections, 1, 4),
 		"station_ids": station_ids.duplicate(),
+		"express": express,
 	}
 	return lid
 
 
 # Edit an existing line in place (keeps its id, name and colour). False if a station pair has no connecting track.
-func update_line(lid: int, station_ids: Array[int], model_key: String, trams_count: int, sections: int) -> bool:
+func update_line(lid: int, station_ids: Array[int], model_key: String, trams_count: int, sections: int, express: bool = false) -> bool:
 	if not lines.has(lid) or station_ids.size() < 2:
 		return false
 	for i in range(station_ids.size() - 1):
@@ -459,6 +517,7 @@ func update_line(lid: int, station_ids: Array[int], model_key: String, trams_cou
 	ln["model_key"] = model_key
 	ln["trams_count"] = clampi(trams_count, 1, 8)
 	ln["sections"] = clampi(sections, 1, 4)
+	ln["express"] = express
 	return true
 
 
@@ -572,7 +631,7 @@ func find_closest_edge(xz: Vector2, max_dist: float, only_built: bool = false) -
 			var cell_list: Array = _edge_grid.get(Vector2i(cx, cz), [])
 			for raw_eid in cell_list:
 				var eid := int(raw_eid)
-				if checked.has(eid):
+				if checked.has(eid) or not edges.has(eid):
 					continue
 				checked[eid] = true
 				if only_built and not built_tracks.has(eid):
@@ -637,6 +696,8 @@ func get_station_platform_world_pos(sid: int) -> Vector3:
 	var right := fwd.cross(Vector3.UP).normalized()
 	var eid := int(st.get("edge_id", -1))
 	var sep := get_edge_track_half_sep(eid) if eid >= 0 else 0.0
+	if eid >= 0 and is_quad(eid):
+		sep = QUAD_LOCAL_HALF_SEP # side platforms stand outside the local tracks
 	return pos + right * (side * (sep + 2.8))
 
 
@@ -777,6 +838,13 @@ func _station_path_spans(sid_a: int, sid_b: int) -> Array:
 	return spans
 
 
+# Express trains run on the inner tracks of a four-track section, which have no side platforms
+func express_can_call_at(sid: int) -> bool:
+	if not stations.has(sid):
+		return true
+	return not (is_quad(int(stations[sid]["edge_id"])) and int(stations[sid].get("side", 1)) != 0)
+
+
 func _find_opposite_side_station(sid: int) -> int:
 	if not stations.has(sid):
 		return sid
@@ -814,7 +882,7 @@ func compile_line_route(line_dict: Dictionary, b_platform_sids: Dictionary = {})
 		for sid_c: int in sids:
 			if stations.has(sid_c):
 				var e_c := int(stations[sid_c]["edge_id"])
-				if int(built_track_modes.get(e_c, TrackMode.SINGLE)) == TrackMode.DOUBLE:
+				if is_multi_track(e_c):
 					double_stn_cnt += 1
 		if double_stn_cnt > 0:
 			var ret_idx := sids.size() - 2
@@ -829,6 +897,8 @@ func compile_line_route(line_dict: Dictionary, b_platform_sids: Dictionary = {})
 	#    (lat = +1 -> right of the edge's a->b direction, -1 -> left; normal running keeps to the right of travel).
 	var geo_cache: Dictionary = {}
 	var seg_spans: Array = []
+	# Four-track sections: express lines run on the inner (express) tracks, all others on the outer local tracks
+	var express := bool(line_dict.get("express", false))
 	for i in range(sids.size() - 1):
 		var raw_spans := _station_path_spans(sids[i], sids[i + 1])
 		if raw_spans.is_empty():
@@ -839,7 +909,10 @@ func compile_line_route(line_dict: Dictionary, b_platform_sids: Dictionary = {})
 			var s0 := _route_t_to_s(geo_cache, eid, float(rs["t0"]))
 			var s1 := _route_t_to_s(geo_cache, eid, float(rs["t1"]))
 			var lat := 1.0 if s1 >= s0 else -1.0
-			conv.append({"eid": eid, "s0": s0, "s1": s1, "lat0": lat, "lat1": lat})
+			var span_d := {"eid": eid, "s0": s0, "s1": s1, "lat0": lat, "lat1": lat}
+			if not express and is_quad(eid):
+				span_d["loc"] = true
+			conv.append(span_d)
 		seg_spans.append(conv)
 	var n_seg := seg_spans.size()
 
@@ -1233,10 +1306,12 @@ func _route_point_at(sp: Dictionary, s: float, cache: Dictionary) -> Vector3:
 		var len_e := maxf(0.01, float(edges[eid]["length"]))
 		var smp := sample_edge(eid, s / len_e)
 		var fwd := (smp["fwd"] as Vector3).normalized()
-		return (smp["pos"] as Vector3) + fwd.cross(Vector3.UP).normalized() * (get_edge_track_half_sep(eid) * _route_span_lat(sp, s))
+		var sep_f := QUAD_LOCAL_HALF_SEP if sp.has("loc") else get_edge_track_half_sep(eid)
+		return (smp["pos"] as Vector3) + fwd.cross(Vector3.UP).normalized() * (sep_f * _route_span_lat(sp, s))
 	var s_c := clampf(s, float(g["s_start"]), float(g["s_end"]))
 	var tf := TrackBuilder.sample_track_frame(g["curve"] as Curve3D, s_c, float(g["clen"]), false)
-	return tf.origin + tf.basis.x * (TrackBuilder.geom_sep_at(g, s_c) * _route_span_lat(sp, s_c))
+	var sep_c := TrackBuilder.geom_lsep_at(g, s_c) if sp.has("loc") else TrackBuilder.geom_sep_at(g, s_c)
+	return tf.origin + tf.basis.x * (sep_c * _route_span_lat(sp, s_c))
 
 
 func _route_span_points(sp: Dictionary, cache: Dictionary) -> Array[Vector3]:
@@ -1339,7 +1414,10 @@ func _route_find_crossover(spans: Array, cache: Dictionary, backward: bool) -> D
 
 
 static func _span_copy(sp: Dictionary, s0: float, s1: float, lat0: float, lat1: float) -> Dictionary:
-	return {"eid": int(sp["eid"]), "s0": s0, "s1": s1, "lat0": lat0, "lat1": lat1}
+	var c := {"eid": int(sp["eid"]), "s0": s0, "s1": s1, "lat0": lat0, "lat1": lat1}
+	if sp.has("loc"):
+		c["loc"] = true
+	return c
 
 
 # Arrival leg into a terminal. Track A: straight in on the right-hand track. Track B: cross over the
@@ -1496,3 +1574,306 @@ func seed_seattle_monorail(start_xz: Vector2, end_xz: Vector2, model_key: String
 				break
 	var ids: Array[int] = [sa, sb, sa]
 	return create_line(ids, model_key, 2, 2, "西雅图中心单轨")
+
+
+# ---------------------------------------------------------------------------------------------
+# Player road editing: new streets, removed streets, lane changes, and tram-only track across open ground.
+# Every change is one op in road_edits, applied to the map graph in order (see import_state).
+# ---------------------------------------------------------------------------------------------
+const LANE_W := 3.3
+
+static func road_width_for(lf: int, lb: int) -> float:
+	var total := lf + lb
+	var median := 1.6 if (lf > 0 and lb > 0 and total >= 4) else 0.0
+	return float(total) * LANE_W + median + 2.2
+
+
+# Right-of-way width of tram-only track laid across open ground
+static func row_width_for(track_mode: int) -> float:
+	if track_mode == TrackMode.QUAD:
+		return 14.6
+	return 7.6 if track_mode == TrackMode.DOUBLE else 4.4
+
+
+func _restore_base_geometry() -> void:
+	if _base_geo.is_empty():
+		return
+	nodes = (_base_geo["nodes"] as Dictionary).duplicate(true)
+	edges = (_base_geo["edges"] as Dictionary).duplicate(true)
+	adj = (_base_geo["adj"] as Dictionary).duplicate(true)
+	_rebuild_edge_grid()
+
+
+func _rebuild_edge_grid() -> void:
+	_edge_grid.clear()
+	for eid: int in edges.keys():
+		var pts2: Array[Vector2] = []
+		pts2.assign(edges[eid]["pts"])
+		_insert_edge_into_grid(eid, pts2)
+
+
+func _new_node_id() -> int:
+	var m := -1
+	for k: int in nodes.keys():
+		m = maxi(m, k)
+	return m + 1
+
+
+func _new_edge_id() -> int:
+	var m := -1
+	for k: int in edges.keys():
+		m = maxi(m, k)
+	return m + 1
+
+
+static func _polyline_length(pts: Array) -> float:
+	var l := 0.0
+	for i in range(pts.size() - 1):
+		l += (pts[i] as Vector2).distance_to(pts[i + 1])
+	return l
+
+
+func _apply_road_op(op: Dictionary) -> bool:
+	match str(op.get("op", "")):
+		"node":
+			var nid := int(op["id"])
+			var pa: Array = op["pos"]
+			nodes[nid] = {"id": nid, "pos": Vector2(float(pa[0]), float(pa[1])), "name": str(op.get("name", "新路口"))}
+			if not adj.has(nid):
+				adj[nid] = []
+			return true
+		"edge":
+			var eid := int(op["id"])
+			var a := int(op["a"])
+			var b := int(op["b"])
+			if not nodes.has(a) or not nodes.has(b):
+				return false
+			var pts2: Array[Vector2] = []
+			for rp in op["pts"]:
+				pts2.append(Vector2(float(rp[0]), float(rp[1])))
+			var elen := _polyline_length(pts2)
+			edges[eid] = {
+				"id": eid, "a": a, "b": b,
+				"name": str(op.get("name", "新建道路")),
+				"width": float(op.get("width", 9.8)),
+				"lanes_f": int(op.get("lf", 1)),
+				"lanes_b": int(op.get("lb", 1)),
+				"length": elen,
+				"pts": pts2,
+				"player": true,
+			}
+			if bool(op.get("no_cars", false)):
+				edges[eid]["no_cars"] = true
+				edges[eid]["lanes_f"] = 0
+				edges[eid]["lanes_b"] = 0
+			adj[a].append({"to": b, "edge_id": eid, "length": elen})
+			adj[b].append({"to": a, "edge_id": eid, "length": elen})
+			_insert_edge_into_grid(eid, pts2)
+			return true
+		"split":
+			return _split_edge_now(int(op["eid"]), float(op["t"]), int(op["nid"]), int(op["eid2"]))
+		"remove":
+			var reid := int(op["eid"])
+			if not edges.has(reid):
+				return false
+			var red: Dictionary = edges[reid]
+			for end_n: int in [int(red["a"]), int(red["b"])]:
+				var keep: Array = []
+				for nb: Dictionary in adj.get(end_n, []):
+					if int(nb["edge_id"]) != reid:
+						keep.append(nb)
+				adj[end_n] = keep
+			edges.erase(reid)
+			for end_n2: int in [int(red["a"]), int(red["b"])]:
+				if (adj.get(end_n2, []) as Array).is_empty():
+					adj.erase(end_n2)
+					nodes.erase(end_n2)
+			return true
+		"lanes":
+			var leid := int(op["eid"])
+			if not edges.has(leid):
+				return false
+			edges[leid]["lanes_f"] = int(op["lf"])
+			edges[leid]["lanes_b"] = int(op["lb"])
+			edges[leid]["width"] = float(op["width"])
+			return true
+	return false
+
+
+func _record(op: Dictionary) -> bool:
+	if _apply_road_op(op):
+		road_edits.append(op)
+		return true
+	return false
+
+
+# Cut edge `eid` at polyline fraction t: it keeps a -> new node, a new edge `eid2` runs new node -> b.
+# Track, stations and crossover move with the half they lie on.
+func _split_edge_now(eid: int, t: float, nid: int, eid2: int) -> bool:
+	if not edges.has(eid):
+		return false
+	var ed: Dictionary = edges[eid]
+	var pts: Array = ed["pts"]
+	var total := _polyline_length(pts)
+	var target := clampf(t, 0.02, 0.98) * total
+	var first: Array[Vector2] = [pts[0]]
+	var second: Array[Vector2] = []
+	var acc := 0.0
+	var cut := Vector2.ZERO
+	var done := false
+	for i in range(pts.size() - 1):
+		var pa: Vector2 = pts[i]
+		var pb: Vector2 = pts[i + 1]
+		var sl := pa.distance_to(pb)
+		if not done and acc + sl >= target:
+			cut = pa.lerp(pb, clampf((target - acc) / maxf(sl, 0.0001), 0.0, 1.0))
+			first.append(cut)
+			second.append(cut)
+			done = true
+		elif not done:
+			first.append(pb)
+		if done and second.back() != pb:
+			second.append(pb)
+		acc += sl
+	if not done or second.size() < 2:
+		return false
+	var b := int(ed["b"])
+	nodes[nid] = {"id": nid, "pos": cut, "name": str(ed["name"])}
+	adj[nid] = []
+	var l1 := _polyline_length(first)
+	var l2 := _polyline_length(second)
+	ed["pts"] = first
+	ed["b"] = nid
+	ed["length"] = l1
+	var ed2 := ed.duplicate(true)
+	ed2["id"] = eid2
+	ed2["a"] = nid
+	ed2["b"] = b
+	ed2["pts"] = second
+	ed2["length"] = l2
+	edges[eid2] = ed2
+	for nb: Dictionary in adj[int(ed["a"])]:
+		if int(nb["edge_id"]) == eid:
+			nb["to"] = nid
+			nb["length"] = l1
+	var keep_b: Array = []
+	for nb2: Dictionary in adj[b]:
+		if int(nb2["edge_id"]) == eid:
+			keep_b.append({"to": nid, "edge_id": eid2, "length": l2})
+		else:
+			keep_b.append(nb2)
+	adj[b] = keep_b
+	adj[nid] = [{"to": int(ed["a"]), "edge_id": eid, "length": l1}, {"to": b, "edge_id": eid2, "length": l2}]
+	_rebuild_edge_grid()
+	var tf := target / maxf(total, 0.001)
+	if built_tracks.has(eid):
+		built_tracks[eid2] = built_tracks[eid]
+		built_track_modes[eid2] = built_track_modes.get(eid, TrackMode.SINGLE)
+	for sid: int in stations.keys():
+		var st: Dictionary = stations[sid]
+		if int(st["edge_id"]) != eid:
+			continue
+		var st_t := float(st["t"])
+		if st_t < tf:
+			st["t"] = st_t / tf
+		else:
+			st["edge_id"] = eid2
+			st["t"] = (st_t - tf) / maxf(1.0 - tf, 0.001)
+		var smp := sample_edge(int(st["edge_id"]), float(st["t"]))
+		st["pos"] = smp["pos"]
+		st["fwd"] = smp["fwd"]
+	if crossovers.has(eid):
+		var xt := float(crossover_t.get(eid, 0.5))
+		var xtype := int(crossovers[eid])
+		crossovers.erase(eid)
+		crossover_t.erase(eid)
+		if xt < tf:
+			set_crossover_on_edge(eid, xtype, xt / tf)
+		else:
+			set_crossover_on_edge(eid2, xtype, (xt - tf) / maxf(1.0 - tf, 0.001))
+	return true
+
+
+# Node for a clicked point: an existing junction within snap_r, else a cut in the nearest street within snap_r
+# (refused inside a platform), else a new free node. Returns {nid} or {error}.
+func node_for_point(xz: Vector2, snap_r: float = 9.0) -> Dictionary:
+	var nid := find_closest_node(xz, snap_r)
+	if nid >= 0:
+		return {"nid": nid}
+	var hit := find_closest_edge(xz, snap_r * 0.8, false)
+	if not hit.is_empty():
+		var eid := int(hit["edge_id"])
+		var t := float(hit["t"])
+		var len_e := float(edges[eid]["length"])
+		if t * len_e < 6.0 or (1.0 - t) * len_e < 6.0:
+			return {"nid": int(edges[eid]["a"]) if t < 0.5 else int(edges[eid]["b"])}
+		for sid: int in stations.keys():
+			var st: Dictionary = stations[sid]
+			if int(st["edge_id"]) == eid and absf(float(st["t"]) - t) * len_e < float(st.get("platform_len", 27.0)) * 0.5 + 6.0:
+				return {"error": "on_station"}
+		if crossovers.has(eid) and absf(float(crossover_t.get(eid, 0.5)) - t) * len_e < 26.0:
+			return {"error": "on_crossover"}
+		var new_n := _new_node_id()
+		var new_e := _new_edge_id()
+		if _record({"op": "split", "eid": eid, "t": t, "nid": new_n, "eid2": new_e}):
+			return {"nid": new_n}
+		return {"error": "split_failed"}
+	var free_n := _new_node_id()
+	_record({"op": "node", "id": free_n, "pos": [xz.x, xz.y]})
+	return {"nid": free_n}
+
+
+# New street (or tram-only right of way when no_cars) from node a to node b. Returns the edge id or -1.
+func add_road(a: int, b: int, lf: int, lb: int, no_cars: bool = false, track_mode: int = TrackMode.DOUBLE, name: String = "") -> int:
+	if a == b or not nodes.has(a) or not nodes.has(b):
+		return -1
+	for nb: Dictionary in adj.get(a, []):
+		if int(nb["to"]) == b:
+			return -1 # already connected
+	var pa: Vector2 = nodes[a]["pos"]
+	var pb: Vector2 = nodes[b]["pos"]
+	if pa.distance_to(pb) < 8.0:
+		return -1
+	var eid := _new_edge_id()
+	var w := row_width_for(track_mode) if no_cars else road_width_for(lf, lb)
+	var nm := name
+	if nm.is_empty():
+		nm = "专用轨道" if no_cars else "新建道路"
+	if not _record({"op": "edge", "id": eid, "a": a, "b": b, "pts": [[pa.x, pa.y], [pb.x, pb.y]], "width": w,
+			"lf": lf, "lb": lb, "name": nm, "no_cars": no_cars}):
+		return -1
+	return eid
+
+
+# Remove a street: refused while it carries track ("has_track")
+func remove_road(eid: int) -> String:
+	if not edges.has(eid):
+		return "no_edge"
+	if built_tracks.has(eid):
+		return "has_track"
+	_record({"op": "remove", "eid": eid})
+	return "ok"
+
+
+# Tram-only track across open ground is removed together with its right of way
+func remove_offroad_track(eid: int) -> void:
+	if not edges.has(eid) or not bool(edges[eid].get("no_cars", false)):
+		return
+	remove_track_on_edge(eid)
+	_record({"op": "remove", "eid": eid})
+
+
+func set_road_lanes(eid: int, lf: int, lb: int) -> bool:
+	if not edges.has(eid) or bool(edges[eid].get("no_cars", false)) or lf + lb < 1:
+		return false
+	var w := maxf(road_width_for(lf, lb), 6.0)
+	return _record({"op": "lanes", "eid": eid, "lf": lf, "lb": lb, "width": w})
+
+
+func demolish_building(bi: int) -> void:
+	demolished_buildings[bi] = true
+
+
+# Signature of everything that changes the road surface / building layer (for rebuilding the city only when needed)
+func land_edit_signature() -> String:
+	return "%d:%d:%s" % [road_edits.size(), demolished_buildings.size(), str(road_edits.back() if not road_edits.is_empty() else "")]

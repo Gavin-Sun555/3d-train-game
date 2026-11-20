@@ -290,7 +290,7 @@ func exchange_passengers_at_station(
 	if not _station_views.has(station_id):
 		return
 	var sview: Dictionary = _station_views[station_id]
-	var portals := _get_platform_facing_portals(tram_state, sview)
+	var portals := _get_platform_facing_portals(tram_state, _platform_view_for(tram_state, sview))
 	if portals.is_empty():
 		return
 
@@ -862,6 +862,24 @@ static func _orient_person_toward(node: Node3D, look_world: Vector3) -> void:
 	if flat_target.distance_to(node.global_position) > 0.05:
 		var fwd := (flat_target - node.global_position).normalized()
 		node.global_transform = Transform3D(Basis.looking_at(fwd, Vector3.UP), node.global_position)
+
+
+# A four-track stop has twin islands: the train is served from the island beside its own track
+static func _platform_view_for(tram_state: Dictionary, sview: Dictionary) -> Dictionary:
+	if not sview.has("twins"):
+		return sview
+	var secs: Array = (tram_state.get("tram_info", {}) as Dictionary).get("sections", [])
+	if secs.is_empty() or not is_instance_valid(secs[0]):
+		return sview
+	var tp := (secs[0] as Node3D).global_position
+	var best: Dictionary = sview
+	var best_d := 1e18
+	for tw: Dictionary in sview["twins"]:
+		var d := tp.distance_squared_to(tw.get("pos", Vector3.ZERO) as Vector3)
+		if d < best_d:
+			best_d = d
+			best = tw
+	return best
 
 
 static func _get_platform_facing_portals(tram_state: Dictionary, sview: Dictionary) -> Array[Dictionary]:

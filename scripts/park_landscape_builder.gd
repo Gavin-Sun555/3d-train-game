@@ -71,7 +71,7 @@ static func _build_clearance_data(roads: Array, buildings: Array, areas: Array) 
 	var road_grid := {}
 	for r in roads:
 		var pts: Array = r.get("pts", [])
-		var hw := clampf(float(r.get("width", 12.0)) * 0.5, 3.2, 10.5)
+		var hw := clampf(float(r.get("width", 12.0)) * 0.5, 3.2, 13.5)
 		for i in range(pts.size() - 1):
 			var a := Vector2(float(pts[i][0]), float(pts[i][1]))
 			var b := Vector2(float(pts[i + 1][0]), float(pts[i + 1][1]))

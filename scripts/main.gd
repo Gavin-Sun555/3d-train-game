@@ -46,7 +46,15 @@ enum BuildTool {
 	CROSSOVER = 2,
 	STATION = 3,
 	DEMOLISH = 4,
+	TRACK_OFFROAD = 5, # 空地直连：click points across open ground, tram-only right of way
+	ROAD_BUILD = 6,
+	ROAD_REMOVE = 7,
+	ROAD_LANES = 8,
+	BUILDING_DEMOLISH = 9,
 }
+
+const LANE_CFGS: Array[Vector2i] = [Vector2i(1, 0), Vector2i(2, 0), Vector2i(3, 0), Vector2i(4, 0), Vector2i(1, 1), Vector2i(2, 2), Vector2i(3, 3)]
+const LANE_CFG_LABELS: Array[String] = ["单向1", "单向2", "单向3", "单向4", "双向1+1", "双向2+2", "双向3+3"]
 
 enum CamMode {
 	CAB = 0,
@@ -125,6 +133,15 @@ var _build_crossover_type: int = NetworkGraph.CrossoverType.SINGLE
 const STATION_LEN_PRESETS: Array[float] = [27.0, 38.0, 50.0]
 const STATION_LEN_LABELS: Array[String] = ["27m (2节)", "38m (3节)", "50m (4节)"]
 
+var _land_prev_has := false # open-ground track / new road: first point placed
+var _land_prev_xz := Vector2.ZERO
+var _land_prev_nid := -1
+var _road_lane_idx := 4
+var _road_tool_btns: Array[Button] = []
+var _lane_cfg_btns: Array[Button] = []
+var _built_land_sig := ""
+var _shop_mat: ShaderMaterial = null
+var _bld_grid: Dictionary = {}
 var _build_station_side := 1
 var _build_station_kind: int = NetworkGraph.StationKind.SIDE_SINGLE
 var _build_station_len_idx := 0
@@ -145,6 +162,8 @@ var _plan_era_filter := "all"
 var _plan_model_idx := 0
 var _plan_fleet_count := 3
 var _plan_sections := 2
+var _plan_express := false # 快车：四轨区段走内侧快车道，四轨站优先发车 / 越行慢车
+var _btn_plan_service: Button
 var _editing_line_id := -1 # line being edited in the planner (-1: drafting a new line)
 var _draft_insert_idx := -1 # stations clicked on the map go in after this draft index (-1: at the end)
 var _draft_list_vbox: VBoxContainer
@@ -414,6 +433,8 @@ func _load_map_world(map_key: String, use_starter: bool, seed_pax: bool) -> void
 	_graph.load_from_map_data(_map_data, use_starter)
 	if not same_city:
 		_build_city_world()
+	else:
+		_refresh_land_layers_if_needed()
 	_rebuild_tracks_and_operations(seed_pax)
 
 
@@ -534,9 +555,10 @@ func _build_city_world() -> void:
 	for c in _city_root.get_children():
 		_city_root.remove_child(c)
 		c.queue_free()
+	_bld_grid.clear()
 	var lm_info := CityBuilder.build_city(
 		_city_root,
-		_map_data,
+		_effective_land_data(),
 		_building_mat,
 		_road_mat,
 		_sidewalk_mat,
@@ -548,11 +570,257 @@ func _build_city_world() -> void:
 	_night_mats.clear()
 	for nm in lm_info.get("night_mats", []):
 		_night_mats.append(nm)
+	var nm_list: Array = lm_info.get("night_mats", [])
+	_shop_mat = nm_list[0] if not nm_list.is_empty() else null
+	_built_land_sig = _graph.land_edit_signature()
 	_city_lights.clear()
 	for l in lm_info.get("lights", []):
 		if l is OmniLight3D:
 			_city_lights.append(l)
 	_loaded_city_map_key = _current_map_key
+
+
+# ---------------------------------------------------------------------------------------------
+# Player land edits (streets, lanes, demolished buildings, open-ground track): the city's road and building
+# layers are rebuilt from the edited graph instead of the raw map.
+# ---------------------------------------------------------------------------------------------
+func _effective_land_data() -> Dictionary:
+	if _graph.road_edits.is_empty() and _graph.demolished_buildings.is_empty():
+		return _map_data
+	var d := _map_data.duplicate(false)
+	if not _graph.road_edits.is_empty():
+		var roads: Array = []
+		for eid: int in _graph.edges.keys():
+			var ed: Dictionary = _graph.edges[eid]
+			if bool(ed.get("no_cars", false)):
+				continue
+			var pts: Array = []
+			for p2: Vector2 in ed["pts"]:
+				pts.append([p2.x, p2.y])
+			roads.append({"name": ed["name"], "width": ed["width"], "lanes_f": ed.get("lanes_f", 1), "lanes_b": ed.get("lanes_b", 1), "layer": 0, "pts": pts})
+		d["roads"] = roads
+		# Zebra crossings: keep the map's where a street still runs, add them at the ends of new streets
+		var cws: Array = []
+		for cw: Dictionary in _map_data.get("crosswalks", []):
+			var cp: Array = cw["pos"]
+			var hit := _graph.find_closest_edge(Vector2(float(cp[0]), float(cp[1])), 3.0, false)
+			if not hit.is_empty() and not bool(_graph.edges[int(hit["edge_id"])].get("no_cars", false)):
+				cws.append(cw)
+		for eid2: int in _graph.edges.keys():
+			var ed2: Dictionary = _graph.edges[eid2]
+			if not bool(ed2.get("player", false)) or bool(ed2.get("no_cars", false)):
+				continue
+			var pp: Array = ed2["pts"]
+			var p0: Vector2 = pp[0]
+			var p1: Vector2 = pp[pp.size() - 1]
+			var sl := p0.distance_to(p1)
+			if sl < 22.0:
+				continue
+			var dv := (p1 - p0) / sl
+			for end_i in range(2):
+				var nid := int(ed2["a"]) if end_i == 0 else int(ed2["b"])
+				if (_graph.adj.get(nid, []) as Array).size() < 3:
+					continue
+				var c := p0 + dv * 7.8 if end_i == 0 else p1 - dv * 7.8
+				cws.append({"pos": [c.x, c.y], "dir": [dv.x, dv.y], "width": ed2["width"]})
+		d["crosswalks"] = cws
+	if not _graph.demolished_buildings.is_empty():
+		var blds: Array = (_map_data.get("buildings", []) as Array).duplicate()
+		for bi: int in _graph.demolished_buildings.keys():
+			if bi >= 0 and bi < blds.size():
+				blds[bi] = {"pts": [], "h": 0.0, "demolished": true}
+		d["buildings"] = blds
+		var sfs: Array = []
+		for sf: Dictionary in _map_data.get("storefronts", []):
+			if not _graph.demolished_buildings.has(int(sf.get("b", -1))):
+				sfs.append(sf)
+		d["storefronts"] = sfs
+	return d
+
+
+func _refresh_land_layers_if_needed() -> void:
+	if _city_root == null or _graph.land_edit_signature() == _built_land_sig:
+		return
+	_refresh_land_layers(true, true)
+
+
+func _refresh_land_layers(roads: bool, buildings: bool) -> void:
+	var d := _effective_land_data()
+	if roads:
+		CityBuilder.rebuild_road_layer(_city_root, d.get("roads", []), d.get("crosswalks", []), _road_mat)
+	if buildings:
+		var sm := CityBuilder.rebuild_building_layer(_city_root, d.get("buildings", []), d.get("storefronts", []), _building_mat)
+		if _shop_mat != null:
+			_night_mats.erase(_shop_mat)
+		_shop_mat = sm
+		if sm != null:
+			_night_mats.append(sm)
+		_apply_lighting_from_clock()
+	_built_land_sig = _graph.land_edit_signature()
+
+
+func _after_land_edit(roads: bool, buildings: bool) -> void:
+	_refresh_land_layers(roads, buildings)
+	_rebuild_tracks_only_visual()
+	_mark_modified_and_quick_save()
+
+
+func _ensure_building_grid() -> void:
+	if not _bld_grid.is_empty():
+		return
+	var blds: Array = _map_data.get("buildings", [])
+	for bi in range(blds.size()):
+		var pts: Array = (blds[bi] as Dictionary).get("pts", [])
+		if pts.size() < 3:
+			continue
+		var mn := Vector2(1e9, 1e9)
+		var mx := Vector2(-1e9, -1e9)
+		for p in pts:
+			var v := Vector2(float(p[0]), float(p[1]))
+			mn = mn.min(v)
+			mx = mx.max(v)
+		for gx in range(int(floor(mn.x / 40.0)), int(floor(mx.x / 40.0)) + 1):
+			for gz in range(int(floor(mn.y / 40.0)), int(floor(mx.y / 40.0)) + 1):
+				var k := Vector2i(gx, gz)
+				if not _bld_grid.has(k):
+					_bld_grid[k] = []
+				(_bld_grid[k] as Array).append(bi)
+
+
+func _building_poly(bi: int) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	for p in ((_map_data.get("buildings", []) as Array)[bi] as Dictionary).get("pts", []):
+		out.append(Vector2(float(p[0]), float(p[1])))
+	return out
+
+
+# Standing building under point xz (-1 if none)
+func _building_at(xz: Vector2) -> int:
+	_ensure_building_grid()
+	for bi in _bld_grid.get(Vector2i(int(floor(xz.x / 40.0)), int(floor(xz.y / 40.0))), []):
+		if _graph.demolished_buildings.has(int(bi)):
+			continue
+		if Geometry2D.is_point_in_polygon(xz, _building_poly(int(bi))):
+			return int(bi)
+	return -1
+
+
+# First standing building the strip pa -> pb (half width hw) runs into, or -1
+func _strip_hits_building(pa: Vector2, pb: Vector2, hw: float) -> int:
+	_ensure_building_grid()
+	var sl := pa.distance_to(pb)
+	var dv := (pb - pa) / maxf(sl, 0.001)
+	var nv := Vector2(-dv.y, dv.x)
+	var seen := {}
+	var u := 0.0
+	while u <= sl + 0.01:
+		for lat: float in [-hw, 0.0, hw]:
+			var q := pa + dv * minf(u, sl) + nv * lat
+			for bi in _bld_grid.get(Vector2i(int(floor(q.x / 40.0)), int(floor(q.y / 40.0))), []):
+				var bii := int(bi)
+				if _graph.demolished_buildings.has(bii):
+					continue
+				if Geometry2D.is_point_in_polygon(q, _building_poly(bii)):
+					return bii
+				seen[bii] = true
+		u += 1.5
+	return -1
+
+
+# Graph edges the new segment pa -> pb crosses away from its own end nodes: [{eid, has_track}]
+func _segment_crossings(pa: Vector2, pb: Vector2, na: int, nb: int) -> Array:
+	var out: Array = []
+	var seen := {}
+	var mn := pa.min(pb) - Vector2.ONE * 5.0
+	var mx := pa.max(pb) + Vector2.ONE * 5.0
+	for eid: int in _graph.edges.keys():
+		if seen.has(eid):
+			continue
+		var ed: Dictionary = _graph.edges[eid]
+		if int(ed["a"]) in [na, nb] or int(ed["b"]) in [na, nb]:
+			continue
+		var pts: Array = ed["pts"]
+		var hit := false
+		for i in range(pts.size() - 1):
+			var a: Vector2 = pts[i]
+			var b: Vector2 = pts[i + 1]
+			if maxf(a.x, b.x) < mn.x or minf(a.x, b.x) > mx.x or maxf(a.y, b.y) < mn.y or minf(a.y, b.y) > mx.y:
+				continue
+			var ip = Geometry2D.segment_intersects_segment(pa, pb, a, b)
+			if ip != null and (ip as Vector2).distance_to(pa) > 3.0 and (ip as Vector2).distance_to(pb) > 3.0:
+				hit = true
+				break
+		if hit:
+			seen[eid] = true
+			out.append({"eid": eid, "has_track": _graph.built_tracks.has(eid)})
+	return out
+
+
+func _node_or_point_pos(nid: int, xz: Vector2) -> Vector2:
+	return _graph.nodes[nid]["pos"] if nid >= 0 and _graph.nodes.has(nid) else xz
+
+
+# Open-ground track or new street: one more segment from the previous click to xz
+func _land_chain_click(xz: Vector2, is_road: bool) -> void:
+	var lane_cfg := LANE_CFGS[_road_lane_idx]
+	var hw := NetworkGraph.row_width_for(_build_track_mode) * 0.5 if not is_road else NetworkGraph.road_width_for(lane_cfg.x, lane_cfg.y) * 0.5
+	if not _land_prev_has:
+		_land_prev_has = true
+		_land_prev_xz = xz
+		_land_prev_nid = -1
+		var snap0 := _graph.find_closest_node(xz, 9.0)
+		if snap0 >= 0:
+			_land_prev_xz = _graph.nodes[snap0]["pos"]
+		_show_toast("已选起点，继续点击下一点%s（Esc 结束）" % ("修建道路" if is_road else "铺设空地专用轨道"))
+		return
+	var pa := _node_or_point_pos(_land_prev_nid, _land_prev_xz)
+	var snap_b := _graph.find_closest_node(xz, 9.0)
+	var pb: Vector2 = _graph.nodes[snap_b]["pos"] if snap_b >= 0 else xz
+	if pa.distance_to(pb) < 10.0:
+		_show_toast("⚠ 两点距离太近（至少 10m）")
+		return
+	var bi := _strip_hits_building(pa.lerp(pb, 0.04), pb.lerp(pa, 0.04), hw + 0.5)
+	if bi >= 0:
+		_show_toast("⚠ 路线穿过建筑，请先用【拆除建筑】腾出空地，或绕开建筑")
+		return
+	if is_road:
+		for cr: Dictionary in _segment_crossings(pa, pb, _land_prev_nid, snap_b):
+			_show_toast("⚠ 新建道路不能直接与 %s 交叉：请把道路连接到路口或路段上（点在路上即可接出）" % str(_graph.edges[int(cr["eid"])]["name"]))
+			return
+	else:
+		for cr2: Dictionary in _segment_crossings(pa, pb, _land_prev_nid, snap_b):
+			if bool(cr2["has_track"]):
+				_show_toast("⚠ 专用轨道不能与既有轨道平面交叉，请连接到其路口或改走他处")
+				return
+	# Resolve both ends to graph nodes (junction, a cut in a street, or a new free node)
+	var na := _land_prev_nid
+	if na < 0:
+		var ra := _graph.node_for_point(_land_prev_xz, 9.0)
+		if ra.has("error"):
+			_show_toast("⚠ 起点落在车站或道岔上，请换个位置")
+			_land_prev_has = false
+			return
+		na = int(ra["nid"])
+	var rb := _graph.node_for_point(xz, 9.0)
+	if rb.has("error"):
+		_show_toast("⚠ 终点落在车站或道岔上，请换个位置")
+		return
+	var nb := int(rb["nid"])
+	var crossings := _segment_crossings(_graph.nodes[na]["pos"], _graph.nodes[nb]["pos"], na, nb).size()
+	var eid := _graph.add_road(na, nb, lane_cfg.x, lane_cfg.y, not is_road, _build_track_mode)
+	if eid < 0:
+		_show_toast("⚠ 这两点已经相连或无法连接")
+		return
+	if not is_road:
+		_graph.set_track_on_edge(eid, _build_bed_style, _build_track_mode)
+	_land_prev_nid = nb
+	_land_prev_xz = _graph.nodes[nb]["pos"]
+	_after_land_edit(is_road, false)
+	if is_road:
+		_show_toast("已新建道路（%s · %.0fm）· 继续点击延伸，Esc 结束" % [LANE_CFG_LABELS[_road_lane_idx], float(_graph.edges[eid]["length"])])
+	else:
+		var xing := " · 平交穿越 %d 条道路" % crossings if crossings > 0 else ""
+		_show_toast("已铺设空地专用轨道【%s · %s】%.0fm%s · 继续点击延伸，Esc 结束" % [_track_mode_tag(false), BED_STYLE_NAMES[_build_bed_style], float(_graph.edges[eid]["length"]), xing])
 
 
 func _rebuild_tracks_and_operations(seed_pax: bool = false) -> void:
@@ -786,6 +1054,7 @@ func _apply_loaded_save_state(map_key: String, save_data: Dictionary) -> void:
 		_load_map_world(map_key, false, false)
 	var net: Dictionary = save_data.get("network", {})
 	_graph.import_state(net)
+	_refresh_land_layers_if_needed()
 	_pax_sim.set_spawn_level(int(save_data.get("pax_spawn_level", 3)))
 	_pax_sim.total_delivered = int(save_data.get("total_delivered", 0))
 	if _btn_pax_rate != null:
@@ -1361,7 +1630,12 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event is InputEventKey and event.pressed and not event.echo:
 		var k := (event as InputEventKey).keycode
 		if k == KEY_ESCAPE:
-			if _game_mode == GameMode.BUILD and _path_start_node >= 0:
+			if _game_mode == GameMode.BUILD and _land_prev_has:
+				_land_prev_has = false
+				_land_prev_nid = -1
+				_preview_mi.mesh = null
+				_show_toast("已结束本次连续施工")
+			elif _game_mode == GameMode.BUILD and _path_start_node >= 0:
 				_path_start_node = -1
 				_preview_mi.mesh = null
 				_show_toast("已取消连线铺轨起点")
@@ -1602,6 +1876,20 @@ func _rotate_run_camera_by_delta(rel: Vector2) -> void:
 		_orbit_pitch = clampf(_orbit_pitch + rel.y * 0.0045, deg_to_rad(4.0), deg_to_rad(82.0))
 
 
+func _track_mode_tag(long: bool = true) -> String:
+	if _build_track_mode == NetworkGraph.TrackMode.QUAD:
+		return "四轨快慢线" if long else "四轨"
+	if _build_track_mode == NetworkGraph.TrackMode.DOUBLE:
+		return "双线并行" if long else "双线"
+	return "单线"
+
+
+func _track_preview_width() -> float:
+	if _build_track_mode == NetworkGraph.TrackMode.QUAD:
+		return 13.2
+	return 6.6 if _build_track_mode == NetworkGraph.TrackMode.DOUBLE else 3.4
+
+
 func _screen_to_ground_xz(screen_pos: Vector2) -> Variant:
 	var orig := _camera.project_ray_origin(screen_pos)
 	var dir := _camera.project_ray_normal(screen_pos)
@@ -1627,8 +1915,8 @@ func _update_build_hover_preview(screen_pos: Vector2) -> void:
 			_preview_mi.mesh = null
 			return
 		var eid := int(hit["edge_id"])
-		var prev_w := 6.6 if _build_track_mode == NetworkGraph.TrackMode.DOUBLE else 3.4
-		var mode_tag := "双线并行" if _build_track_mode == NetworkGraph.TrackMode.DOUBLE else "单线"
+		var prev_w := _track_preview_width()
+		var mode_tag := _track_mode_tag()
 		_set_ribbon_preview(_preview_mi, [eid], Color(0.20, 0.92, 0.56, 0.72), prev_w)
 		var ed_name: String = str(_graph.edges[eid]["name"])
 		_lbl_build_hint.text = "悬停街道：%s · 单击铺设【%s · %s】（按下触摸板左右滑动拖动地图）" % [ed_name, mode_tag, BED_STYLE_NAMES[_build_bed_style]]
@@ -1640,8 +1928,8 @@ func _update_build_hover_preview(screen_pos: Vector2) -> void:
 			return
 		if _path_start_node >= 0 and nid != _path_start_node:
 			var path_eids := _graph.shortest_street_path(_path_start_node, nid, false)
-			var prev_w := 6.6 if _build_track_mode == NetworkGraph.TrackMode.DOUBLE else 3.6
-			var mode_tag := "双线并行" if _build_track_mode == NetworkGraph.TrackMode.DOUBLE else "单线"
+			var prev_w := _track_preview_width()
+			var mode_tag := _track_mode_tag()
 			_set_ribbon_preview(_preview_mi, path_eids, Color(0.22, 0.85, 0.98, 0.78), prev_w)
 			_lbl_build_hint.text = "自动寻路：%d 段街道 · 单击铺设【%s · %s】（Esc 取消起点）" % [path_eids.size(), mode_tag, BED_STYLE_NAMES[_build_bed_style]]
 		else:
@@ -1665,9 +1953,12 @@ func _update_build_hover_preview(screen_pos: Vector2) -> void:
 				_set_oriented_box_preview(_preview_mi, (place["pos"] as Vector3) + Vector3(0.0, 0.35, 0.0), place["fwd"] as Vector3, Vector3(5.8, 0.7, float(place["x_half"]) * 2.0 + 1.0), Color(0.95, 0.28, 0.22, 0.78))
 				_lbl_build_hint.text = "⚠ 禁止在车站站台上修建道岔/渡线，请移至出站并线后的轨道位置！"
 			else:
-				var is_dbl := (int(_graph.built_track_modes.get(eid, NetworkGraph.TrackMode.SINGLE)) == NetworkGraph.TrackMode.DOUBLE)
+				var is_dbl := _graph.is_multi_track(eid)
 				_set_ribbon_preview(_preview_mi, [eid], Color(0.95, 0.45, 0.22, 0.70), 6.2)
-				_lbl_build_hint.text = "⚠ 仅限有效长度充足的【双线轨道】可修建渡线（当前：%s）" % ("长度不足" if is_dbl else "单线轨道")
+				var why := "长度不足" if is_dbl else "单线轨道"
+				if _graph.is_quad(eid):
+					why = "四轨区段不设渡线，请在两端的双线区段修建"
+				_lbl_build_hint.text = "⚠ 仅限有效长度充足的【双线轨道】可修建渡线（当前：%s）" % why
 			return
 		var xo_len := float(place["x_half"]) * 2.0 + 1.2
 		_set_oriented_box_preview(_preview_mi, (place["pos"] as Vector3) + Vector3(0.0, 0.35, 0.0), place["fwd"] as Vector3, Vector3(5.8, 0.7, xo_len), Color(0.96, 0.78, 0.22, 0.82))
@@ -1689,18 +1980,26 @@ func _update_build_hover_preview(screen_pos: Vector2) -> void:
 			return
 		var eid := int(hit["edge_id"])
 		var plat_len := STATION_LEN_PRESETS[_build_station_len_idx]
-		var is_dbl_chk := (int(_graph.built_track_modes.get(eid, NetworkGraph.TrackMode.SINGLE)) == NetworkGraph.TrackMode.DOUBLE)
+		var is_dbl_chk := _graph.is_multi_track(eid)
 		var req_k_prev := _build_station_kind if is_dbl_chk else NetworkGraph.StationKind.SIDE_SINGLE
 		if TrackBuilder.station_overlaps_crossover(_graph, eid, float(hit["t"]), req_k_prev, plat_len):
 			_set_oriented_box_preview(_preview_mi, (hit["pos"] as Vector3) + Vector3(0.0, 0.4, 0.0), hit["fwd"] as Vector3, Vector3(4.8, 0.8, plat_len), Color(0.95, 0.28, 0.22, 0.78))
 			_lbl_build_hint.text = "⚠ 该位置与已有道岔/渡线重叠，不可在道岔上建造车站！"
 			return
-		var is_dbl := (int(_graph.built_track_modes.get(eid, NetworkGraph.TrackMode.SINGLE)) == NetworkGraph.TrackMode.DOUBLE)
+		var is_dbl := _graph.is_multi_track(eid)
 		var sep_prev := _graph.get_edge_track_half_sep(eid)
 		var pos3: Vector3 = hit["pos"]
 		var fwd3: Vector3 = hit["fwd"]
 		var right3 := fwd3.cross(Vector3.UP).normalized()
-		if is_dbl and _build_station_kind == NetworkGraph.StationKind.ISLAND:
+		if _graph.is_quad(eid):
+			sep_prev = NetworkGraph.QUAD_LOCAL_HALF_SEP
+		if _graph.is_quad(eid) and _build_station_kind == NetworkGraph.StationKind.ISLAND:
+			_set_oriented_box_preview(_preview_mi, pos3 + Vector3(0.0, 0.4, 0.0), fwd3, Vector3(12.6, 0.8, plat_len), Color(0.25, 0.92, 0.62, 0.62))
+			_lbl_build_hint.text = "单击建造 %.0fm【四轨双岛式站台】（第1-2轨、第3-4轨之间各一岛，慢车道在站前外扩，快慢车同台换乘）" % plat_len
+		elif _graph.is_quad(eid) and _build_station_kind == NetworkGraph.StationKind.SIDE_DUAL:
+			_set_oriented_box_preview(_preview_mi, pos3 + Vector3(0.0, 0.4, 0.0), fwd3, Vector3(16.8, 0.7, plat_len), Color(0.25, 0.92, 0.62, 0.50))
+			_lbl_build_hint.text = "单击建造 %.0fm【四轨外侧侧式站台】（第1、4轨外侧设站台，仅慢车停靠，快车通过）" % plat_len
+		elif is_dbl and _build_station_kind == NetworkGraph.StationKind.ISLAND:
 			_set_oriented_box_preview(_preview_mi, pos3 + Vector3(0.0, 0.4, 0.0), fwd3, Vector3(3.1, 0.8, plat_len), Color(0.25, 0.92, 0.62, 0.78))
 			_lbl_build_hint.text = "单击建造 %.0fm【中央岛式站台】（双线将自动加宽至 ±3.05m，列车开内侧门）" % plat_len
 		elif is_dbl and _build_station_kind == NetworkGraph.StationKind.SIDE_DUAL:
@@ -1710,6 +2009,62 @@ func _update_build_hover_preview(screen_pos: Vector2) -> void:
 			var plat_pos := pos3 + right3 * (float(_build_station_side) * (2.9 + sep_prev)) + Vector3(0.0, 0.4, 0.0)
 			_set_oriented_box_preview(_preview_mi, plat_pos, fwd3, Vector3(3.0, 0.8, plat_len), Color(0.25, 0.92, 0.62, 0.78))
 			_lbl_build_hint.text = "单击在此建造 %.0fm 精细 3D 车站（按 R 切换左右侧站台）" % plat_len
+
+	elif _build_tool == BuildTool.TRACK_OFFROAD or _build_tool == BuildTool.ROAD_BUILD:
+		var is_road := _build_tool == BuildTool.ROAD_BUILD
+		var cfg := LANE_CFGS[_road_lane_idx]
+		var w_prev := NetworkGraph.road_width_for(cfg.x, cfg.y) if is_road else NetworkGraph.row_width_for(_build_track_mode)
+		var snap := _graph.find_closest_node(xz, 9.0)
+		var pb: Vector2 = _graph.nodes[snap]["pos"] if snap >= 0 else xz
+		if not _land_prev_has:
+			_set_point_box_preview(_preview_mi, Vector3(pb.x, 0.6, pb.y), Vector3(w_prev, 1.2, w_prev), Color(0.22, 0.85, 0.98, 0.70))
+			_lbl_build_hint.text = ("单击选择新道路起点（%s）· 可点在路口或路段中间接出" % LANE_CFG_LABELS[_road_lane_idx]) if is_road else "单击选择空地专用轨道起点【%s】· 可从已有轨道的路口接出，穿过空地 / 拆除后的地块" % _track_mode_tag()
+			return
+		var pa := _node_or_point_pos(_land_prev_nid, _land_prev_xz)
+		var seg := pb - pa
+		if seg.length() < 1.0:
+			return
+		var blocked := _strip_hits_building(pa.lerp(pb, 0.04), pb.lerp(pa, 0.04), w_prev * 0.5 + 0.5) >= 0
+		var col := Color(0.95, 0.30, 0.22, 0.70) if blocked else Color(0.25, 0.92, 0.62, 0.66)
+		var mid := (pa + pb) * 0.5
+		_set_oriented_box_preview(_preview_mi, Vector3(mid.x, 0.35, mid.y), Vector3(seg.x, 0.0, seg.y).normalized(), Vector3(w_prev, 0.5, seg.length()), col)
+		var n_x := _segment_crossings(pa, pb, _land_prev_nid, snap).size()
+		_lbl_build_hint.text = "%.0fm%s%s · 单击确认，Esc 结束" % [seg.length(), " · ⚠ 穿过建筑" if blocked else "", (" · 平交穿越 %d 条道路/轨道" % n_x) if n_x > 0 and not is_road else ""]
+
+	elif _build_tool == BuildTool.ROAD_REMOVE or _build_tool == BuildTool.ROAD_LANES:
+		var hit_r := _graph.find_closest_edge(xz, 14.0, false)
+		if hit_r.is_empty():
+			_preview_mi.mesh = null
+			return
+		var eid_r := int(hit_r["edge_id"])
+		var ed_r: Dictionary = _graph.edges[eid_r]
+		var lanes_now := "%d+%d" % [int(ed_r.get("lanes_f", 1)), int(ed_r.get("lanes_b", 1))]
+		if _build_tool == BuildTool.ROAD_REMOVE:
+			var has_t := _graph.built_tracks.has(eid_r)
+			_set_ribbon_preview(_preview_mi, [eid_r], Color(0.96, 0.26, 0.22, 0.72) if not has_t else Color(0.96, 0.62, 0.22, 0.6), float(ed_r["width"]))
+			_lbl_build_hint.text = ("单击拆除道路：%s（%s 车道 · %.0fm）" % [str(ed_r["name"]), lanes_now, float(ed_r["width"])]) if not has_t else "⚠ %s 上铺有轨道：请先拆除轨道再拆道路" % str(ed_r["name"])
+		else:
+			var cfg2 := LANE_CFGS[_road_lane_idx]
+			_set_ribbon_preview(_preview_mi, [eid_r], Color(0.30, 0.70, 0.98, 0.62), NetworkGraph.road_width_for(cfg2.x, cfg2.y))
+			_lbl_build_hint.text = "单击把 %s 改为【%s】（现为 %s 车道 · %.0fm → %.0fm）· 单向路再次单击可调转方向" % [str(ed_r["name"]), LANE_CFG_LABELS[_road_lane_idx], lanes_now, float(ed_r["width"]), NetworkGraph.road_width_for(cfg2.x, cfg2.y)]
+
+	elif _build_tool == BuildTool.BUILDING_DEMOLISH:
+		var bi := _building_at(xz)
+		if bi < 0:
+			_preview_mi.mesh = null
+			_lbl_build_hint.text = "将光标移到要拆除的建筑上（地标建筑不可拆除）"
+			return
+		var poly := _building_poly(bi)
+		var mn := Vector2(1e9, 1e9)
+		var mx := Vector2(-1e9, -1e9)
+		for v: Vector2 in poly:
+			mn = mn.min(v)
+			mx = mx.max(v)
+		var bd: Dictionary = (_map_data["buildings"] as Array)[bi]
+		var h := float(bd.get("h", 12.0))
+		var lm := str(bd.get("lm", "")) != ""
+		_set_point_box_preview(_preview_mi, Vector3((mn.x + mx.x) * 0.5, h * 0.5, (mn.y + mx.y) * 0.5), Vector3(mx.x - mn.x + 0.6, h + 0.6, mx.y - mn.y + 0.6), Color(0.96, 0.26, 0.22, 0.45) if not lm else Color(0.6, 0.6, 0.6, 0.35))
+		_lbl_build_hint.text = ("单击拆除这栋建筑（高 %.0fm），腾出空地可铺设专用轨道或新建道路" % h) if not lm else "地标建筑不可拆除"
 
 	elif _build_tool == BuildTool.DEMOLISH:
 		var sid := _graph.find_closest_station(xz, 18.0)
@@ -1735,11 +2090,18 @@ func _handle_map_left_click(screen_pos: Vector2) -> void:
 	var xz: Vector2 = xz_var
 
 	if _game_mode == GameMode.BUILD:
-		var mode_tag := "双线" if _build_track_mode == NetworkGraph.TrackMode.DOUBLE else "单线"
+		var mode_tag := _track_mode_tag(false)
+		if _build_tool == BuildTool.TRACK_SINGLE or _build_tool == BuildTool.TRACK_PATH:
+			if _build_track_mode == NetworkGraph.TrackMode.QUAD and TrackBuilder.is_monorail_style(_build_bed_style):
+				_show_toast("⚠ 四轨快慢线仅适用于有轨电车（独立路权），单轨请选双线")
+				return
 		if _build_tool == BuildTool.TRACK_SINGLE:
 			var hit := _graph.find_closest_edge(xz, 22.0, false)
 			if not hit.is_empty():
 				var eid := int(hit["edge_id"])
+				if _build_track_mode == NetworkGraph.TrackMode.QUAD and float(_graph.edges[eid].get("width", 12.0)) < 13.0:
+					_show_toast("⚠ %s 路面太窄（%.0fm），四轨需要至少 13m 宽的道路或空地" % [str(_graph.edges[eid]["name"]), float(_graph.edges[eid].get("width", 12.0))])
+					return
 				_graph.set_track_on_edge(eid, _build_bed_style, _build_track_mode)
 				_rebuild_tracks_only_visual()
 				_mark_modified_and_quick_save()
@@ -1759,7 +2121,13 @@ func _handle_map_left_click(screen_pos: Vector2) -> void:
 				_path_start_node = nid
 				_rebuild_tracks_only_visual()
 				_mark_modified_and_quick_save()
-				_show_toast("已沿最短路径铺设 %d 段【%s · %s】轨道！" % [eids.size(), mode_tag, BED_STYLE_NAMES[_build_bed_style]])
+				var narrow := 0
+				if _build_track_mode == NetworkGraph.TrackMode.QUAD:
+					for eid_n: int in eids:
+						if float(_graph.edges[eid_n].get("width", 12.0)) < 13.0:
+							narrow += 1
+				var narrow_note := "（其中 %d 段路面较窄，四轨将占用全部路面）" % narrow if narrow > 0 else ""
+				_show_toast("已沿最短路径铺设 %d 段【%s · %s】轨道！%s" % [eids.size(), mode_tag, BED_STYLE_NAMES[_build_bed_style], narrow_note])
 
 		elif _build_tool == BuildTool.CROSSOVER:
 			var hit := _graph.find_closest_edge(xz, 22.0, true)
@@ -1773,7 +2141,7 @@ func _handle_map_left_click(screen_pos: Vector2) -> void:
 				if str(place.get("reason", "")) == "on_station":
 					_show_toast("⚠ 不可在车站站台上修建道岔/渡线，请移至出站并线后的轨道位置！")
 				else:
-					_show_toast("⚠ 仅限有效长度充足的【双线轨道】可修建渡线！")
+					_show_toast("⚠ 四轨区段不设渡线，请在两端的双线区段修建" if _graph.is_quad(eid) else "⚠ 仅限有效长度充足的【双线轨道】可修建渡线！")
 				return
 			if _graph.set_crossover_on_edge(eid, _build_crossover_type, float(place["t_clamped"])):
 				_rebuild_tracks_only_visual()
@@ -1798,7 +2166,7 @@ func _handle_map_left_click(screen_pos: Vector2) -> void:
 			var eid := int(hit["edge_id"])
 			var t_hit := float(hit["t"])
 			var plat_len := STATION_LEN_PRESETS[_build_station_len_idx]
-			var is_dbl := (int(_graph.built_track_modes.get(eid, NetworkGraph.TrackMode.SINGLE)) == NetworkGraph.TrackMode.DOUBLE)
+			var is_dbl := _graph.is_multi_track(eid)
 			var req_k_chk := _build_station_kind if is_dbl else NetworkGraph.StationKind.SIDE_SINGLE
 			if TrackBuilder.station_overlaps_crossover(_graph, eid, t_hit, req_k_chk, plat_len):
 				_show_toast("⚠ 该位置与已有道岔/渡线重叠，不可在道岔上建造车站！")
@@ -1829,6 +2197,63 @@ func _handle_map_left_click(screen_pos: Vector2) -> void:
 					_mark_modified_and_quick_save()
 					_show_toast("已建成 %.0fm 车站：%s" % [plat_len, str(_graph.stations[sid]["name"])])
 
+		elif _build_tool == BuildTool.TRACK_OFFROAD:
+			if TrackBuilder.is_monorail_style(_build_bed_style):
+				_show_toast("⚠ 空地直连仅用于地面有轨电车，单轨请沿道路铺设")
+				return
+			_land_chain_click(xz, false)
+
+		elif _build_tool == BuildTool.ROAD_BUILD:
+			_land_chain_click(xz, true)
+
+		elif _build_tool == BuildTool.ROAD_REMOVE:
+			var hit_rr := _graph.find_closest_edge(xz, 14.0, false)
+			if hit_rr.is_empty():
+				return
+			var eid_rr := int(hit_rr["edge_id"])
+			var nm_rr := str(_graph.edges[eid_rr]["name"])
+			if bool(_graph.edges[eid_rr].get("no_cars", false)):
+				_show_toast("这是空地专用轨道：请用【拆除车站 / 轨道】拆除")
+				return
+			var res := _graph.remove_road(eid_rr)
+			if res == "has_track":
+				_show_toast("⚠ %s 上铺有轨道：请先拆除轨道再拆道路" % nm_rr)
+				return
+			_after_land_edit(true, false)
+			_show_toast("已拆除道路：%s" % nm_rr)
+
+		elif _build_tool == BuildTool.ROAD_LANES:
+			var hit_rl := _graph.find_closest_edge(xz, 14.0, false)
+			if hit_rl.is_empty():
+				return
+			var eid_rl := int(hit_rl["edge_id"])
+			var cfg_l := LANE_CFGS[_road_lane_idx]
+			var lf := cfg_l.x
+			var lb := cfg_l.y
+			var ed_l: Dictionary = _graph.edges[eid_rl]
+			if lb == 0 and int(ed_l.get("lanes_f", 1)) == lf and int(ed_l.get("lanes_b", 1)) == 0:
+				lb = lf # same one-way setting clicked again: turn it around
+				lf = 0
+			if not _graph.set_road_lanes(eid_rl, lf, lb):
+				_show_toast("⚠ 专用轨道没有机动车道")
+				return
+			var w_new := float(_graph.edges[eid_rl]["width"])
+			var b_hit := _strip_hits_building((ed_l["pts"] as Array)[0], (ed_l["pts"] as Array)[(ed_l["pts"] as Array).size() - 1], w_new * 0.5) >= 0
+			_after_land_edit(true, false)
+			_show_toast("已把 %s 改为 %d+%d 车道（宽 %.0fm）%s" % [str(ed_l["name"]), lf, lb, w_new, " · ⚠ 路面已贴近建筑，可拆除建筑拓宽" if b_hit else ""])
+
+		elif _build_tool == BuildTool.BUILDING_DEMOLISH:
+			var bi_d := _building_at(xz)
+			if bi_d < 0:
+				return
+			if str(((_map_data["buildings"] as Array)[bi_d] as Dictionary).get("lm", "")) != "":
+				_show_toast("地标建筑不可拆除")
+				return
+			_graph.demolish_building(bi_d)
+			_after_land_edit(false, true)
+			_preview_mi.mesh = null
+			_show_toast("已拆除建筑，腾出空地")
+
 		elif _build_tool == BuildTool.DEMOLISH:
 			var sid := _graph.find_closest_station(xz, 18.0)
 			if sid >= 0:
@@ -1847,6 +2272,10 @@ func _handle_map_left_click(screen_pos: Vector2) -> void:
 					_rebuild_tracks_only_visual()
 					_mark_modified_and_quick_save()
 					_show_toast("已拆除该段渡线 Crossover（保留双线轨道）")
+				elif bool(_graph.edges[deid].get("no_cars", false)):
+					_graph.remove_offroad_track(deid)
+					_after_land_edit(false, false)
+					_show_toast("已拆除空地专用轨道段")
 				else:
 					_graph.remove_track_on_edge(deid)
 					_rebuild_tracks_only_visual()
@@ -2443,12 +2872,13 @@ func _build_ui() -> void:
 	var lay_row := HBoxContainer.new()
 	lay_row.add_theme_constant_override("separation", 6)
 	track_sv.add_child(lay_row)
-	for lay_pair: Array in [[BuildTool.TRACK_SINGLE, "单段铺设"], [BuildTool.TRACK_PATH, "两点自动寻路"]]:
+	for lay_pair: Array in [[BuildTool.TRACK_SINGLE, "单段铺设"], [BuildTool.TRACK_PATH, "两点寻路"], [BuildTool.TRACK_OFFROAD, "空地直连"]]:
 		var lay_val := int(lay_pair[0])
 		var lb := _make_btn(str(lay_pair[1]), func():
 			_build_tool = lay_val
 			_last_track_tool = lay_val
 			_path_start_node = -1
+			_land_prev_has = false
 			_refresh_build_buttons()
 		)
 		lb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -2459,7 +2889,7 @@ func _build_ui() -> void:
 	var tm_row := HBoxContainer.new()
 	tm_row.add_theme_constant_override("separation", 6)
 	track_sv.add_child(tm_row)
-	for t_pair: Array in [[NetworkGraph.TrackMode.SINGLE, "单线"], [NetworkGraph.TrackMode.DOUBLE, "双线并行"]]:
+	for t_pair: Array in [[NetworkGraph.TrackMode.SINGLE, "单线"], [NetworkGraph.TrackMode.DOUBLE, "双线并行"], [NetworkGraph.TrackMode.QUAD, "四轨快慢线"]]:
 		var tm_val := int(t_pair[0])
 		var tmb := _make_btn(str(t_pair[1]), func():
 			_build_track_mode = tm_val
@@ -2616,6 +3046,60 @@ func _build_ui() -> void:
 	dem_tip.add_theme_color_override("font_color", Color(0.86, 0.64, 0.62))
 	dem_sv.add_child(dem_tip)
 
+	# --- Category 4: 道路与地块 (roads, lanes, buildings) ---
+	var cat_road_btn := _make_cat_btn("道路与地块", func():
+		if _build_tool < BuildTool.ROAD_BUILD:
+			_build_tool = BuildTool.ROAD_BUILD
+		_land_prev_has = false
+		_path_start_node = -1
+		_refresh_build_buttons()
+	)
+	b_vbox.add_child(cat_road_btn)
+	_build_cat_btns.append(cat_road_btn)
+	var road_sub_pair: Array = make_sub_box.call()
+	var road_sub_wrap: Control = road_sub_pair[0]
+	var road_sv: VBoxContainer = road_sub_pair[1]
+	_build_cat_subpanels.append(road_sub_wrap)
+	add_sub_lbl.call(road_sv, "工具")
+	var rt_row := HBoxContainer.new()
+	rt_row.add_theme_constant_override("separation", 5)
+	road_sv.add_child(rt_row)
+	for rt_pair: Array in [[BuildTool.ROAD_BUILD, "新建道路"], [BuildTool.ROAD_REMOVE, "拆除道路"], [BuildTool.ROAD_LANES, "修改车道"], [BuildTool.BUILDING_DEMOLISH, "拆除建筑"]]:
+		var rt_val := int(rt_pair[0])
+		var rtb := _make_btn(str(rt_pair[1]), func():
+			_build_tool = rt_val
+			_land_prev_has = false
+			_path_start_node = -1
+			_refresh_build_buttons()
+		)
+		rtb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		rt_row.add_child(rtb)
+		_road_tool_btns.append(rtb)
+	add_sub_lbl.call(road_sv, "车道（新建 / 修改道路时使用）")
+	var lane_grid := GridContainer.new()
+	lane_grid.columns = 4
+	lane_grid.add_theme_constant_override("h_separation", 5)
+	lane_grid.add_theme_constant_override("v_separation", 5)
+	road_sv.add_child(lane_grid)
+	for li in range(LANE_CFGS.size()):
+		var li_c := li
+		var lcb := _make_btn(LANE_CFG_LABELS[li], func():
+			_road_lane_idx = li_c
+			if _build_tool != BuildTool.ROAD_BUILD and _build_tool != BuildTool.ROAD_LANES:
+				_build_tool = BuildTool.ROAD_BUILD
+			_refresh_build_buttons()
+		)
+		lcb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		lane_grid.add_child(lcb)
+		_lane_cfg_btns.append(lcb)
+	var road_tip := Label.new()
+	road_tip.text = "新建道路 / 空地直连轨道：依次点击各点连续施工（可从路口或路段中间接出），Esc 结束；不可穿过建筑，可先拆除建筑腾出空地"
+	road_tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	road_tip.custom_minimum_size = Vector2(310, 0)
+	road_tip.add_theme_font_size_override("font_size", 11)
+	road_tip.add_theme_color_override("font_color", Color(0.70, 0.80, 0.86))
+	road_sv.add_child(road_tip)
+
 	var foot_sep := HSeparator.new()
 	b_vbox.add_child(foot_sep)
 
@@ -2635,6 +3119,7 @@ func _build_ui() -> void:
 	util_row.add_child(save_u)
 	var clr_u := _make_btn("清空全部重建", func():
 		_graph.clear_player_network()
+		_refresh_land_layers_if_needed()
 		_rebuild_tracks_and_operations(false)
 		_mark_modified_and_quick_save()
 		_show_toast("已清空全城轨道与线路，可从零自由建设！")
@@ -2713,6 +3198,13 @@ func _build_ui() -> void:
 	cfg_row.add_child(_make_btn("配车 +", func(): _plan_fleet_count = mini(8, _plan_fleet_count + 1); _refresh_plan_ui()))
 	cfg_row.add_child(_make_btn("编组 -", func(): _plan_sections = maxi(1, _plan_sections - 1); _refresh_plan_ui()))
 	cfg_row.add_child(_make_btn("编组 +", func(): _plan_sections = mini(_max_sections_for_draft(), _plan_sections + 1); _refresh_plan_ui()))
+
+	_btn_plan_service = _make_btn("运行类别：普通慢车", func():
+		_plan_express = not _plan_express
+		_refresh_plan_ui()
+	)
+	_btn_plan_service.tooltip_text = "快车：在四轨区段走中间快车道，在四轨双岛站优先发车并越行慢车；慢车：走外侧慢车道，遇快车待避"
+	p_vbox.add_child(_btn_plan_service)
 
 	_lbl_fleet_cfg = Label.new()
 	p_vbox.add_child(_lbl_fleet_cfg)
@@ -3744,10 +4236,13 @@ func _refresh_build_buttons() -> void:
 		active_cat = 2
 	elif _build_tool == BuildTool.DEMOLISH:
 		active_cat = 3
+	elif _build_tool >= BuildTool.ROAD_BUILD:
+		active_cat = 4
 
 	var bed_short := ["独立草皮", "柏油嵌轨", "绿茵嵌轨", "花岗岩", "碎石枕木", "高架单轨"]
-	var track_mode_str := "双线" if _build_track_mode == NetworkGraph.TrackMode.DOUBLE else "单线"
-	var track_lay_str := "寻路" if _build_tool == BuildTool.TRACK_PATH else "单段"
+	var track_mode_str := _track_mode_tag(false)
+	var track_lay_str := "寻路" if _build_tool == BuildTool.TRACK_PATH else ("空地直连" if _build_tool == BuildTool.TRACK_OFFROAD else "单段")
+	var road_tool_names := {BuildTool.ROAD_BUILD: "新建道路", BuildTool.ROAD_REMOVE: "拆除道路", BuildTool.ROAD_LANES: "修改车道", BuildTool.BUILDING_DEMOLISH: "拆除建筑"}
 	var xo_str := "交叉双渡线" if _build_crossover_type == NetworkGraph.CrossoverType.DOUBLE else "单渡线"
 	var sk_names := ["单侧", "对称双侧", "中央岛式"]
 	var st_len_m := int(round(STATION_LEN_PRESETS[_build_station_len_idx]))
@@ -3756,6 +4251,7 @@ func _refresh_build_buttons() -> void:
 		"修建渡线   (%s)" % xo_str,
 		"修建车站   (%s · %dm)" % [sk_names[clampi(_build_station_kind, 0, 2)], st_len_m],
 		"拆除车站 / 轨道",
+		"道路与地块   (%s · %s)" % [str(road_tool_names.get(_build_tool, "新建道路")), LANE_CFG_LABELS[_road_lane_idx]],
 	]
 
 	for ci in range(_build_cat_btns.size()):
@@ -3766,9 +4262,14 @@ func _refresh_build_buttons() -> void:
 		if ci < _build_cat_subpanels.size():
 			_build_cat_subpanels[ci].visible = is_open
 
+	var lay_tools: Array[int] = [BuildTool.TRACK_SINGLE, BuildTool.TRACK_PATH, BuildTool.TRACK_OFFROAD]
 	for i in range(_track_lay_btns.size()):
-		var lay_tool := BuildTool.TRACK_SINGLE if i == 0 else BuildTool.TRACK_PATH
-		_highlight_active_btn(_track_lay_btns[i], _build_tool == lay_tool)
+		_highlight_active_btn(_track_lay_btns[i], _build_tool == lay_tools[i])
+	var road_tools: Array[int] = [BuildTool.ROAD_BUILD, BuildTool.ROAD_REMOVE, BuildTool.ROAD_LANES, BuildTool.BUILDING_DEMOLISH]
+	for i in range(_road_tool_btns.size()):
+		_highlight_active_btn(_road_tool_btns[i], _build_tool == road_tools[i])
+	for i in range(_lane_cfg_btns.size()):
+		_highlight_active_btn(_lane_cfg_btns[i], i == _road_lane_idx)
 	for i in range(_track_mode_btns.size()):
 		_highlight_active_btn(_track_mode_btns[i], i == _build_track_mode)
 	var xo_idx := 0 if _build_crossover_type == NetworkGraph.CrossoverType.SINGLE else 1
@@ -3845,6 +4346,9 @@ func _refresh_plan_ui() -> void:
 		_lbl_draft_stops.text = "%s%s 已选 %d 站 · %s" % [edit_tag, mode_tag, _draft_station_ids.size(), where]
 		_update_draft_route_preview()
 	_refresh_draft_list_ui()
+	if _btn_plan_service != null:
+		_btn_plan_service.text = "运行类别：快车（四轨走内侧快车道 · 优先越行）" if _plan_express else "运行类别：普通慢车（四轨走外侧慢车道 · 遇快车待避）"
+		_highlight_active_btn(_btn_plan_service, _plan_express)
 	if _btn_commit_line != null:
 		_btn_commit_line.text = "✓ 保存对线路的修改" if _editing_line_id >= 0 else "✓ 确认开通此线路"
 		_btn_cancel_edit.visible = _editing_line_id >= 0
@@ -3899,6 +4403,7 @@ func _begin_line_edit(lid: int) -> void:
 			_plan_model_idx = i
 	_plan_fleet_count = int(ln.get("trams_count", 2))
 	_plan_sections = int(ln.get("sections", 2))
+	_plan_express = bool(ln.get("express", false))
 	_refresh_plan_ui()
 	_show_toast("✎ 正在编辑 %s：可增删车站、换车型、改配车数量与编组，完成后点【保存对线路的修改】" % str(ln["name"]))
 
@@ -4063,9 +4568,14 @@ func _commit_draft_line() -> void:
 				_plan_model_idx = mi_k
 				break
 		_show_toast("已自动换成%s车型：%s" % ["单轨" if on_mono else "电车", str(m.get("name_zh", ""))])
+	if _plan_express:
+		for sid_x: int in _draft_station_ids:
+			if not _graph.express_can_call_at(sid_x):
+				_show_toast("⚠ 快车不能停靠四轨外侧侧式站台（%s）：请改为慢车，或在该处建四轨双岛式站台" % str(_graph.stations[sid_x]["name"]))
+				return
 	if _editing_line_id >= 0:
 		var elid := _editing_line_id
-		if not _graph.update_line(elid, _draft_station_ids, str(m["key"]), _plan_fleet_count, _plan_sections):
+		if not _graph.update_line(elid, _draft_station_ids, str(m["key"]), _plan_fleet_count, _plan_sections, _plan_express):
 			_show_toast("无法保存修改：站点间缺少连通轨道！")
 			return
 		_editing_line_id = -1
@@ -4082,7 +4592,7 @@ func _commit_draft_line() -> void:
 			_plan_sections,
 		])
 		return
-	var lid := _graph.create_line(_draft_station_ids, str(m["key"]), _plan_fleet_count, _plan_sections)
+	var lid := _graph.create_line(_draft_station_ids, str(m["key"]), _plan_fleet_count, _plan_sections, "", _plan_express)
 	if lid < 0:
 		_show_toast("无法生成线路：站点间缺少连通轨道！")
 		return
@@ -4123,7 +4633,7 @@ func _refresh_lines_list_ui() -> void:
 		for md: Dictionary in _tram_models:
 			if str(md.get("key", "")) == str(ln.get("model_key", "")):
 				mdl_nm = str(md.get("name_zh", ""))
-		lbl.text = "%s%s (%d站 · %d辆 · %s)" % ["✎ " if lid == _editing_line_id else "", str(ln["name"]), (ln["station_ids"] as Array).size(), int(ln["trams_count"]), mdl_nm]
+		lbl.text = "%s%s%s (%d站 · %d辆 · %s)" % ["✎ " if lid == _editing_line_id else "", "【快】" if bool(ln.get("express", false)) else "", str(ln["name"]), (ln["station_ids"] as Array).size(), int(ln["trams_count"]), mdl_nm]
 		lbl.tooltip_text = lbl.text
 		_fit_label(lbl)
 		if lid == _editing_line_id:

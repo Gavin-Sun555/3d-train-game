@@ -32,6 +32,7 @@ func rebuild_fleet(
 	operating_seconds = 0.0
 	line_dist_m.clear()
 	line_variants.clear()
+	var placed_pts := PackedVector3Array() # every spawned train's footprint (any line) so new ones never overlap
 
 	for lid: int in graph.lines.keys():
 		var ln: Dictionary = graph.lines[lid]
@@ -72,6 +73,22 @@ func rebuild_fleet(
 					init_s = lerpf(safe_pad, maxf(safe_pad + 8.0, route_len - safe_pad), frac)
 					init_dir = 1.0 if (ti % 2 == 0) else -1.0
 
+			# Another line may already have a train standing here (lines sharing a terminal): move on until clear
+			var c_spawn: Curve3D = compiled["curve"]
+			var foot := float(sec_cnt) * (float(tinfo.get("section_len", 9.2)) + 0.62) + 6.0
+			for _try in range(40):
+				if _spawn_clear(c_spawn, init_s, init_dir, foot, route_len, is_loop, placed_pts):
+					break
+				var nxt_s := init_s + init_dir * 23.0
+				if is_loop:
+					init_s = fposmod(nxt_s, route_len)
+				else:
+					if nxt_s < 2.0 or nxt_s > route_len - 2.0:
+						init_dir = -init_dir
+						nxt_s = clampf(init_s, 2.0, route_len - 2.0)
+					init_s = nxt_s
+			placed_pts.append_array(_spawn_footprint(c_spawn, init_s, init_dir, foot, route_len, is_loop))
+
 			var seed_dests: Array = []
 			if stops.size() >= 2:
 				var target_stop_i := (ti + 1) % stops.size()
@@ -83,6 +100,7 @@ func rebuild_fleet(
 			var tr_dict := {
 				"line_id": lid,
 				"line_name": str(ln["name"]),
+				"express": bool(ln.get("express", false)),
 				"line_color": ln["color"],
 				"spec": spec,
 				"elevated": bool(spec.get("monorail", false)),
@@ -131,6 +149,25 @@ func rebuild_fleet(
 			_position_tram_3d(tr_dict)
 
 	apply_night_lights(night_factor)
+
+
+static func _spawn_footprint(c: Curve3D, s: float, dir: float, foot: float, rlen: float, is_loop: bool) -> PackedVector3Array:
+	var out := PackedVector3Array()
+	var k := -4.0
+	while k <= foot:
+		var sk := s - dir * k
+		sk = fposmod(sk, rlen) if is_loop else clampf(sk, 0.0, rlen)
+		out.append(c.sample_baked(sk))
+		k += 3.0
+	return out
+
+
+static func _spawn_clear(c: Curve3D, s: float, dir: float, foot: float, rlen: float, is_loop: bool, placed: PackedVector3Array) -> bool:
+	for p: Vector3 in _spawn_footprint(c, s, dir, foot, rlen, is_loop):
+		for q: Vector3 in placed:
+			if Vector2(p.x - q.x, p.z - q.z).length_squared() < 3.0 * 3.0:
+				return false
+	return true
 
 
 func export_run_state() -> Dictionary:
@@ -276,6 +313,7 @@ func step_all_trams(
 	if _switch_timer <= 0.0:
 		_switch_timer = 0.25
 		_update_monorail_switches(graph)
+		_update_merge_yields()
 	if graph != null and graph.has_meta("monorail_switches"):
 		for sw_n in graph.get_meta("monorail_switches"):
 			if is_instance_valid(sw_n):
@@ -448,8 +486,18 @@ func get_dock_info_for_tram(tr: Dictionary, graph: NetworkGraph) -> Dictionary:
 	var st_fwd := (st["fwd"] as Vector3).normalized()
 	var st_side := float(st.get("side", 1))
 	var eid := int(st.get("edge_id", -1))
-	if eid >= 0 and int(graph.built_track_modes.get(eid, NetworkGraph.TrackMode.SINGLE)) == NetworkGraph.TrackMode.DOUBLE:
-		var st_right := st_fwd.cross(Vector3.UP).normalized()
+	var st_right := st_fwd.cross(Vector3.UP).normalized()
+	if eid >= 0 and graph.is_quad(eid):
+		if int(st_side) == 0:
+			# Twin islands: the one beside this train's track (express and local of a direction share it)
+			var secs: Array = tr["tram_info"]["sections"]
+			var lat := 1.0
+			if not secs.is_empty():
+				lat = signf((secs[0] as Node3D).global_position.dot(st_right) - st_pos.dot(st_right))
+			st_pos += st_right * ((lat if lat != 0.0 else 1.0) * NetworkGraph.QUAD_ISLAND_CENTER)
+		else:
+			st_pos += st_right * (st_side * NetworkGraph.QUAD_LOCAL_HALF_SEP)
+	elif eid >= 0 and graph.is_multi_track(eid):
 		st_pos += st_right * (st_side * NetworkGraph.DOUBLE_TRACK_HALF_SEP)
 	return {
 		"has_station": true,
@@ -884,6 +932,9 @@ func _step_ai_driver(
 			if bool(tr["is_loop"]) and dep_sid >= 0 and _terminal_departure_blocked(tr, dep_sid):
 				tr["notch"] = 3 # Hold at the platform: a tram is crossing over into the other platform track
 				return
+			if _holding_for_express(tr, my_idx, d_sid, graph, dt):
+				tr["notch"] = 3 # Four-track stop: let the express go first / overtake
+				return
 			tr["ai_depart_pending"] = false
 			if term_stage == "board_only":
 				# End of Phase 2 ("board_only"): mark terminal reservation as departing ("out") and leave!
@@ -926,7 +977,7 @@ func _step_ai_driver(
 	var brake_urgency := 0 # 0 = smooth, 1 = firm safety brake, 2 = emergency immediate
 
 	# 0. Terminal interlocking & monorail switch signal
-	var term_hold_d := minf(_terminal_hold_distance(tr), _switch_hold_distance(tr))
+	var term_hold_d := minf(minf(_terminal_hold_distance(tr), _switch_hold_distance(tr)), _merge_hold_distance(tr))
 	if term_hold_d < 1e8:
 		if term_hold_d <= 1.4:
 			must_hold_stop = true
@@ -1804,10 +1855,11 @@ func _switch_terminal_platform(tr: Dictionary, sid: int, platform: int) -> void:
 	_position_tram_3d(tr)
 
 
-func _terminal_occupancy(my_idx: int, line_id: int, sid: int) -> Dictionary:
+func _terminal_occupancy(my_idx: int, _line_id: int, sid: int) -> Dictionary:
 	var occ := {"a": false, "b": false, "a_out": false, "b_in": false}
 	for j in range(trams.size()):
-		if j == my_idx or int(trams[j]["line_id"]) != line_id:
+		# Every line turning back at this station shares its two platform tracks (not just this line's trains)
+		if j == my_idx or bool(trams[j].get("elevated", false)) != bool(trams[my_idx].get("elevated", false)):
 			continue
 		var res: Dictionary = trams[j].get("term_res", {})
 		if not res.has(sid):
@@ -2114,11 +2166,221 @@ func _sw_requesting(ti: int, d_entry: float) -> int:
 	var tr: Dictionary = trams[ti]
 	if not _sw_ready(tr):
 		return 0 # dwelling at a platform, doors open, turning back or held at a terminal
+	if _distance_to_tram_ahead(tr, ti) + 4.0 < d_entry:
+		return 0 # another train stands between it and the switch: that one goes first (no deadlock behind it)
 	if ti == active_tram_idx and manual_drive:
 		if float(tr["speed_mps"]) > 0.3 or int(tr["notch"]) > NOTCH_NEUTRAL:
 			return 2
 		return 1
 	return 2
+
+
+# ---------------------------------------------------------------------------------------------
+# Four-track express / local dispatch (after the 2D game's holdLocalForExpress): a local train ready to leave
+# a twin-island stop waits while a same-direction express
+#   * is standing at the same stop (the express departs first), or
+#   * is coming up behind: within 450 m if it runs through non-stop, 240 m if it will call here,
+# and is released once the express is 35 m past the platform head. Never longer than EXPRESS_HOLD_MAX.
+# ---------------------------------------------------------------------------------------------
+const EXPRESS_LOOK_NONSTOP := 450.0
+const EXPRESS_LOOK_STOPPING := 240.0
+const EXPRESS_LEADOUT := 35.0
+const EXPRESS_HOLD_MAX := 75.0
+
+func _holding_for_express(tr: Dictionary, my_idx: int, sid: int, graph: NetworkGraph, dt: float) -> bool:
+	if bool(tr.get("express", false)) or graph == null or sid < 0 or not graph.is_quad_island(sid):
+		tr["express_hold_t"] = 0.0
+		return false
+	var held := float(tr.get("express_hold_t", 0.0))
+	if held >= EXPRESS_HOLD_MAX:
+		return false
+	if held <= 0.0 and float(tr.get("express_hold_done", -1.0)) == float(sid):
+		return false # already gave way once at this stop
+	var st: Dictionary = graph.stations[sid]
+	var st_pos: Vector3 = st["pos"]
+	var plat_half := float(st.get("platform_len", 27.0)) * 0.5
+	var my_fwd := _tram_heading(tr)
+	var hold := false
+	for j in range(trams.size()):
+		var w: Dictionary = trams[j]
+		if j == my_idx or not bool(w.get("express", false)) or bool(w.get("elevated", false)):
+			continue
+		if bool(w.get("crashed", false)) or bool(w.get("derailed", false)):
+			continue
+		var w_fwd := _tram_heading(w)
+		if w_fwd.dot(my_fwd) < 0.5:
+			continue # other direction
+		var secs: Array = w["tram_info"]["sections"]
+		if secs.is_empty():
+			continue
+		var wp := (secs[0] as Node3D).global_position
+		var to_st := st_pos - wp
+		to_st.y = 0.0
+		var along := to_st.dot(w_fwd) # > 0: station still ahead of the express head
+		var lateral := absf(to_st.dot(w_fwd.cross(Vector3.UP).normalized()))
+		if lateral > 14.0:
+			continue
+		var calls := false
+		for stop: Dictionary in w["stops"]:
+			if int(stop["station_id"]) == sid:
+				calls = true
+		var w_here := int(_find_station_at_current_pos(w)["station_id"]) == sid
+		if w_here and calls and (float(w["speed_mps"]) < 0.5 or bool(w["doors_target_open"])):
+			hold = true # express dwelling at this stop departs first
+		elif along > -(plat_half + EXPRESS_LEADOUT) and along <= (EXPRESS_LOOK_STOPPING if calls else EXPRESS_LOOK_NONSTOP):
+			if not _path_passes(w, st_pos, along + 20.0):
+				continue
+			hold = true # approaching (or still pulling out past the platform head)
+		if hold:
+			break
+	if hold:
+		tr["express_hold_t"] = held + dt
+		tr["express_waiting"] = true
+	else:
+		if held > 0.0:
+			tr["express_hold_done"] = float(sid)
+		tr["express_hold_t"] = 0.0
+		tr["express_waiting"] = false
+	return hold
+
+
+func _tram_heading(tr: Dictionary) -> Vector3:
+	var secs: Array = tr["tram_info"]["sections"]
+	if secs.is_empty() or not is_instance_valid(secs[0]):
+		return Vector3.FORWARD
+	var f := -(secs[0] as Node3D).global_transform.basis.z
+	f.y = 0.0
+	return f.normalized() if f.length_squared() > 0.0001 else Vector3.FORWARD
+
+
+# The train's route passes within a few metres of p somewhere in the next `ahead` metres
+func _path_passes(tr: Dictionary, p: Vector3, ahead: float) -> bool:
+	var curve: Curve3D = tr["curve"]
+	var rlen := float(tr["route_len"])
+	var dir := float(tr["dir"])
+	var s0 := float(tr["s"])
+	var k := -40.0
+	while k <= maxf(ahead, 0.0) + 40.0:
+		var sk := s0 + dir * k
+		sk = fposmod(sk, rlen) if bool(tr["is_loop"]) else clampf(sk, 0.0, rlen)
+		var q := curve.sample_baked(sk, false)
+		if Vector2(q.x - p.x, q.z - p.z).length() < 10.0:
+			return true
+		k += 4.0
+	return false
+
+
+# ---------------------------------------------------------------------------------------------
+# Merging tracks (four-track ends, junction turnouts): two trains heading for the same merge point from different
+# tracks would otherwise only see each other once one is already on the other's path. The one further from the
+# merge point waits ~14 m short of it until the other has passed.
+# ---------------------------------------------------------------------------------------------
+const MERGE_LOOK := 80.0
+const MERGE_STEP := 2.0
+const MERGE_STANDOFF := 16.0
+
+func _update_merge_yields() -> void:
+	var paths := {}
+	for i in range(trams.size()):
+		trams[i]["merge_hold_s"] = -1.0
+	for i in range(trams.size()):
+		var a: Dictionary = trams[i]
+		if bool(a.get("elevated", false)) or bool(a.get("crashed", false)) or bool(a.get("derailed", false)):
+			continue
+		for j in range(i + 1, trams.size()):
+			var b: Dictionary = trams[j]
+			if bool(b.get("elevated", false)) or bool(b.get("crashed", false)) or bool(b.get("derailed", false)):
+				continue
+			var pa := _head_pos(a)
+			var pb := _head_pos(b)
+			if pa.distance_to(pb) > MERGE_LOOK * 2.0 + 20.0:
+				continue
+			if not paths.has(i):
+				paths[i] = _path_ahead_pts(a)
+			if not paths.has(j):
+				paths[j] = _path_ahead_pts(b)
+			var ap: PackedVector2Array = paths[i]
+			var bp: PackedVector2Array = paths[j]
+			if _on_path(ap, Vector2(pb.x, pb.z)) or _on_path(bp, Vector2(pa.x, pa.z)):
+				continue # already one behind the other on the same track: normal headway keeps them apart
+			var hit := _first_merge(ap, bp)
+			if hit.x < 0:
+				continue
+			var da := float(hit.x) * MERGE_STEP
+			var db := float(hit.y) * MERGE_STEP
+			var b_yields := db > da or (is_equal_approx(da, db) and j > i) # further from the merge point waits
+			var yielder: Dictionary = b if b_yields else a
+			var stop_at := (db if b_yields else da) - MERGE_STANDOFF
+			if stop_at < 0.0:
+				continue # too close to stop short: it is effectively already merging
+			var s_new := float(yielder["s"]) + float(yielder["dir"]) * stop_at
+			if bool(yielder["is_loop"]):
+				s_new = fposmod(s_new, float(yielder["route_len"]))
+			if float(yielder["merge_hold_s"]) < 0.0 or _hold_ahead(yielder, s_new) < _hold_ahead(yielder, float(yielder["merge_hold_s"])):
+				yielder["merge_hold_s"] = s_new
+
+
+func _head_pos(tr: Dictionary) -> Vector3:
+	var secs: Array = tr["tram_info"]["sections"]
+	if secs.is_empty() or not is_instance_valid(secs[0]):
+		return (tr["curve"] as Curve3D).sample_baked(float(tr["s"]))
+	return (secs[0] as Node3D).global_position
+
+
+func _path_ahead_pts(tr: Dictionary) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	var curve: Curve3D = tr["curve"]
+	var rlen := float(tr["route_len"])
+	var dir := float(tr["dir"])
+	var s0 := float(tr["s"])
+	var k := 0.0
+	while k <= MERGE_LOOK:
+		var sk := s0 + dir * k
+		if bool(tr["is_loop"]):
+			sk = fposmod(sk, rlen)
+		elif sk < 0.0 or sk > rlen:
+			break
+		var q := curve.sample_baked(sk, false)
+		out.append(Vector2(q.x, q.z))
+		k += MERGE_STEP
+	return out
+
+
+static func _on_path(pts: PackedVector2Array, p: Vector2) -> bool:
+	for q: Vector2 in pts:
+		if q.distance_squared_to(p) < 2.2 * 2.2:
+			return true
+	return false
+
+
+# First pair of indices (a, b) where the two paths come together heading the same way (b index into bp); (-1,-1) if none
+static func _first_merge(ap: PackedVector2Array, bp: PackedVector2Array) -> Vector2i:
+	for ia in range(2, ap.size() - 1):
+		for ib in range(2, bp.size() - 1):
+			if ap[ia].distance_squared_to(bp[ib]) < 2.0 * 2.0:
+				var ta := (ap[ia + 1] - ap[ia]).normalized()
+				var tb := (bp[ib + 1] - bp[ib]).normalized()
+				if ta.dot(tb) > 0.7:
+					return Vector2i(ia, ib)
+				return Vector2i(-1, -1) # paths cross / meet head-on: handled by signals and interlocking
+	return Vector2i(-1, -1)
+
+
+func _hold_ahead(tr: Dictionary, s_hold: float) -> float:
+	if s_hold < 0.0:
+		return 1e9
+	var d := (s_hold - float(tr["s"])) * float(tr["dir"])
+	if bool(tr["is_loop"]):
+		d = fposmod(d, float(tr["route_len"]))
+		return d if d < float(tr["route_len"]) * 0.5 else 0.0
+	return maxf(0.0, d)
+
+
+func _merge_hold_distance(tr: Dictionary) -> float:
+	var hs := float(tr.get("merge_hold_s", -1.0))
+	if hs < 0.0:
+		return 1e9
+	return _hold_ahead(tr, hs)
 
 
 func _switch_hold_distance(tr: Dictionary) -> float:

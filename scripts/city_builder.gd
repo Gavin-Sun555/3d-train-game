@@ -69,6 +69,30 @@ static func build_city(
 	return lm_info
 
 
+# Player edits: rebuild only the street surface (asphalt, markings, kerbs, sidewalks, furniture)
+static func rebuild_road_layer(parent: Node3D, roads: Array, crosswalks: Array, road_mat: ShaderMaterial) -> void:
+	for nm: String in ["Roads", "RoadMarkings", "RoadCentreLines"]:
+		var old := parent.get_node_or_null(nm)
+		if old != null:
+			parent.remove_child(old)
+			old.queue_free()
+	if parent.has_meta("last_bays_sig"):
+		parent.remove_meta("last_bays_sig")
+	_build_roads_and_curbs(parent, roads, crosswalks, road_mat)
+
+
+# Player edits: rebuild the generic buildings and their shopfronts (demolished ones have no footprint).
+# Returns the new storefront night material (or null).
+static func rebuild_building_layer(parent: Node3D, buildings: Array, storefronts: Array, building_mat: ShaderMaterial) -> ShaderMaterial:
+	for nm: String in ["Buildings", "BuildingFrames3D", "RooftopBeacons", "StorefrontSigns", "StorefrontFrames", "StorefrontGlazing"]:
+		var old := parent.get_node_or_null(nm)
+		if old != null:
+			parent.remove_child(old)
+			old.queue_free()
+	_build_buildings(parent, buildings, building_mat)
+	return StorefrontBuilder.build_storefronts(parent, storefronts, buildings)
+
+
 static func _clean_poly(raw_pts: Array) -> PackedVector2Array:
 	var pts := PackedVector2Array()
 	for p in raw_pts:
@@ -243,6 +267,9 @@ static func _build_roads_and_curbs(
 
 	var mark_st := SurfaceTool.new()
 	mark_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var yellow_st := SurfaceTool.new()
+	yellow_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var has_yellow := false
 
 	var curb_st := SurfaceTool.new()
 	curb_st.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -257,7 +284,7 @@ static func _build_roads_and_curbs(
 		var raw_pts: Array = r.get("pts", [])
 		if raw_pts.size() < 2:
 			continue
-		var hw: float = clampf(float(r.get("width", 12.0)) * 0.5, 3.2, 10.5)
+		var hw: float = clampf(float(r.get("width", 12.0)) * 0.5, 3.2, 13.5)
 		var layer: int = int(r.get("layer", 0))
 		var y_base: float = 0.042 + float(maxi(0, layer)) * 5.2
 		var y := y_base
@@ -290,7 +317,44 @@ static func _build_roads_and_curbs(
 			road_st.set_normal(Vector3.UP); road_st.set_uv(Vector2(-1.0, seg_len)); road_st.add_vertex(v3)
 			has_road = true
 
-			# Dashed lane markings
+			# Lane markings from the real lane counts: yellow centre line(s) on two-way streets, white dashes
+			# between lanes running the same way (roads without lane data keep the single centre dash)
+			if r.has("lanes_f"):
+				var lf := int(r.get("lanes_f", 1))
+				var lb := int(r.get("lanes_b", 1))
+				var nrm1 := Vector2(-dir.y, dir.x)
+				var ym2 := y + 0.016
+				var dash_offs: Array[float] = []
+				if lf > 0 and lb > 0:
+					var med := 0.8 if lf + lb >= 4 else 0.0
+					for yo: float in ([-med - 0.1, med + 0.1] if med > 0.0 else [-0.12, 0.12]):
+						var c0 := a + nrm1 * yo
+						var c1 := b + nrm1 * yo
+						var cn := nrm1 * 0.06
+						_add_flat_quad(yellow_st, Vector3(c0.x - cn.x, ym2, c0.y - cn.y), Vector3(c0.x + cn.x, ym2, c0.y + cn.y),
+							Vector3(c1.x + cn.x, ym2, c1.y + cn.y), Vector3(c1.x - cn.x, ym2, c1.y - cn.y), Vector3.UP)
+						has_yellow = true
+					for k in range(1, lf):
+						dash_offs.append(med + float(k) * 3.3)
+					for k in range(1, lb):
+						dash_offs.append(-(med + float(k) * 3.3))
+				else:
+					var n_l := maxi(lf, lb)
+					for k in range(1, n_l):
+						dash_offs.append(-float(n_l) * 1.65 + float(k) * 3.3)
+				for off: float in dash_offs:
+					if absf(off) > hw - 1.0:
+						continue
+					var sd := 3.5
+					while sd + 3.0 < seg_len - 3.0:
+						var d0 := a + dir * sd + nrm1 * off
+						var d1 := a + dir * (sd + 3.0) + nrm1 * off
+						var dn := nrm1 * 0.07
+						_add_flat_quad(mark_st, Vector3(d0.x - dn.x, ym2, d0.y - dn.y), Vector3(d0.x + dn.x, ym2, d0.y + dn.y),
+							Vector3(d1.x + dn.x, ym2, d1.y + dn.y), Vector3(d1.x - dn.x, ym2, d1.y - dn.y), Vector3.UP)
+						has_mark = true
+						sd += 9.2
+				continue
 			var s := 3.5
 			while s + 3.0 < seg_len - 3.0:
 				var m0 := a + dir * s
@@ -312,7 +376,7 @@ static func _build_roads_and_curbs(
 	for cw in crosswalks:
 		var cp: Array = cw["pos"]
 		var cd: Array = cw["dir"]
-		var cw_w := clampf(float(cw.get("width", 12.0)) * 0.44, 3.0, 8.0)
+		var cw_w := clampf(float(cw.get("width", 12.0)) * 0.44, 3.0, 11.0)
 		var center := Vector2(float(cp[0]), float(cp[1]))
 		var along := Vector2(float(cd[0]), float(cd[1])).normalized()
 		var across := Vector2(-along.y, along.x)
@@ -360,6 +424,17 @@ static func _build_roads_and_curbs(
 		mark_mi.material_override = m_mat
 		mark_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(mark_mi)
+	if has_yellow:
+		var y_mi := MeshInstance3D.new()
+		y_mi.name = "RoadCentreLines"
+		y_mi.mesh = yellow_st.commit()
+		var y_mat := StandardMaterial3D.new()
+		y_mat.albedo_color = Color(0.86, 0.68, 0.18)
+		y_mat.roughness = 0.8
+		y_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		y_mi.material_override = y_mat
+		y_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		parent.add_child(y_mi)
 
 
 static func _build_buildings(parent: Node3D, buildings: Array, building_mat: ShaderMaterial) -> void:
@@ -1289,7 +1364,7 @@ static func _build_kerbs(parent: Node3D, roads: Array, bays: Array, road_mat: Ma
 		var rp2: Array = rr.get("pts", [])
 		if rp2.size() < 2 or int(rr.get("layer", 0)) != 0:
 			continue
-		var rhw: float = clampf(float(rr.get("width", 12.0)) * 0.5, 3.2, 10.5)
+		var rhw: float = clampf(float(rr.get("width", 12.0)) * 0.5, 3.2, 13.5)
 		for si in range(rp2.size() - 1):
 			var sa := Vector2(float(rp2[si][0]), float(rp2[si][1]))
 			var sb := Vector2(float(rp2[si + 1][0]), float(rp2[si + 1][1]))
@@ -1312,7 +1387,7 @@ static func _build_kerbs(parent: Node3D, roads: Array, bays: Array, road_mat: Ma
 		var raw_pts: Array = r.get("pts", [])
 		if raw_pts.size() < 2 or int(r.get("layer", 0)) != 0:
 			continue
-		var hw: float = clampf(float(r.get("width", 12.0)) * 0.5, 3.2, 10.5)
+		var hw: float = clampf(float(r.get("width", 12.0)) * 0.5, 3.2, 13.5)
 		var n_seg := raw_pts.size() - 1
 		var u_acc := 0.0
 		for i in range(n_seg):

@@ -553,6 +553,8 @@ def add_junction_links(nodes, edges, max_gap=25.0):
                     "b": b,
                     "name": e["name"],
                     "width": e["width"],
+                    "lanes_f": 1,
+                    "lanes_b": 1,
                     "length": round(gap, 1),
                     "pts": pts,
                 })
@@ -626,7 +628,9 @@ def stabilize_graph_ids(final_nodes, final_edges, starter_network):
         if best is not None:
             used_e.add(best["id"])
             edge_map[e["id"]] = best["id"]
-            e.update({"a": best["a"], "b": best["b"], "pts": best["pts"], "length": best["length"], "name": best["name"], "width": best["width"]})
+            if best["a"] != a:
+                e["lanes_f"], e["lanes_b"] = e.get("lanes_b", 1), e.get("lanes_f", 1)
+            e.update({"a": best["a"], "b": best["b"], "pts": best["pts"], "length": best["length"], "name": best["name"]})
     next_eid = max(oe["id"] for oe in old_edges) + 1
     for e in sorted(final_edges, key=lambda q: q["id"]):
         if e["id"] not in edge_map:
@@ -649,6 +653,63 @@ def stabilize_graph_ids(final_nodes, final_edges, starter_network):
     for st in starter_network["stations"]:
         st["edge_id"] = edge_map.get(st["edge_id"], st["edge_id"])
     return starter_network
+
+
+LANE_W = 3.3
+
+
+def road_width_for(lf, lb):
+    """Carriageway width for lf + lb lanes (one-way up to 4, two-way up to 3 + 3, median on 4+ lane two-way)."""
+    total = lf + lb
+    median = 1.6 if (lf > 0 and lb > 0 and total >= 4) else 0.0
+    return total * LANE_W + median + 2.2
+
+
+def widen_roads_to_lanes(edges, buildings):
+    """Real OSM lane counts: wide avenues (one-way 3-4 lanes, two-way 2+2 / 3+3) get their real width,
+    limited so the kerb stays >= 2.4 m clear of the nearest building (and never narrower than before)."""
+    bld = []
+    for b in buildings:
+        xs = [p[0] for p in b["pts"]]
+        ys = [p[1] for p in b["pts"]]
+        bld.append((min(xs), max(xs), min(ys), max(ys), b["pts"]))
+    widened = 0
+    for e in edges:
+        lf, lb = int(e.get("lanes_f", 1)), int(e.get("lanes_b", 1))
+        if lf == 0 or lb == 0:
+            lf, lb = min(max(lf, lb), 4) if lf else 0, min(max(lf, lb), 4) if lb else 0
+        else:
+            lf, lb = min(lf, 3), min(lb, 3)
+        pts = e["pts"]
+        segs = [(pts[k][0], pts[k][1], pts[k + 1][0], pts[k + 1][1]) for k in range(len(pts) - 1)]
+        ex0 = min(p[0] for p in pts) - 20.0
+        ex1 = max(p[0] for p in pts) + 20.0
+        ey0 = min(p[1] for p in pts) - 20.0
+        ey1 = max(p[1] for p in pts) + 20.0
+        clear = 99.0
+        for bx0, bx1, by0, by1, bp in bld:
+            if bx1 < ex0 or bx0 > ex1 or by1 < ey0 or by0 > ey1:
+                continue
+            # building corners near the ends are across the junction, not beside this street
+            d = poly_min_dist_to_segs(bp, segs)
+            clear = min(clear, d)
+        w_min = float(e["width"])
+        w_cap = max(w_min, min(26.0, 2.0 * (clear - 2.4)))
+        # Drop lanes (the wider direction first) until the carriageway fits
+        while road_width_for(lf, lb) > w_cap + 0.05 and lf + lb > 2:
+            if lf >= lb and lf > 1:
+                lf -= 1
+            elif lb > 1:
+                lb -= 1
+            else:
+                break
+        w = round(max(w_min, min(w_cap, road_width_for(lf, lb))), 1)
+        if w > w_min + 0.05:
+            widened += 1
+        e["width"] = w
+        e["lanes_f"] = lf
+        e["lanes_b"] = lb
+    print(f"  wide roads: {widened} edges widened to their real lane count")
 
 
 def build_seattle_expanded():
@@ -742,10 +803,16 @@ def build_seattle_expanded():
     raw_edges = {}
     for r, sub_nids in in_roads:
         nm = r.get("n", "")
-        lanes = max(2, int(r.get("f", 1)) + int(r.get("b", 1)))
-        w = round(min(18.0, lanes * 3.4 + 3.0), 1)
+        osm_f = max(0, int(r.get("f", 1)))
+        osm_b = max(0, int(r.get("b", 1)))
+        if osm_f + osm_b == 0:
+            osm_f = osm_b = 1
+        lanes = max(2, osm_f + osm_b)
+        # v1 width (kept as the minimum so nothing that was buildable gets narrower)
+        w_old = round(min(18.0, lanes * 3.4 + 3.0), 1)
         if nm in ("Westlake Avenue", "Westlake Avenue North", "5th Avenue", "4th Avenue", "Mercer Street", "Stewart Street", "Olive Way", "Pine Street", "Pike Street", "Denny Way"):
-            w = max(w, 15.0)
+            w_old = max(w_old, 15.0)
+        w = w_old
 
         start_idx = 0
         for idx in range(1, len(sub_nids)):
@@ -765,15 +832,25 @@ def build_seattle_expanded():
 
                 if elen >= 12.0:
                     key = (min(ja, jb), max(ja, jb))
+                    lf, lb = osm_f, osm_b # lanes along a->b / b->a of the graph edge
                     if ja > jb:
                         full_osm_pts = list(reversed(full_osm_pts))
+                        lf, lb = osm_b, osm_f
                     prev = raw_edges.get(key)
-                    if prev is None or (nm and not prev["name"]) or w > prev["width"]:
+                    if prev is not None and (prev["lf"] == 0 or prev["lb"] == 0) and (lf == 0 or lb == 0) \
+                            and (prev["lf"] == 0) != (lf == 0):
+                        # Divided road: the two one-way carriageways collapse onto one graph edge
+                        prev["lf"] = max(prev["lf"], lf)
+                        prev["lb"] = max(prev["lb"], lb)
+                        prev["divided"] = True
+                    elif prev is None or (nm and not prev["name"]) or w > prev["width"]:
                         raw_edges[key] = {
                             "a": key[0],
                             "b": key[1],
                             "name": nm,
                             "width": w,
+                            "lf": lf,
+                            "lb": lb,
                             "length": round(elen, 1),
                             "osm_pts": full_osm_pts,
                         }
@@ -835,6 +912,9 @@ def build_seattle_expanded():
                 "b": old_to_new[ed["b"]],
                 "name": ed["name"] if ed["name"] else "City Street",
                 "width": ed["width"],
+                "lanes_f": ed["lf"],
+                "lanes_b": ed["lb"],
+                "divided": bool(ed.get("divided", False)),
                 "length": ed["length"],
                 "pts": [rc(p) for p in opts],
             })
@@ -1031,6 +1111,7 @@ def build_seattle_expanded():
     # Keep node/edge ids of the original (v1) map stable so existing saves (tracks, stations, lines that
     # reference edge ids) still load after the map was extended.
     starter_network = stabilize_graph_ids(final_nodes, final_edges, starter_network)
+    widen_roads_to_lanes(final_edges, buildings)
 
     # 4. Roads (from graph edges so visual roads & buildable street edges align 1:1!), crosswalks & lamps
     roads = []
@@ -1047,6 +1128,8 @@ def build_seattle_expanded():
         roads.append({
             "name": ed["name"],
             "width": w,
+            "lanes_f": ed.get("lanes_f", 1),
+            "lanes_b": ed.get("lanes_b", 1),
             "layer": 0,
             "pts": pts,
         })

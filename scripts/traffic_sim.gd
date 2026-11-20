@@ -83,8 +83,11 @@ func rebuild_traffic(graph: NetworkGraph, focus_pos: Vector3) -> void:
 			continue
 
 		var dir := 1.0 if (_rng.randf() < 0.5) else -1.0
+		if not car_dir_allowed(graph, eid, dir):
+			dir = -dir
+		var lane_k := _rng.randi() % maxi(1, dir_lanes(graph, eid, dir))
 		var s_init := lerpf(11.0, elen - 11.0, _rng.randf())
-		var base_lane := _compute_dynamic_lane_offset(graph, eid, s_init, elen, dir)
+		var base_lane := _compute_dynamic_lane_offset(graph, eid, s_init, elen, dir, lane_k)
 
 		var mi := MeshInstance3D.new()
 		mi.mesh = _car_meshes[i % _car_meshes.size()]
@@ -101,6 +104,7 @@ func rebuild_traffic(graph: NetworkGraph, focus_pos: Vector3) -> void:
 			"speed": 7.2 + _rng.randf() * 2.8,
 			"cruise_speed": 7.8 + _rng.randf() * 3.2,
 			"lane_offset": base_lane,
+			"lane_k": lane_k,
 			"crashed": false,
 			"pos": Vector3.ZERO,
 			"fwd": Vector3.FORWARD,
@@ -234,7 +238,7 @@ func _build_intersection_signals(graph: NetworkGraph) -> void:
 			var app_right := app_fwd.cross(Vector3.UP).normalized()
 			var j_p2: Vector2 = graph.nodes[nid]["pos"]
 			var j_pos3 := Vector3(j_p2.x, 0.0, j_p2.y)
-			var road_hw := clampf(float(ed["width"]) * 0.5, 4.5, 9.5)
+			var road_hw := clampf(float(ed["width"]) * 0.5, 4.5, 13.5)
 			var track_sep := graph.get_edge_track_half_sep(eid) if edge_has_track else 0.0
 			var cross_hw := 5.5
 			for nb_c: Dictionary in nbs:
@@ -569,6 +573,7 @@ func step_traffic(
 		return
 
 	var edge_ids := graph.edges.keys()
+	clear_idx_cache = graph.get_meta("track_clear_idx") if graph.has_meta("track_clear_idx") else {}
 
 	# 2. Step all Street Cars with Strict Signal Obedience & Full-Consist Tram Avoidance!
 	for idx in range(cars.size()):
@@ -583,6 +588,12 @@ func step_traffic(
 		var eid := int(c["edge_id"])
 		if not graph.edges.has(eid):
 			_respawn_car_near(c, graph, edge_ids, focus_pos, trams)
+			continue
+		if not bool(c.get("turning", false)) and not car_dir_allowed(graph, eid, float(c["dir"])):
+			# Turned back at a dead end into a one-way street: take the car off and bring it back elsewhere
+			_respawn_car_near(c, graph, edge_ids, focus_pos, trams)
+			if not car_dir_allowed(graph, int(c["edge_id"]), float(c["dir"])):
+				c["dir"] = -float(c["dir"])
 			continue
 
 		var ed: Dictionary = graph.edges[eid]
@@ -638,6 +649,13 @@ func step_traffic(
 		# (C) Full-Consist & Crossing Tram Hard Protection (handles BOTH Front Cab & Rear Cab active_end == 1!)
 		var emerg_stop := false
 		var lat_guard := 4.85 if dist_to_end < 20.0 else 4.15
+		# A car already standing on the rails of a level crossing never waits there: it drives on and clears the track
+		# (only a tram right in front of its bonnet stops it)
+		var on_crossing := false
+		if clear_idx_cache.is_empty() and graph.has_meta("track_clear_idx"):
+			clear_idx_cache = graph.get_meta("track_clear_idx")
+		if not clear_idx_cache.is_empty() and not _is_tram_edge(graph, eid):
+			on_crossing = TrackBuilder.track_clearance_dist(clear_idx_cache, Vector2(c_pos.x, c_pos.z)) < 3.4
 		for tr: Dictionary in trams:
 			var secs_chk: Array = tr["tram_info"]["sections"]
 			var tr_spd := float(tr.get("speed_mps", 0.0))
@@ -652,6 +670,12 @@ func step_traffic(
 				var along_t := dv_t.dot(c_fwd)
 				var lat_signed_t := dv_t.dot(c_right)
 				var lat_t := absf(lat_signed_t)
+				if on_crossing:
+					if along_t > -0.5 and along_t < 5.5 and lat_t < 2.4:
+						target_spd = 0.0
+						emerg_stop = true
+						break
+					continue
 				# 1. Any tram section in forward corridor (including close nose range -1.5..24m)
 				if along_t > -1.5 and along_t < 24.0 and lat_t < lat_guard:
 					target_spd = 0.0
@@ -712,7 +736,7 @@ func step_traffic(
 			continue
 
 		# Smoothly shift lane outward around side station platforms (Item 4) without sudden lateral jumps!
-		var desired_lane := _compute_dynamic_lane_offset(graph, eid, s_now, elen, dir)
+		var desired_lane := _compute_dynamic_lane_offset(graph, eid, s_now, elen, dir, int(c.get("lane_k", 0)))
 		c["lane_offset"] = move_toward(float(c["lane_offset"]), desired_lane, dt * 3.4)
 
 		var s_next := s_now + dir * cur_spd * dt
@@ -823,7 +847,9 @@ func find_hazard_along_tram_curve(tr: Dictionary, max_lookahead: float = 48.0) -
 			if bool(c["crashed"]):
 				continue
 			var cp: Vector3 = c["pos"]
-			if p3.distance_squared_to(cp) <= 3.65 * 3.65:
+			# A car standing beside the rails (waiting for this tram) is outside its swept path: pass it
+			var r_h := 3.65 if float(c.get("speed", 0.0)) > 0.3 else 2.75
+			if p3.distance_squared_to(cp) <= r_h * r_h:
 				return {"has_hazard": true, "dist": d, "car": c}
 		d += 1.5
 	return {"has_hazard": false, "dist": 999.0}
@@ -929,6 +955,9 @@ func _advance_car_to_next_edge(c: Dictionary, graph: NetworkGraph, at_node: int,
 			continue
 		if _is_transit_mall_double_track(graph, cand_eid):
 			continue
+		var cand_dir := 1.0 if int(graph.edges[cand_eid]["a"]) == at_node else -1.0
+		if not car_dir_allowed(graph, cand_eid, cand_dir):
+			continue # one-way street the wrong way
 		candidates.append(nb)
 
 	# Prefer going straight or gentle turn over sharp U-turn; if dead-end, do a smooth Bezier U-turn (never teleport!)
@@ -943,7 +972,9 @@ func _advance_car_to_next_edge(c: Dictionary, graph: NetworkGraph, at_node: int,
 	var new_ed: Dictionary = graph.edges[new_eid]
 	var new_len := float(new_ed["length"])
 	var entry_s := 5.6 if new_dir > 0.0 else maxf(1.0, new_len - 5.6)
-	var new_lane := _compute_dynamic_lane_offset(graph, new_eid, entry_s, new_len, new_dir)
+	var new_k := _rng.randi() % maxi(1, dir_lanes(graph, new_eid, new_dir))
+	c["lane_k"] = new_k
+	var new_lane := _compute_dynamic_lane_offset(graph, new_eid, entry_s, new_len, new_dir, new_k)
 
 	var fr_n := _edge_frame(graph, new_eid, entry_s, new_len, new_dir)
 	var new_fwd: Vector3 = fr_n[1]
@@ -978,6 +1009,8 @@ func _respawn_car_near(c: Dictionary, graph: NetworkGraph, edge_ids: Array, focu
 	if elen < 26.0:
 		return
 	var new_dir := 1.0 if _rng.randf() < 0.5 else -1.0
+	if not car_dir_allowed(graph, eid, new_dir):
+		new_dir = -new_dir
 	var new_s := lerpf(11.0, elen - 11.0, _rng.randf())
 	var smp := graph.sample_edge(eid, new_s / elen)
 	var sp3: Vector3 = smp["pos"]
@@ -990,7 +1023,8 @@ func _respawn_car_near(c: Dictionary, graph: NetworkGraph, edge_ids: Array, focu
 	c["dir"] = new_dir
 	c["s"] = new_s
 	c["turning"] = false
-	c["lane_offset"] = _compute_dynamic_lane_offset(graph, eid, new_s, elen, new_dir)
+	c["lane_k"] = _rng.randi() % maxi(1, dir_lanes(graph, eid, new_dir))
+	c["lane_offset"] = _compute_dynamic_lane_offset(graph, eid, new_s, elen, new_dir, int(c["lane_k"]))
 	_update_car_transform(c, graph)
 
 
@@ -1010,16 +1044,70 @@ func _pick_spawn_edge(graph: NetworkGraph, edge_ids: Array, focus_pos: Vector3, 
 
 
 static func _is_transit_mall_double_track(graph: NetworkGraph, eid: int) -> bool:
+	if not graph.edges.has(eid) or bool(graph.edges[eid].get("no_cars", false)):
+		return true # tram-only right of way built across open ground
 	if not _is_tram_edge(graph, eid):
 		return false
+	if graph.is_quad(eid):
+		# Four-track corridor: cars only fit if a lane remains outside the local tracks
+		return float(graph.edges[eid]["width"]) * 0.5 < QUAD_CAR_LANE + 1.6
 	if int(graph.built_track_modes.get(eid, NetworkGraph.TrackMode.SINGLE)) != NetworkGraph.TrackMode.DOUBLE:
 		return false
 	var min_w := 14.2 if graph.get_edge_track_half_sep(eid) > 2.0 else 11.5
 	return float(graph.edges[eid]["width"]) < min_w
 
 
-static func _compute_dynamic_lane_offset(graph: NetworkGraph, eid: int, s_now: float, elen: float, car_dir: float) -> float:
-	var base := _safe_motor_lane_offset(graph, eid)
+var clear_idx_cache: Dictionary = {}
+const TRAM_CAR_CLEAR := 3.8 # car centre to the nearest tram track centre (tram hazard probe reaches 3.65 m)
+
+const LANE_W := 3.3
+const QUAD_CAR_LANE := 8.1 # first motor lane beside a four-track corridor (local track 4.95 + body + clearance)
+
+
+# Motor lanes in travel direction dir (+1: a -> b) on an edge
+static func dir_lanes(graph: NetworkGraph, eid: int, dir: float) -> int:
+	var ed: Dictionary = graph.edges[eid]
+	return int(ed.get("lanes_f", 1)) if dir > 0.0 else int(ed.get("lanes_b", 1))
+
+
+static func car_dir_allowed(graph: NetworkGraph, eid: int, dir: float) -> bool:
+	return dir_lanes(graph, eid, dir) > 0
+
+
+# Offset (right of travel) of motor lane k for direction dir: kerb-side lanes on two-way streets (median on 4+ lanes),
+# spread across the whole carriageway on one-way streets, outside the tracks where trams run
+static func lane_base_offset(graph: NetworkGraph, eid: int, dir: float, lane_k: int) -> float:
+	var ed: Dictionary = graph.edges[eid]
+	var w := float(ed["width"])
+	var n := maxi(1, dir_lanes(graph, eid, dir))
+	var k := clampi(lane_k, 0, n - 1)
+	var max_off := maxf(1.6, w * 0.5 - 1.7)
+	if _is_tram_edge(graph, eid):
+		var inner := QUAD_CAR_LANE if graph.is_quad(eid) else _safe_motor_lane_offset(graph, eid)
+		return minf(inner + float(k) * LANE_W, maxf(inner, max_off))
+	var other := dir_lanes(graph, eid, -dir)
+	if other == 0:
+		return minf(-float(n) * LANE_W * 0.5 + (float(k) + 0.5) * LANE_W, max_off) # one-way street
+	if n == 1 and k == 0:
+		return _safe_motor_lane_offset(graph, eid)
+	var median := 0.8 if n + other >= 4 else 0.0
+	var off := median + (float(k) + 0.5) * LANE_W
+	var shift := maxf(0.0, median + float(n) * LANE_W - max_off - LANE_W * 0.5)
+	return clampf(off - shift, 1.4, max_off)
+
+
+static func _compute_dynamic_lane_offset(graph: NetworkGraph, eid: int, s_now: float, elen: float, car_dir: float, lane_k: int = 0) -> float:
+	var base := lane_base_offset(graph, eid, car_dir, lane_k)
+	if _is_tram_edge(graph, eid) and graph.has_meta("track_clear_idx"):
+		# The laid track is straightened within the street (up to ~2 m off the centre line): keep the car lane
+		# clear of the actual rails, not just of the street centre
+		var idx: Dictionary = graph.get_meta("track_clear_idx")
+		var fr0 := _edge_frame(graph, eid, s_now, elen, car_dir)
+		var right0: Vector3 = (fr0[1] as Vector3).cross(Vector3.UP).normalized()
+		var p_car: Vector3 = (fr0[0] as Vector3) + right0 * base
+		var d_trk := TrackBuilder.track_clearance_dist(idx, Vector2(p_car.x, p_car.z))
+		if d_trk < TRAM_CAR_CLEAR:
+			base = minf(base + (TRAM_CAR_CLEAR - d_trk), maxf(base, float(graph.edges[eid]["width"]) * 0.5 - 0.9))
 	var bays: Array = graph.get_meta("station_bays", []) if graph.has_meta("station_bays") else []
 	if bays.is_empty():
 		return base
