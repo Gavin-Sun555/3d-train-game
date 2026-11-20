@@ -289,7 +289,7 @@ func step_all_trams(
 			_step_ai_driver(tr, i, dt, graph, pax_sim, traffic_sim, sound, i == active_tram_idx)
 
 		var derail_ev := _step_tram_physics_and_doors(tr, i, dt, graph, pax_sim, sound, i == active_tram_idx, is_player_manual)
-		if derail_ev.is_empty() and is_player_manual and bool(tr.get("elevated", false)):
+		if derail_ev.is_empty() and is_player_manual:
 			derail_ev = _check_switch_entry(tr, i)
 		_position_tram_3d(tr)
 
@@ -1821,9 +1821,7 @@ func _terminal_occupancy(my_idx: int, line_id: int, sid: int) -> Dictionary:
 			occ["a"] = true
 			# A departing train only cuts across the way into platform B once it is actually moving; while it
 			# still stands at A, the arriving train may take B (and the departure waits for it, see below)
-			# (a manually driven street tram has no switch signal to hold it, so it keeps blocking B as before)
-			var unsignalled_manual := j == active_tram_idx and manual_drive and not bool(trams[j].get("elevated", false))
-			if str(r["phase"]) == "out" and (float(trams[j]["speed_mps"]) > 0.3 or unsignalled_manual):
+			if str(r["phase"]) == "out" and float(trams[j]["speed_mps"]) > 0.3:
 				occ["a_out"] = true
 	return occ
 
@@ -1935,8 +1933,9 @@ func _scan_switches(tr: Dictionary, switches: Array, ahead: float = SW_SCAN_AHEA
 	var back := _consist_length(tr) + 1.5
 	var cands: Array = []
 	var head := curve.sample_baked(s0, false)
+	var my_sys := 1 if bool(tr.get("elevated", false)) else 0
 	for sw in switches:
-		if is_instance_valid(sw) and Vector2(head.x - sw.diverge_mid.x, head.z - sw.diverge_mid.z).length() < ahead + 80.0:
+		if is_instance_valid(sw) and int(sw.system) == my_sys and Vector2(head.x - sw.diverge_mid.x, head.z - sw.diverge_mid.z).length() < ahead + 80.0:
 			cands.append({"sw": sw, "need": -1.0, "entry": -1, "d_entry": -1e9, "s_entry": 0.0, "occ": false, "d_probe": 1e9})
 	if cands.is_empty():
 		return out
@@ -1997,8 +1996,6 @@ func _update_monorail_switches(graph: NetworkGraph) -> void:
 	for ti in range(trams.size()):
 		var tr: Dictionary = trams[ti]
 		tr["sw_hold_s"] = -1.0
-		if not bool(tr.get("elevated", false)):
-			continue
 		var lst := _scan_switches(tr, switches)
 		var prev_next: Dictionary = tr.get("sw_next", {})
 		tr["sw_next"] = {}
@@ -2043,15 +2040,19 @@ func _update_monorail_switches(graph: NetworkGraph) -> void:
 		# (request time kept per train); trains standing idle (dwelling, or a manual train parked at a platform)
 		# do not claim it, so they never lock out a train that is actually coming.
 		var gkey := (grp[0] as Object).get_instance_id()
-		var req := {}
+		var req := {} # train -> request time (active requests only)
+		var passive := {} # idle manual trains: may take a free switch, give it up to anyone actually coming
 		for ti: int in g_de.keys():
 			var rq_map: Dictionary = trams[ti].get("sw_req_t", {})
-			if _sw_requesting(ti, float(g_de[ti])):
+			var lvl := _sw_requesting(ti, float(g_de[ti]))
+			if lvl == 2:
 				if not rq_map.has(gkey):
 					rq_map[gkey] = operating_seconds
 				req[ti] = float(rq_map[gkey])
 			else:
 				rq_map.erase(gkey)
+				if lvl == 1:
+					passive[ti] = true
 			trams[ti]["sw_req_t"] = rq_map
 		for ti in range(trams.size()):
 			if not g_de.has(ti):
@@ -2061,8 +2062,10 @@ func _update_monorail_switches(graph: NetworkGraph) -> void:
 			if int(g.owner_idx) >= 0 and int(g.owner_idx) < trams.size():
 				cur = int(g.owner_idx)
 				break
-		if cur >= 0 and not req.has(cur):
-			cur = -1 # tail has cleared the crossover, or it stopped short of it and stands idle: let others through
+		if cur >= 0 and not req.has(cur) and not (passive.has(cur) and req.is_empty()):
+			cur = -1 # tail has cleared the crossover, or it stands idle short of it while another train is coming
+		if cur < 0 and req.is_empty() and not passive.is_empty():
+			cur = int(passive.keys()[0])
 		if cur < 0:
 			var best_key := 1e18
 			for ti: int in req.keys():
@@ -2103,19 +2106,19 @@ func _update_monorail_switches(graph: NetworkGraph) -> void:
 		tr["sw_hold_s"] = fposmod(float(tr["s"]) + float(tr["dir"]) * hold, float(tr["route_len"])) if bool(tr["is_loop"]) else float(tr["s"]) + float(tr["dir"]) * hold
 
 
-# Does train `ti` want the crossover now? (it is on it, or is coming towards it rather than standing idle)
-func _sw_requesting(ti: int, d_entry: float) -> bool:
+# How much train `ti` wants the crossover now: 2 = it is on it or coming towards it, 1 = a manual train
+# standing still short of it (gets it only while nobody else is coming), 0 = not at all (dwelling etc.)
+func _sw_requesting(ti: int, d_entry: float) -> int:
 	if d_entry <= 0.0:
-		return true
+		return 2
 	var tr: Dictionary = trams[ti]
 	if not _sw_ready(tr):
-		return false # dwelling at a platform, doors open, turning back or held at a terminal
+		return 0 # dwelling at a platform, doors open, turning back or held at a terminal
 	if ti == active_tram_idx and manual_drive:
 		if float(tr["speed_mps"]) > 0.3 or int(tr["notch"]) > NOTCH_NEUTRAL:
-			return true
-		# Standing still: waiting at the switch signal counts, parked at a platform does not
-		return int(_find_station_at_current_pos(tr)["station_id"]) < 0
-	return true
+			return 2
+		return 1
+	return 2
 
 
 func _switch_hold_distance(tr: Dictionary) -> float:
@@ -2153,8 +2156,8 @@ func switch_ahead_info(tr: Dictionary, me: int) -> Dictionary:
 # Manual driving: throw the next switch ahead of the active train (G). Returns a status string.
 func manual_throw_switch(graph: NetworkGraph) -> String:
 	var tr := get_active_tram()
-	if tr.is_empty() or not bool(tr.get("elevated", false)):
-		return "not_mono"
+	if tr.is_empty():
+		return "none"
 	if graph == null or not graph.has_meta("monorail_switches"):
 		return "none"
 	var lst := _scan_switches(tr, graph.get_meta("monorail_switches"), 260.0)

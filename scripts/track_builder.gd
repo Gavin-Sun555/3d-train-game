@@ -1644,6 +1644,7 @@ static func build_network_tracks_and_stations(
 	graph.set_meta("station_bays", bays)
 	_build_buffer_stops(parent, graph, station_lights)
 	_build_monorail_guideways(parent, graph)
+	_build_tram_switches(parent, graph)
 
 	return {
 		"stations": station_views,
@@ -2345,6 +2346,48 @@ const MONO_BEAM_D := 1.5
 
 
 const MonorailSwitchScript := preload("res://scripts/monorail_switch.gd")
+
+
+# Street-tram crossovers get the same interlocking as monorail switches: a points state plus four ground-mast
+# signals (each track, each end) 10 m before the crossover. The rails themselves are built with the track.
+static func _build_tram_switches(parent: Node3D, graph: NetworkGraph) -> void:
+	var lst: Array = graph.get_meta("monorail_switches", [])
+	for eid: int in graph.crossovers.keys():
+		if int(graph.crossovers[eid]) <= NetworkGraph.CrossoverType.NONE or not graph.built_tracks.has(eid):
+			continue
+		if is_monorail_style(int(graph.built_tracks[eid])):
+			continue
+		var g := edge_track_geom(graph, eid)
+		var xo := edge_crossover_span(graph, eid, g)
+		if xo.is_empty():
+			continue
+		var c: Curve3D = g["curve"]
+		var clen := float(g["clen"])
+		var q0 := float(xo["s_mid"]) - float(xo["x_half"])
+		var q1 := float(xo["s_mid"]) + float(xo["x_half"])
+		var frames_sw: Array[Transform3D] = []
+		var seps_sw := PackedFloat32Array()
+		for i in range(MonorailSwitchScript.SEGMENTS + 1):
+			var su := lerpf(q0, q1, float(i) / float(MonorailSwitchScript.SEGMENTS))
+			frames_sw.append(sample_track_frame(c, su, clen, false))
+			seps_sw.append(geom_sep_at(g, su))
+		var sig_frames: Array[Transform3D] = []
+		var sig_seps := PackedFloat32Array()
+		for ss: float in [maxf(float(g["s_start"]) + 0.5, q0 - 10.0), minf(float(g["s_end"]) - 0.5, q1 + 10.0)]:
+			sig_frames.append(sample_track_frame(c, ss, clen, false))
+			sig_seps.append(geom_sep_at(g, ss))
+		var sw: Node3D = MonorailSwitchScript.new()
+		sw.name = "TramSwitch_%d" % eid
+		sw.set("signals_only", true)
+		sw.set("system", 0)
+		sw.set("throw_speed", 0.5) # tram points throw in ~2 s
+		sw.set("top", rail_top_for_style(int(graph.built_tracks[eid])))
+		sw.set("half_w", 1.6) # masts stand clear of the tram body
+		sw.set("group", [sw])
+		parent.add_child(sw)
+		sw.call("setup", frames_sw, seps_sw, sig_frames, sig_seps, null, null)
+		lst.append(sw)
+	graph.set_meta("monorail_switches", lst)
 
 
 static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> void:

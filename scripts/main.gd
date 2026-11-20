@@ -1448,7 +1448,7 @@ func _unhandled_input(event: InputEvent) -> void:
 					_ring_tram_bell()
 
 
-# Manual driving (monorail): throw the next switch ahead for this train's route
+# Manual driving: throw the next switch ahead for this train's route
 func _do_throw_switch() -> void:
 	if not _transit_sim.manual_drive:
 		_show_toast("⚠ 自动运营时道岔由调度按进路自动排列；切换手动驾驶 (Q) 后可手动干预道岔")
@@ -1468,8 +1468,6 @@ func _do_throw_switch() -> void:
 			_show_toast("⚠ 前方道岔已被其他列车的进路占用，请在信号机前停车等待")
 		"locked":
 			_show_toast("⚠ 列车正在道岔上，道岔已锁闭不能扳动")
-		"not_mono":
-			_show_toast("⚠ 有轨电车线路没有可扳动的道岔（仅单轨线路）")
 		_:
 			_show_toast("前方 260 m 内没有道岔")
 
@@ -4246,8 +4244,9 @@ func _update_run_hud() -> void:
 			else:
 				sig_badge_txt = "电车灯 ┃ 通行(%.0fm)" % sd
 
-		if bool(tr.get("elevated", false)):
-			var swi := _transit_sim.switch_ahead_info(tr, _transit_sim.active_tram_idx)
+		var swi := _transit_sim.switch_ahead_info(tr, _transit_sim.active_tram_idx)
+		var sw_near := not swi.is_empty() and float(swi["dist"]) < 220.0
+		if bool(tr.get("elevated", false)) or sw_near: # street trams: shown while a switch signal is ahead
 			sig_badge_txt = "道岔信号 ┃ 通行"
 			if not swi.is_empty() and float(swi["dist"]) < 220.0:
 				var sd2 := maxf(0.0, float(swi["dist"]) - TransitSim.SW_SIGNAL_BACK + 2.0)

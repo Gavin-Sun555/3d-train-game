@@ -20,6 +20,9 @@ var bot := 5.6
 var half_w := 0.45
 var throw := 0.0
 var target := 0.0
+var signals_only := false # street-tram crossover: fixed rails, only the points state and signals are simulated
+var system := 1 # 1 monorail, 0 street tram (trains only see switches of their own system)
+var throw_speed := THROW_SPEED
 var hand := 1.0 # +1: crossing beam runs lane -1 (low s) -> lane +1 (high s); -1: the mirror image
 var group: Array = [] # all switches of this crossover (two-way crossover = two switches), interlocked as a unit
 
@@ -45,7 +48,7 @@ var _sig_state: Array[int] = []
 func setup(frames: Array[Transform3D], sep_values: PackedFloat32Array, sig_frames: Array[Transform3D], sig_seps: PackedFloat32Array, beam_mat: Material, rail_mat: Material) -> void:
 	base_frames = frames
 	seps = sep_values
-	for i in range(SEGMENTS):
+	for i in range(0 if signals_only else SEGMENTS):
 		var mi := MeshInstance3D.new()
 		var b := BoxMesh.new()
 		b.size = Vector3(half_w * 2.0, top - bot, 1.0)
@@ -93,6 +96,8 @@ func _lat(i: int, half: int, k: float) -> float:
 
 
 func _apply() -> void:
+	if _segs.is_empty():
+		return
 	for i in range(SEGMENTS):
 		var half := 0 if i < SEGMENTS / 2 else 1
 		var fa: Transform3D = base_frames[i]
@@ -120,17 +125,24 @@ func _build_signal(f: Transform3D, lane: float, sep: float, facing: float) -> vo
 	dark.roughness = 0.6
 	var bracket := MeshInstance3D.new()
 	var bb := BoxMesh.new()
-	bb.size = Vector3(0.12, 1.9, 0.12)
+	var head_y := top + 1.05
+	if signals_only:
+		# Street tram signal: a mast standing on the ground beside the track
+		head_y = top + 3.1
+		bb.size = Vector3(0.14, head_y, 0.14)
+		bracket.position = base + Vector3.UP * (head_y * 0.5)
+	else:
+		bb.size = Vector3(0.12, 1.9, 0.12)
+		bracket.position = base + Vector3.UP * (top - 0.2)
 	bracket.mesh = bb
 	bracket.material_override = dark
-	bracket.position = base + Vector3.UP * (top - 0.2)
 	add_child(bracket)
 	var head := MeshInstance3D.new()
 	var hb := BoxMesh.new()
 	hb.size = Vector3(0.42, 0.9, 0.3)
 	head.mesh = hb
 	head.material_override = dark
-	var head_pos := base + Vector3.UP * (top + 1.05)
+	var head_pos := base + Vector3.UP * head_y
 	head.transform = Transform3D(Basis.looking_at(-fwd, Vector3.UP), head_pos)
 	add_child(head)
 	var red := StandardMaterial3D.new()
@@ -204,6 +216,6 @@ func update_signals() -> void:
 # Advanced by TransitSim on simulation time (so it keeps pace with fast-forward and headless runs)
 func advance(delta: float) -> void:
 	if absf(throw - target) > 0.0005:
-		throw = move_toward(throw, target, THROW_SPEED * delta)
+		throw = move_toward(throw, target, throw_speed * delta)
 		_apply()
 	update_signals()
