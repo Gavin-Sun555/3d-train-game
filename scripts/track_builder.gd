@@ -2330,6 +2330,15 @@ static func _build_buffer_stops(parent: Node3D, graph: NetworkGraph, lights: Arr
 	holder.name = "BufferStops"
 	parent.add_child(holder)
 	var mats := _buffer_mats()
+	# The rails / guideway beam run on BUFFER_RUNOUT_M past the old rail end, and the buffer stop stands out
+	# there: a train standing exactly on its stopping mark (nose overhanging the lead bogie) keeps clear of it
+	var x_dark := SurfaceTool.new(); x_dark.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var x_bright := SurfaceTool.new(); x_bright.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var x_wire := SurfaceTool.new(); x_wire.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var x_beam := SurfaceTool.new(); x_beam.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var x_prail := SurfaceTool.new(); x_prail.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var has_x_rail := false
+	var has_x_beam := false
 	for eid: int in graph.built_tracks.keys():
 		for at_b: bool in [false, true]:
 			var info := graph.buffer_stop_at_edge_end(eid, at_b)
@@ -2338,8 +2347,13 @@ static func _build_buffer_stops(parent: Node3D, graph: NetworkGraph, lights: Arr
 			var g := edge_track_geom(graph, eid)
 			var s_rail := float(info["s_rail_end"])
 			var inward := -1.0 if at_b else 1.0
-			var tf := sample_track_frame(g["curve"], s_rail + inward * 0.75, float(g["clen"]), false)
-			var face := (-tf.basis.z * inward).normalized() # direction an approaching tram travels
+			var tf_end := sample_track_frame(g["curve"], s_rail, float(g["clen"]), false)
+			var out_dir := (tf_end.basis.z * inward).normalized() # along the track, away from it
+			var tf := tf_end
+			tf.origin += out_dir * (BUFFER_RUNOUT_M - 0.75)
+			var tf_x := tf_end
+			tf_x.origin += out_dir * BUFFER_RUNOUT_M
+			var face := (-tf_end.basis.z * inward).normalized() # direction an approaching tram travels
 			var lanes: Array[float] = [0.0]
 			if bool(g["is_double"]):
 				var sp := geom_sep_at(g, s_rail)
@@ -2348,6 +2362,19 @@ static func _build_buffer_stops(parent: Node3D, graph: NetworkGraph, lights: Arr
 			var mono := is_monorail_style(int(graph.built_tracks[eid]))
 			if mono:
 				y0 = MONORAIL_BEAM_TOP - EMBED_RAIL_TOP
+			for lat_x: float in lanes:
+				# Run-out: rails / beam from the old end to the buffer (frames ordered along the travel direction)
+				var fa := tf_end if at_b else tf_x
+				var fb := tf_x if at_b else tf_end
+				if mono:
+					var top := MONORAIL_BEAM_TOP - EMBED_RAIL_TOP
+					_mono_beam_segment(x_beam, x_prail, fa, fb, lat_x, lat_x, top, top - MONO_BEAM_D, MONO_BEAM_W * 0.5)
+					has_x_beam = true
+				else:
+					var fa2 := fa; fa2.origin += fa.basis.x * lat_x
+					var fb2 := fb; fb2.origin += fb.basis.x * lat_x
+					_emit_rail_pair_and_wire(x_dark, x_bright, x_wire, fa2, fb2, is_vignole_style(int(graph.built_tracks[eid])))
+					has_x_rail = true
 			for lat: float in lanes:
 				var pos := tf.origin + tf.basis.x * lat + Vector3.UP * y0
 				var root := Node3D.new()
@@ -2359,8 +2386,42 @@ static func _build_buffer_stops(parent: Node3D, graph: NetworkGraph, lights: Arr
 					_build_monorail_bumper(root, mats, lights)
 				else:
 					_build_one_buffer(root, mats, lights)
+	if has_x_rail:
+		_commit_mesh(holder, "BufferRunoutRailWebs", x_dark, Color(0.09, 0.085, 0.08), 0.90, 0.05)
+		var bmi := MeshInstance3D.new()
+		bmi.name = "BufferRunoutRailHeads"
+		bmi.mesh = x_bright.commit()
+		var bmat := StandardMaterial3D.new()
+		bmat.albedo_color = Color(0.95, 0.96, 0.98)
+		bmat.metallic = 0.22
+		bmat.roughness = 0.18
+		bmat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		bmi.material_override = bmat
+		holder.add_child(bmi)
+		_commit_mesh(holder, "BufferRunoutWire", x_wire, Color(0.16, 0.16, 0.16), 0.55, 0.20)
+	if has_x_beam:
+		x_beam.generate_normals()
+		var xb := MeshInstance3D.new()
+		xb.name = "BufferRunoutBeams"
+		xb.mesh = x_beam.commit()
+		var xbm := StandardMaterial3D.new()
+		xbm.albedo_color = Color(0.80, 0.79, 0.76)
+		xbm.roughness = 0.75
+		xb.material_override = xbm
+		holder.add_child(xb)
+		x_prail.generate_normals()
+		var xr := MeshInstance3D.new()
+		xr.name = "BufferRunoutPowerRails"
+		xr.mesh = x_prail.commit()
+		var xrm := StandardMaterial3D.new()
+		xrm.albedo_color = Color(0.22, 0.23, 0.24)
+		xrm.metallic = 0.6
+		xrm.roughness = 0.4
+		xr.material_override = xrm
+		holder.add_child(xr)
 
 
+const BUFFER_RUNOUT_M := 4.0
 static var _buffer_mat_cache: Dictionary = {}
 
 
