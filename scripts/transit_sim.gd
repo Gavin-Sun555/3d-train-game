@@ -1819,7 +1819,11 @@ func _terminal_occupancy(my_idx: int, line_id: int, sid: int) -> Dictionary:
 				occ["b_in"] = true
 		else:
 			occ["a"] = true
-			if str(r["phase"]) == "out":
+			# A departing train only cuts across the way into platform B once it is actually moving; while it
+			# still stands at A, the arriving train may take B (and the departure waits for it, see below)
+			# (a manually driven street tram has no switch signal to hold it, so it keeps blocking B as before)
+			var unsignalled_manual := j == active_tram_idx and manual_drive and not bool(trams[j].get("elevated", false))
+			if str(r["phase"]) == "out" and (float(trams[j]["speed_mps"]) > 0.3 or unsignalled_manual):
 				occ["a_out"] = true
 	return occ
 
@@ -2035,24 +2039,37 @@ func _update_monorail_switches(graph: NetworkGraph) -> void:
 				best = minf(best, float(c["d_entry"]))
 			if found:
 				g_de[ti] = best
+		# First come, first served: a train claims the crossover from the moment it starts approaching it
+		# (request time kept per train); trains standing idle (dwelling, or a manual train parked at a platform)
+		# do not claim it, so they never lock out a train that is actually coming.
+		var gkey := (grp[0] as Object).get_instance_id()
+		var req := {}
+		for ti: int in g_de.keys():
+			var rq_map: Dictionary = trams[ti].get("sw_req_t", {})
+			if _sw_requesting(ti, float(g_de[ti])):
+				if not rq_map.has(gkey):
+					rq_map[gkey] = operating_seconds
+				req[ti] = float(rq_map[gkey])
+			else:
+				rq_map.erase(gkey)
+			trams[ti]["sw_req_t"] = rq_map
+		for ti in range(trams.size()):
+			if not g_de.has(ti):
+				(trams[ti].get("sw_req_t", {}) as Dictionary).erase(gkey)
 		var cur := -1
 		for g in grp:
 			if int(g.owner_idx) >= 0 and int(g.owner_idx) < trams.size():
 				cur = int(g.owner_idx)
 				break
-		if cur >= 0:
-			var cur_manual := cur == active_tram_idx and manual_drive
-			if not g_de.has(cur):
-				cur = -1 # tail has cleared the whole crossover
-			elif float(g_de[cur]) > 0.5 and not cur_manual and not _sw_ready(trams[cur]):
-				cur = -1 # not entered yet and now dwelling / held: let others through meanwhile
+		if cur >= 0 and not req.has(cur):
+			cur = -1 # tail has cleared the crossover, or it stopped short of it and stands idle: let others through
 		if cur < 0:
-			var best_key := 1e9
-			for ti: int in g_de.keys():
+			var best_key := 1e18
+			for ti: int in req.keys():
 				var de := float(g_de[ti])
-				if de > 0.0 and not _sw_ready(trams[ti]):
-					continue
-				var key := de - (1000.0 if de <= SW_SIGNAL_BACK else 0.0) # committed trains first
+				var key := float(req[ti])
+				if de <= 0.0 or (de <= SW_SIGNAL_BACK and float(trams[ti]["speed_mps"]) > 0.3):
+					key -= 1e9 # already on it / past its stop point: cannot stop any more
 				if key < best_key:
 					best_key = key
 					cur = ti
@@ -2084,6 +2101,21 @@ func _update_monorail_switches(graph: NetworkGraph) -> void:
 		if hold < 0.0:
 			hold = maxf(0.0, de - 1.5)
 		tr["sw_hold_s"] = fposmod(float(tr["s"]) + float(tr["dir"]) * hold, float(tr["route_len"])) if bool(tr["is_loop"]) else float(tr["s"]) + float(tr["dir"]) * hold
+
+
+# Does train `ti` want the crossover now? (it is on it, or is coming towards it rather than standing idle)
+func _sw_requesting(ti: int, d_entry: float) -> bool:
+	if d_entry <= 0.0:
+		return true
+	var tr: Dictionary = trams[ti]
+	if not _sw_ready(tr):
+		return false # dwelling at a platform, doors open, turning back or held at a terminal
+	if ti == active_tram_idx and manual_drive:
+		if float(tr["speed_mps"]) > 0.3 or int(tr["notch"]) > NOTCH_NEUTRAL:
+			return true
+		# Standing still: waiting at the switch signal counts, parked at a platform does not
+		return int(_find_station_at_current_pos(tr)["station_id"]) < 0
+	return true
 
 
 func _switch_hold_distance(tr: Dictionary) -> float:
