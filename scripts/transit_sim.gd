@@ -1875,8 +1875,9 @@ func _update_terminal_interlocking() -> void:
 # ---------------------------------------------------------------------------------------------
 # Monorail switch interlocking. Each crossover is two moving half-beams (monorail_switch.gd) protected
 # by four signals. A switch is reserved by one train at a time (the nearest ready train whose route runs
-# through it), thrown for that train's route (automatically for AI trains, by the driver with G in manual
-# mode), and only then is that train's entry signal cleared. Other trains stop at their red signal.
+# through it), thrown automatically for that train's planned route (AI and manual driving alike), and only
+# then is that train's entry signal cleared. Other trains stop at their red signal. A manual driver can
+# still throw it by hand with G for special cases (manual_override), which automatic setting respects.
 # ---------------------------------------------------------------------------------------------
 const SW_SCAN_AHEAD := 170.0
 const SW_SIGNAL_BACK := 12.0 # stop point: 2 m before the signal mast, which stands 10 m before the span
@@ -2011,8 +2012,10 @@ func _update_monorail_switches(graph: NetworkGraph) -> void:
 				var c2: Dictionary = (infos[cur] as Dictionary)[sw]
 				sw.owner_need = float(c2["need"])
 				sw.owner_entry = int(c2["entry"])
+		if cur != int(sw.owner_idx) or cur < 0 or not (cur == active_tram_idx and manual_drive):
+			sw.manual_override = false # override only lasts while that manual train holds the switch
 		sw.owner_idx = cur
-		if cur >= 0 and not (cur == active_tram_idx and manual_drive):
+		if cur >= 0 and not sw.manual_override:
 			sw.target = sw.owner_need
 		sw.update_signals()
 	# Stop points for trains whose next switch is not (yet) set and cleared for them
@@ -2059,6 +2062,7 @@ func switch_ahead_info(tr: Dictionary, me: int) -> Dictionary:
 		"green": int(sw.owner_idx) == me and sw.signal_green(int(nx["entry"])),
 		"mine": int(sw.owner_idx) == me,
 		"busy": int(sw.owner_idx) >= 0 and int(sw.owner_idx) != me,
+		"override": bool(sw.manual_override) and int(sw.owner_idx) == me,
 	}
 
 
@@ -2085,6 +2089,7 @@ func manual_throw_switch(graph: NetworkGraph) -> String:
 		sw.owner_need = float(c["need"])
 		sw.owner_entry = int(c["entry"])
 		sw.target = 0.0 if float(sw.target) > 0.5 else 1.0
+		sw.manual_override = absf(float(sw.target) - float(c["need"])) > 0.5 # back on route = automatic again
 		tr["sw_next"] = c
 		return "diverge" if float(sw.target) > 0.5 else "straight"
 	return "none"

@@ -30,6 +30,7 @@ var entries: Array[Vector3] = [] # 0: low end -1, 1: low end +1, 2: high end -1,
 var owner_idx := -1
 var owner_need := 0.0
 var owner_entry := -1
+var manual_override := false # driver threw it by hand (G): automatic route setting leaves it alone
 
 var _segs: Array[MeshInstance3D] = []
 var _rails: Array[MeshInstance3D] = []

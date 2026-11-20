@@ -1023,6 +1023,27 @@ func compile_line_route(line_dict: Dictionary, b_platform_sids: Dictionary = {})
 				near_turnout = true
 				break
 
+		if near_turnout and bst == TrackBuilder.BedStyle.MONORAIL:
+			# Monorail moving-beam switch: running straight through is plain guideway (no restriction);
+			# only the crossing S-beam (gentle, R ~55 m) is a diverging-switch zone.
+			# The S-beam has an inflection at mid-switch (locally straight but ~10 deg skewed), so also test the
+			# heading against 22 m back/forward: an S turns one way then back, a plain curve keeps turning.
+			var crossing := radius < 150.0
+			if not crossing:
+				var s_b2 := fposmod(s_val - 22.0, total_len) if is_loop else maxf(0.0, s_val - 22.0)
+				var s_f2 := fposmod(s_val + 22.0, total_len) if is_loop else minf(total_len, s_val + 22.0)
+				var fwd_here := -TrackBuilder.sample_track_frame(curve, s_val, total_len, is_loop).basis.z
+				var fb2 := -TrackBuilder.sample_track_frame(curve, s_b2, total_len, is_loop).basis.z
+				var ff2 := -TrackBuilder.sample_track_frame(curve, s_f2, total_len, is_loop).basis.z
+				var a_in := signf(fb2.cross(fwd_here).y) * acos(clampf(fb2.dot(fwd_here), -1.0, 1.0))
+				var a_out := signf(fwd_here.cross(ff2).y) * acos(clampf(fwd_here.dot(ff2), -1.0, 1.0))
+				crossing = a_in * a_out < 0.0 and absf(a_in) > deg_to_rad(3.0) and absf(a_out) > deg_to_rad(3.0)
+			if crossing:
+				raw_limits[si] = 30.0
+				raw_derail[si] = 42.0
+				raw_zones[si] = 5 # 侧向道岔
+				continue
+			near_turnout = false
 		if near_turnout and radius < 48.0:
 			raw_limits[si] = 18.0
 			raw_derail[si] = 27.0

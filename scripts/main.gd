@@ -1429,15 +1429,19 @@ func _unhandled_input(event: InputEvent) -> void:
 # Manual driving (monorail): throw the next switch ahead for this train's route
 func _do_throw_switch() -> void:
 	if not _transit_sim.manual_drive:
-		_show_toast("⚠ 自动运营时道岔由调度按进路自动排列；切换手动驾驶 (Q) 后可手动扳道岔")
+		_show_toast("⚠ 自动运营时道岔由调度按进路自动排列；切换手动驾驶 (Q) 后可手动干预道岔")
 		return
-	match _transit_sim.manual_throw_switch(_graph):
-		"diverge":
+	var res := _transit_sim.manual_throw_switch(_graph)
+	var swi := _transit_sim.switch_ahead_info(_transit_sim.get_active_tram(), _transit_sim.active_tram_idx)
+	var ovr := not swi.is_empty() and bool(swi.get("override", false))
+	match res:
+		"diverge", "straight":
 			_sound.play_notch_click()
-			_show_toast("🔀 前方道岔扳向【侧向/渡线】，转辙约 4 秒，锁闭后信号开放")
-		"straight":
-			_sound.play_notch_click()
-			_show_toast("⬆ 前方道岔扳向【直向】，转辙约 4 秒，锁闭后信号开放")
+			var dir_txt := "侧向/渡线" if res == "diverge" else "直向"
+			if ovr:
+				_show_toast("⚠ 手动干预：道岔扳向【%s】，与本次进路不符，信号保持红灯；再按 G 恢复自动进路" % dir_txt)
+			else:
+				_show_toast("✅ 道岔恢复按进路自动排列【%s】，锁闭后信号开放" % dir_txt)
 		"busy":
 			_show_toast("⚠ 前方道岔已被其他列车的进路占用，请在信号机前停车等待")
 		"locked":
@@ -2753,7 +2757,7 @@ func _build_ui() -> void:
 	cam_hbox.add_child(_make_btn("5 鸟瞰全局", func(): _set_cam_mode(CamMode.BIRD)))
 
 	var cam_hint := Label.new()
-	cam_hint.text = "↑↓←→ 方向键移动/旋转视角 · W/S 牵引与制动 · O 开关车门 · G 扳道岔(单轨)"
+	cam_hint.text = "↑↓←→ 方向键移动/旋转视角 · W/S 牵引与制动 · O 开关车门 · G 手动扳道岔(特殊情况)"
 	cam_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	cam_hint.add_theme_font_size_override("font_size", 12)
 	cam_hint.add_theme_color_override("font_color", Color(0.75, 0.82, 0.88))
@@ -2816,7 +2820,7 @@ func _build_ui() -> void:
 	_btn_drive_mode = _make_btn("切换手动驾驶 (Q)", func(): _transit_sim.manual_drive = not _transit_sim.manual_drive)
 	act_row.add_child(_btn_drive_mode)
 	act_row.add_child(_make_btn("换端折返 (R)", func(): _do_cab_change()))
-	act_row.add_child(_make_btn("扳道岔 (G)", func(): _do_throw_switch()))
+	act_row.add_child(_make_btn("手动扳道岔 (G)", func(): _do_throw_switch()))
 
 	# 5. HOME SCREEN OVERLAY (Map Selection + Progress Summary + Actions)
 	_build_home_screen_ui(master_root)
@@ -4027,8 +4031,8 @@ func _update_run_hud() -> void:
 						hazard_msg = "● 前方 %.0fm 道岔被其他列车占用 · 信号【━ 停车】，请在信号机前停车等待" % float(swi["dist"])
 					elif bool(swi["moving"]):
 						hazard_msg = "● 前方 %.0fm 道岔转辙中 → %s · 信号【━ 停车】" % [float(swi["dist"]), cur_txt]
-					elif _transit_sim.manual_drive and _transit_sim.active_tram_idx >= 0:
-						hazard_msg = "● 前方 %.0fm 道岔在【%s】，本次进路需要【%s】· 按 G 扳道岔，否则驶入将脱轨！" % [float(swi["dist"]), cur_txt, need_txt]
+					elif bool(swi.get("override", false)):
+						hazard_msg = "● 前方 %.0fm 道岔被手动扳到【%s】，与进路【%s】不符 · 信号【━ 停车】，再按 G 恢复，否则驶入将脱轨！" % [float(swi["dist"]), cur_txt, need_txt]
 					else:
 						hazard_msg = "● 前方 %.0fm 道岔信号【━ 停车】· 等待道岔排列 %s" % [float(swi["dist"]), need_txt]
 		var f0 := secs_h[0] as Node3D
