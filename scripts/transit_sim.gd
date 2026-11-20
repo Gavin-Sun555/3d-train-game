@@ -497,6 +497,26 @@ func manual_reverse_dir() -> String:
 	return "ok"
 
 
+# True when the train stands on the departure side of terminal `sid` (past the turnback point, facing out)
+func _on_terminal_departure_side(tr: Dictionary, sid: int) -> bool:
+	if not bool(tr["is_loop"]):
+		return false
+	var rlen := float(tr["route_len"])
+	var dir := float(tr["dir"])
+	var s_now := float(tr["s"])
+	for z: Dictionary in tr.get("terminal_zones", []):
+		if int(z["station_id"]) != sid:
+			continue
+		var cusp_s := float(z["cusp_s"])
+		var arr_len := fposmod((cusp_s - float(z["hold_s"])) * dir, rlen)
+		var from_hold := fposmod((s_now - float(z["hold_s"])) * dir, rlen)
+		if from_hold <= arr_len + 0.5:
+			return false
+		var dep_len := fposmod((float(z["exit_s"]) - cusp_s) * dir, rlen) + _consist_length(tr)
+		return fposmod((s_now - cusp_s) * dir, rlen) <= dep_len
+	return false
+
+
 # True when stop `stop_idx` is a reversing terminus (either a double-track/monorail turnback cusp
 # or the forward end station of a single-track shuttle). Pure circular loops return false.
 func _is_turnback_stop(tr: Dictionary, stop_idx: int) -> bool:
@@ -1318,8 +1338,10 @@ func _step_tram_physics_and_doors(
 			var stage_now := str(tr.get("term_stage", ""))
 			# In manual mode, opening doors at a reversing terminus before cab change enters Phase 1 ("alight_only")
 			if stage_now == "" and _is_turnback_stop(tr, dock_idx):
-				stage_now = "alight_only"
-				tr["term_stage"] = "alight_only"
+				# Already past the turnback (e.g. the start of a run, standing at the origin platform facing out):
+				# this is the starting station, so board; otherwise it is the arrival end, so clear the train first
+				stage_now = "board_only" if _on_terminal_departure_side(tr, dock_sid) else "alight_only"
+				tr["term_stage"] = stage_now
 				tr["term_sid"] = dock_sid
 			if stage_now == "alight_only":
 				# Phase 1: ONLY alight (evacuate 100% of passengers), NO boarding before cab change!

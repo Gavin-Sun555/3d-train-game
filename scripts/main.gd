@@ -3407,7 +3407,7 @@ func _boarding_status_text(tr: Dictionary, st_info: Dictionary) -> String:
 	var cap := int(tr["capacity"])
 	var alight_left := onboard.size() if term_stage == "alight_only" else (0 if term_stage == "board_only" else onboard.count(sid))
 	var pending := int(tr.get("pending_boarders", 0))
-	var waiting := _pax_sim.get_waiting_count(sid)
+	var waiting := _pax_sim.get_boardable_count(sid) # on the platform now (not still walking up from the street)
 	var room := maxi(0, cap - onboard.size() - pending)
 	var board_left := 0 if term_stage == "alight_only" else mini(waiting, room)
 	var doors_open := bool(tr.get("doors_target_open", false)) and float(tr.get("door_ratio", 0.0)) > 0.5
@@ -3428,6 +3428,17 @@ func _boarding_status_text(tr: Dictionary, st_info: Dictionary) -> String:
 	var cells := 10
 	var filled := int(round(prog * float(cells)))
 	var bar := "▰".repeat(filled) + "▱".repeat(cells - filled)
+	if remaining == 0:
+		snap["done"] = true
+	if bool(snap.get("done", false)) and term_stage != "alight_only" and alight_left == 0:
+		# Everyone who was on the platform is aboard; late arrivals still walking in don't hold the train
+		var late_note := " · 另有 %d 人正赶来上车" % (board_left + pending) if remaining > 0 else ""
+		if _transit_sim.manual_drive and not bool(snap["done_toast"]):
+			snap["done_toast"] = true
+			_show_toast("✅ %s %s完毕，可以关门 (O) 出发" % [st_name, "始发上客" if term_stage == "board_only" else "上下客"])
+		var full_note := "（车厢已满，站台还有 %d 人等下一班）" % waiting if waiting > 0 and room == 0 else ""
+		var done_tag := "始发上客完毕" if term_stage == "board_only" else "上下客完毕"
+		return "✅ %s %s %s 100%%，可关门 (O) 出发%s%s" % [st_name, done_tag, "▰".repeat(cells), full_note, late_note]
 	if remaining == 0:
 		if term_stage == "alight_only":
 			if _transit_sim.manual_drive and not bool(snap["done_toast"]):

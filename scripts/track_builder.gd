@@ -325,8 +325,14 @@ static func track_clearance_dist(idx: Dictionary, p: Vector2) -> float:
 const MONO_ALIGN_TOL := 6.0
 const MONO_STATION_GUARD := 10.0
 const MONO_MAX_CORNER_CUT := 5.0
-static var _mono_align_cache := {}
-static var _mono_align_key := ""
+# Street-level tram track gets the same treatment within a much tighter lateral budget: it shares the road with
+# cars (motor lanes keep >= ~1.9 m clear of a tram body), so it may only drift a little off the street centre.
+const TRAM_ALIGN_TOL := 2.0
+const TRAM_STATION_GUARD := 8.0
+const TRAM_MAX_CORNER_CUT := 2.0
+const TRAM_MAX_SHIFT := 2.0
+static var _align_cache := {} # system -> per-edge polylines
+static var _align_key := {} # system -> signature
 
 
 static func _polyline_len(pts2: Array) -> float:
@@ -357,30 +363,35 @@ static func _dp_simplify(pts: Array, i0: int, i1: int, tol: float, keep: Diction
 		_dp_simplify(pts, bi, i1, tol, keep)
 
 
-static func _mono_align_signature(graph: NetworkGraph) -> String:
+static func _align_signature(graph: NetworkGraph, sys: int) -> String:
 	var parts: PackedStringArray = []
 	var ks: Array = graph.built_tracks.keys()
 	ks.sort()
 	for eid: int in ks:
-		if is_monorail_style(int(graph.built_tracks[eid])):
+		if (1 if is_monorail_style(int(graph.built_tracks[eid])) else 0) == sys:
 			parts.append(str(eid))
 	parts.append("|")
 	for sid: int in graph.stations.keys():
 		var st: Dictionary = graph.stations[sid]
-		if graph.built_tracks.has(int(st["edge_id"])) and is_monorail_style(int(graph.built_tracks[int(st["edge_id"])])):
+		if graph.built_tracks.has(int(st["edge_id"])) and (1 if is_monorail_style(int(graph.built_tracks[int(st["edge_id"])])) else 0) == sys:
 			parts.append("%d:%.3f:%.1f" % [int(st["edge_id"]), float(st["t"]), float(st.get("platform_len", 27.0))])
 	return ",".join(parts) + "#%d" % graph.get_instance_id()
 
 
-# Per-edge guideway polylines (oriented a -> b) for every monorail edge; cached until the guideway/stations change
 static func _mono_alignments(graph: NetworkGraph) -> Dictionary:
-	var key := _mono_align_signature(graph)
-	if key == _mono_align_key:
-		return _mono_align_cache
+	return _track_alignments(graph, 1)
+
+
+# Per-edge track polylines (oriented a -> b) for every built edge of system `sys` (0 tram, 1 monorail);
+# cached until that system's track or stations change
+static func _track_alignments(graph: NetworkGraph, sys: int) -> Dictionary:
+	var key := _align_signature(graph, sys)
+	if str(_align_key.get(sys, "")) == key:
+		return _align_cache[sys]
 	var res := {}
 	var mono: Dictionary = {}
 	for eid: int in graph.built_tracks.keys():
-		if is_monorail_style(int(graph.built_tracks[eid])) and graph.edges.has(eid) and (graph.edges[eid]["pts"] as Array).size() >= 2:
+		if (1 if is_monorail_style(int(graph.built_tracks[eid])) else 0) == sys and graph.edges.has(eid) and (graph.edges[eid]["pts"] as Array).size() >= 2:
 			mono[eid] = true
 	var used := {}
 	var deg := func(nid: int) -> int:
@@ -420,13 +431,17 @@ static func _mono_alignments(graph: NetworkGraph) -> Dictionary:
 				break
 			cur_e = nxt
 			cur_n = far_n
-		_mono_align_chain(graph, chain_e, chain_fwd, res)
-	_mono_align_cache = res
-	_mono_align_key = key
+		_mono_align_chain(graph, chain_e, chain_fwd, res, sys)
+	_align_cache[sys] = res
+	_align_key[sys] = key
 	return res
 
 
-static func _mono_align_chain(graph: NetworkGraph, chain_e: Array, chain_fwd: Array, res: Dictionary) -> void:
+static func _mono_align_chain(graph: NetworkGraph, chain_e: Array, chain_fwd: Array, res: Dictionary, sys: int = 1) -> void:
+	var tol := MONO_ALIGN_TOL if sys == 1 else TRAM_ALIGN_TOL
+	var guard := MONO_STATION_GUARD if sys == 1 else TRAM_STATION_GUARD
+	var max_cut := MONO_MAX_CORNER_CUT if sys == 1 else TRAM_MAX_CORNER_CUT
+	var max_shift := 15.0 if sys == 1 else TRAM_MAX_SHIFT
 	# 1. Raw chain polyline, node positions (arc length) and fixed (station) ranges
 	var pts: Array = []
 	var node_d: Array[float] = [0.0]
@@ -443,7 +458,7 @@ static func _mono_align_chain(graph: NetworkGraph, chain_e: Array, chain_fwd: Ar
 			if int(st["edge_id"]) != eid:
 				continue
 			var st_d := float(st["t"]) * e_len if bool(chain_fwd[ci]) else (1.0 - float(st["t"])) * e_len
-			var hw := float(st.get("platform_len", 27.0)) * 0.5 + MONO_STATION_GUARD
+			var hw := float(st.get("platform_len", 27.0)) * 0.5 + guard
 			fixed.append([acc + st_d - hw, acc + st_d + hw])
 		for k in range(ep.size()):
 			if k == 0 and not pts.is_empty():
@@ -481,7 +496,7 @@ static func _mono_align_chain(graph: NetworkGraph, chain_e: Array, chain_fwd: Ar
 	var kept_sorted: Array = keep.keys()
 	kept_sorted.sort()
 	for i in range(kept_sorted.size() - 1):
-		_dp_simplify(samples, int(kept_sorted[i]), int(kept_sorted[i + 1]), MONO_ALIGN_TOL, keep)
+		_dp_simplify(samples, int(kept_sorted[i]), int(kept_sorted[i + 1]), tol, keep)
 	kept_sorted = keep.keys()
 	kept_sorted.sort()
 	var verts: Array = []
@@ -542,7 +557,7 @@ static func _mono_align_chain(graph: NetworkGraph, chain_e: Array, chain_fwd: Ar
 				var pa: Vector2 = fa[0]
 				var pb: Vector2 = fb[0]
 				var x := pa + da * ((pb - pa).cross(db) / den)
-				if x.distance_to(v0) < 15.0:
+				if x.distance_to(v0) < max_shift:
 					nv = x
 		verts[i] = nv
 	# 3. Round every free corner as widely as the neighbouring straights allow
@@ -559,7 +574,7 @@ static func _mono_align_chain(graph: NetworkGraph, chain_e: Array, chain_fwd: Ar
 		var t := minf(lp, ln)
 		var ang := absf((v - pv).angle_to(nv - v))
 		# The arc's middle cuts the corner by t*sin(ang/2)/2: stay within the street (no slicing building corners)
-		t = minf(t, 2.0 * MONO_MAX_CORNER_CUT / maxf(sin(ang * 0.5), 0.01))
+		t = minf(t, 2.0 * max_cut / maxf(sin(ang * 0.5), 0.01))
 		if t < 0.5 or ang < deg_to_rad(1.0):
 			line.append(v)
 			continue
@@ -570,6 +585,8 @@ static func _mono_align_chain(graph: NetworkGraph, chain_e: Array, chain_fwd: Ar
 			var u := float(j) / float(n_arc)
 			line.append(t0 * (1.0 - u) * (1.0 - u) + v * 2.0 * u * (1.0 - u) + t1 * u * u)
 	line.append(verts[verts.size() - 1])
+	if sys == 0:
+		line = _tram_relax(graph, line, samples, s_d, fixed)
 	# 4. Cut back into edges: a node lands where the new line passes closest to it (in order, near its old position)
 	var l_cum: Array[float] = [0.0]
 	for i in range(1, line.size()):
@@ -614,6 +631,126 @@ static func _mono_align_chain(graph: NetworkGraph, chain_e: Array, chain_fwd: Ar
 		res[int(chain_e[ci])] = ep2
 
 
+# Street-level tram: turn what is left of the street's jogs (offset intersections, kinks in the kerb data) into
+# gentle S-curves. The line is resampled every TRAM_RELAX_STEP m and relaxed by curvature-minimising (bi-Laplacian)
+# steps while being held inside a corridor of TRAM_MAX_SHIFT m around the street centre (wider inside
+# intersections, where the whole junction is paved), so straights stay straight and bends get the widest
+# radius the street allows. Platforms (+ approach) and the chain ends stay exactly where they are.
+const TRAM_RELAX_STEP := 3.0
+const TRAM_RELAX_ITERS := 700
+const TRAM_JUNCTION_SHIFT := 3.5
+
+static func _tram_relax(graph: NetworkGraph, line: Array, street: Array, street_d: Array[float], fixed: Array) -> Array:
+	var l_tot := _polyline_len(line)
+	var n := int(ceil(l_tot / TRAM_RELAX_STEP)) + 1
+	if n < 7:
+		return line
+	var pts := PackedVector2Array()
+	var acc := 0.0
+	var seg := 0
+	for k in range(n):
+		var d := l_tot * float(k) / float(n - 1)
+		while seg < line.size() - 2 and acc + (line[seg] as Vector2).distance_to(line[seg + 1]) < d:
+			acc += (line[seg] as Vector2).distance_to(line[seg + 1])
+			seg += 1
+		var a: Vector2 = line[seg]
+		var b: Vector2 = line[seg + 1]
+		pts.append(a.lerp(b, clampf((d - acc) / maxf(a.distance_to(b), 0.0001), 0.0, 1.0)))
+	# Nearest street sample of each point (monotone along the chain), its corridor width and whether it is fixed
+	var near := PackedInt32Array()
+	near.resize(n)
+	var budget := PackedFloat32Array()
+	budget.resize(n)
+	var locked := PackedByteArray()
+	locked.resize(n)
+	var junctions: Array = [] # [pos, radius] of every road intersection along the way
+	var j_seen := {}
+	var m := street.size()
+	var j := 0
+	for k in range(n):
+		var best := 1e18
+		var bj := j
+		for jj in range(maxi(0, j - 4), mini(m, j + 12)):
+			var dd := pts[k].distance_squared_to(street[jj])
+			if dd < best:
+				best = dd
+				bj = jj
+		j = bj
+		near[k] = bj
+		var dk: float = street_d[bj]
+		var fx := k < 3 or k > n - 4
+		for fr: Array in fixed:
+			if dk >= float(fr[0]) - 0.01 and dk <= float(fr[1]) + 0.01:
+				fx = true
+		locked[k] = 1 if fx else 0
+	for nid: int in graph.nodes.keys():
+		var adj: Array = graph.adj.get(nid, [])
+		if adj.size() < 3:
+			continue
+		var np: Vector2 = graph.nodes[nid]["pos"]
+		var w_min := 1e9
+		for nb: Dictionary in adj:
+			w_min = minf(w_min, float(graph.edges[int(nb["edge_id"])].get("width", 12.0)))
+		j_seen[nid] = [np, w_min * 0.5]
+	# Only junctions near this chain matter
+	var bb := Rect2(pts[0], Vector2.ZERO)
+	for p: Vector2 in pts:
+		bb = bb.expand(p)
+	bb = bb.grow(12.0)
+	for nid: int in j_seen.keys():
+		if bb.has_point(j_seen[nid][0]):
+			junctions.append(j_seen[nid])
+	for k in range(n):
+		var bud := TRAM_MAX_SHIFT
+		for jn: Array in junctions:
+			if pts[k].distance_to(jn[0]) < float(jn[1]):
+				bud = maxf(bud, minf(TRAM_JUNCTION_SHIFT, float(jn[1]) - 2.6))
+		budget[k] = bud
+	var clamp_pt := func(k: int, p: Vector2) -> Vector2:
+		var c := int(near[k])
+		var best_p: Vector2 = street[c]
+		var best := 1e18
+		for jj in range(maxi(0, c - 3), mini(m - 1, c + 3)):
+			var a: Vector2 = street[jj]
+			var ab: Vector2 = (street[jj + 1] as Vector2) - a
+			var q := a + ab * clampf((p - a).dot(ab) / maxf(ab.length_squared(), 0.0001), 0.0, 1.0)
+			var dd := p.distance_squared_to(q)
+			if dd < best:
+				best = dd
+				best_p = q
+		var off := p - best_p
+		var lim := budget[k]
+		if off.length_squared() > lim * lim:
+			return best_p + off.normalized() * lim
+		return p
+	# Work only where the line bends (plus a margin); long straights are already optimal
+	var active := PackedInt32Array()
+	var mark := PackedByteArray()
+	mark.resize(n)
+	for k in range(1, n - 1):
+		var t_ang := absf((pts[k] - pts[k - 1]).angle_to(pts[k + 1] - pts[k]))
+		if t_ang > deg_to_rad(0.3):
+			for q in range(maxi(0, k - 14), mini(n, k + 15)):
+				mark[q] = 1
+	for k in range(2, n - 2):
+		if mark[k] == 1 and locked[k] == 0:
+			active.append(k)
+	if active.is_empty():
+		return line
+	var lam := 0.06
+	var nxt := pts.duplicate()
+	for _it in range(TRAM_RELAX_ITERS):
+		for k: int in active:
+			var bl := pts[k - 2] - 4.0 * pts[k - 1] + 6.0 * pts[k] - 4.0 * pts[k + 1] + pts[k + 2]
+			nxt[k] = clamp_pt.call(k, pts[k] - bl * lam)
+		for k: int in active:
+			pts[k] = nxt[k]
+	var out: Array = []
+	for p: Vector2 in pts:
+		out.append(p)
+	return out
+
+
 # Polyline the guideway of monorail edge `eid` actually follows (oriented a -> b)
 static func mono_alignment_pts(graph: NetworkGraph, eid: int) -> Array:
 	var al := _mono_alignments(graph)
@@ -623,8 +760,11 @@ static func mono_alignment_pts(graph: NetworkGraph, eid: int) -> Array:
 
 
 static func _edge_pts(graph: NetworkGraph, eid: int) -> Array:
-	if edge_system(graph, eid) == 1:
-		return mono_alignment_pts(graph, eid)
+	if not graph.built_tracks.has(eid):
+		return graph.edges[eid]["pts"]
+	var al := _track_alignments(graph, edge_system(graph, eid))
+	if al.has(eid):
+		return al[eid]
 	return graph.edges[eid]["pts"]
 
 
@@ -897,7 +1037,8 @@ static func station_overlaps_crossover(
 	eid: int,
 	t_val: float,
 	_req_kind: int = NetworkGraph.StationKind.SIDE_SINGLE,
-	plat_len: float = 27.0
+	plat_len: float = 27.0,
+	margin: float = 2.0
 ) -> bool:
 	if not graph.crossovers.has(eid):
 		return false
@@ -906,7 +1047,7 @@ static func station_overlaps_crossover(
 	if xo.is_empty():
 		return false
 	var st_s := clampf(t_val, 0.15, 0.85) * float(geom["clen"])
-	return absf(st_s - float(xo["s_mid"])) < (plat_len * 0.5) + float(xo["x_half"]) + 2.0
+	return absf(st_s - float(xo["s_mid"])) < (plat_len * 0.5) + float(xo["x_half"]) + margin
 
 
 # Cubic junction connector arc from rail end point `pa` (travelling along `ta`) to rail start `pb` (travelling along `tb`).

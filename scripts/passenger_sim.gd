@@ -205,7 +205,24 @@ func reset_for_stations(station_views: Dictionary) -> void:
 
 
 func has_waiting_passengers(station_id: int) -> bool:
-	return not (station_queues.get(station_id, []) as Array).is_empty()
+	return get_boardable_count(station_id) > 0
+
+
+# A queued passenger can board once they are up on the platform (not still walking in from the street ramp)
+func _is_boardable(item: Dictionary) -> bool:
+	var ag: Dictionary = item.get("agent", {})
+	if ag.is_empty() or not is_instance_valid(ag.get("node")):
+		return true
+	return bool(ag.get("on_platform", false))
+
+
+# Passengers already on the platform (the ones a train at the platform can take right now)
+func get_boardable_count(sid: int) -> int:
+	var n := 0
+	for item: Dictionary in station_queues.get(sid, []):
+		if _is_boardable(item):
+			n += 1
+	return n
 
 
 func cycle_spawn_level() -> int:
@@ -310,15 +327,20 @@ func exchange_passengers_at_station(
 				var q: Array = station_queues[station_id]
 				if not q.is_empty():
 					var found_q := -1
+					var first_ok := -1
 					for qi in range(q.size()):
+						if not _is_boardable(q[qi]):
+							continue # Still walking up from the street: boards the next time round
+						if first_ok < 0:
+							first_ok = qi
 						var cand_dest := int(q[qi]["dest_sid"])
 						if upcoming_sids.has(cand_dest) or upcoming_sids.is_empty():
 							found_q = qi
 							break
 					# Ensure waiting passengers at this platform always board a stopping tram!
-					if found_q < 0 and not upcoming_sids.is_empty():
-						found_q = 0
-						q[0]["dest_sid"] = upcoming_sids[_rng.randi() % upcoming_sids.size()]
+					if found_q < 0 and first_ok >= 0 and not upcoming_sids.is_empty():
+						found_q = first_ok
+						q[found_q]["dest_sid"] = upcoming_sids[_rng.randi() % upcoming_sids.size()]
 
 					if found_q >= 0:
 						var item: Dictionary = q[found_q]
@@ -343,7 +365,7 @@ func exchange_passengers_at_station(
 									p_target = cand_p
 						else:
 							p_target = portals[_rng.randi() % portals.size()]
-						_start_boarding_walker(item, p_target, sview, tram_state, dest_final)
+						_start_boarding_walker(item, p_target, sview, tram_state, dest_final, station_id)
 						_repack_waiting_queue(station_id)
 						_refresh_station_label(station_id)
 						did_work = true
@@ -394,6 +416,7 @@ func _spawn_one_random_passenger(graph: NetworkGraph, instant_place: bool) -> vo
 		agent_dict["target"] = slot_pos
 		agent_dict["face_pos"] = sview["pos"] as Vector3
 		agent_dict["mode"] = "wait" if instant_place else "walk_to_slot"
+		agent_dict["on_platform"] = instant_place
 		if not instant_place:
 			_active_walkers.append(agent_dict)
 		else:
@@ -413,13 +436,18 @@ func _start_boarding_walker(
 	portal: Dictionary,
 	sview: Dictionary,
 	tram_state: Dictionary,
-	dest_sid: int
+	dest_sid: int,
+	station_id: int = -1
 ) -> void:
 	var ag: Dictionary = item.get("agent", {})
 	if ag.is_empty() or not is_instance_valid(ag.get("node")):
 		var slots: Array = sview["waiting_slots"]
 		var start_p: Vector3 = slots[0] if not slots.is_empty() else (sview["board_edge"] as Vector3)
 		ag = _create_3d_person(start_p)
+		ag["on_platform"] = true
+		item["agent"] = ag
+	ag["board_item"] = item
+	ag["board_sid"] = station_id
 
 	var outer_p: Vector3 = portal["outer_pos"]
 	var inner_p: Vector3 = portal["inner_pos"]
@@ -478,6 +506,7 @@ func _repack_waiting_queue(station_id: int) -> void:
 		var ag: Dictionary = item.get("agent", {})
 		if ag.is_empty() or not is_instance_valid(ag.get("node")):
 			ag = _create_3d_person(slots[i] as Vector3)
+			ag["on_platform"] = true
 			item["agent"] = ag
 		ag["target"] = slots[i]
 		ag["face_pos"] = sview["pos"] as Vector3
@@ -501,9 +530,12 @@ func _update_walkers(dt: float) -> void:
 		# If tram starts moving away while a walker is still boarding, dynamically track its live door anchor or complete boarding!
 		if mode == "board_enter":
 			var tr_ref: Dictionary = ag.get("tram_ref", {})
-			if tr_ref.is_empty() or float(tr_ref.get("door_ratio", 0.0)) < 0.12:
-				_finish_boarding_if_needed(ag)
-				node.queue_free()
+			if tr_ref.is_empty() or float(tr_ref.get("door_ratio", 0.0)) < 0.12 or not bool(tr_ref.get("doors_target_open", true)):
+				# Doors closing: whoever is already in the doorway gets on, everyone else stays on the platform
+				var wps_c: Array = ag.get("waypoints", [])
+				if tr_ref.is_empty() or wps_c.size() <= 2 or not _return_boarder_to_platform(ag):
+					_finish_boarding_if_needed(ag)
+					node.queue_free()
 				_active_walkers.remove_at(idx)
 				idx -= 1
 				continue
@@ -564,6 +596,7 @@ func _update_walkers(dt: float) -> void:
 				(ag["torso"] as Node3D).rotation = Vector3.ZERO
 				_orient_person_toward(node, ag.get("face_pos", cur + Vector3.FORWARD) as Vector3)
 				ag["mode"] = "wait"
+				ag["on_platform"] = true
 				_active_walkers.remove_at(idx)
 		else:
 			var step := minf(dist, spd * dt)
@@ -590,6 +623,31 @@ func _update_walkers(dt: float) -> void:
 			torso_n.rotation.z = c_ph * deg_to_rad(1.2)
 
 		idx -= 1
+
+
+# A boarder who had not reached the door when it started closing goes back to the head of the platform queue
+func _return_boarder_to_platform(ag: Dictionary) -> bool:
+	var sid := int(ag.get("board_sid", -1))
+	var item: Dictionary = ag.get("board_item", {})
+	if sid < 0 or item.is_empty() or not station_queues.has(sid) or bool(ag.get("board_committed", false)):
+		return false
+	ag["board_committed"] = true # never counted on board
+	var tr_ref: Dictionary = ag.get("tram_ref", {})
+	tr_ref["pending_boarders"] = maxi(0, int(tr_ref.get("pending_boarders", 1)) - 1)
+	var new_ag := ag.duplicate()
+	new_ag.erase("board_committed")
+	new_ag.erase("tram_ref")
+	new_ag.erase("portal_ref")
+	new_ag.erase("board_item")
+	new_ag["waypoints"] = []
+	new_ag["on_platform"] = true
+	item["agent"] = new_ag
+	item["dest_sid"] = int(ag.get("dest_sid", item.get("dest_sid", -1)))
+	var q: Array = station_queues[sid]
+	q.push_front(item)
+	_repack_waiting_queue(sid) # walks them back to a waiting slot
+	_refresh_station_label(sid)
+	return true
 
 
 func _finish_boarding_if_needed(ag: Dictionary) -> void:

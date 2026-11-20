@@ -196,7 +196,8 @@ func import_state(state: Dictionary) -> void:
 		var side := int(s_item.get("side", 1))
 		var plat_len := clampf(float(s_item.get("platform_len", 27.0)), 20.0, 56.0)
 		var skind_chk := StationKind.ISLAND if side == 0 else StationKind.SIDE_SINGLE
-		if TrackBuilder.station_overlaps_crossover(self, eid, t_val, skind_chk, plat_len):
+		# Loading: only drop a crossover that really runs into the platform (track alignment may shift lengths a little)
+		if TrackBuilder.station_overlaps_crossover(self, eid, t_val, skind_chk, plat_len, 0.0):
 			crossovers.erase(eid)
 			crossover_t.erase(eid)
 		var skind := int(s_item.get("kind", StationKind.ISLAND if side == 0 else StationKind.SIDE_SINGLE))
@@ -529,6 +530,13 @@ func get_turnout_world_positions() -> Array[Vector3]:
 						var tf := TrackBuilder.sample_track_frame(g["curve"] as Curve3D, float(pt["s_mid"]), float(g["clen"]), false)
 						out.append(Vector3(tf.origin.x, 0.0, tf.origin.z))
 					continue
+			# Centre of the crossover as built on the (aligned) track centreline
+			var gx := TrackBuilder.edge_track_geom(self, eid)
+			var xs := TrackBuilder.edge_crossover_span(self, eid, gx)
+			if not xs.is_empty():
+				var tfx := TrackBuilder.sample_track_frame(gx["curve"] as Curve3D, float(xs["s_mid"]), float(gx["clen"]), false)
+				out.append(Vector3(tfx.origin.x, 0.0, tfx.origin.z))
+				continue
 			out.append(sample_edge(eid, float(crossover_t.get(eid, 0.5)))["pos"] as Vector3)
 	return out
 
