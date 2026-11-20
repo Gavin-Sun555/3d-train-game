@@ -145,6 +145,11 @@ var _plan_era_filter := "all"
 var _plan_model_idx := 0
 var _plan_fleet_count := 3
 var _plan_sections := 2
+var _editing_line_id := -1 # line being edited in the planner (-1: drafting a new line)
+var _draft_insert_idx := -1 # stations clicked on the map go in after this draft index (-1: at the end)
+var _draft_list_vbox: VBoxContainer
+var _btn_commit_line: Button
+var _btn_cancel_edit: Button
 
 # Time of day (continuous 0..24h)
 var _time_hours := 13.5
@@ -1071,6 +1076,8 @@ func _set_game_mode(mode: int) -> void:
 		_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 		if prev_mode != GameMode.RUN or _ops_dirty:
 			_draft_station_ids.clear()
+			_editing_line_id = -1
+			_draft_insert_idx = -1
 			_route_preview_mi.mesh = null
 			_transit_sim.rebuild_fleet(_graph, _tram_models, _night_factor)
 			_pax_sim.reset_for_stations(_station_views)
@@ -1394,8 +1401,7 @@ func _unhandled_input(event: InputEvent) -> void:
 					_show_toast("站台方向已切换至轨道%s侧" % ("右" if _build_station_side > 0 else "左"))
 		elif _game_mode == GameMode.PLAN:
 			if k == KEY_BACKSPACE and not _draft_station_ids.is_empty():
-				_draft_station_ids.pop_back()
-				_refresh_plan_ui()
+				_draft_undo_last()
 		else:
 			# RUN & DRIVE Mode Controls:
 			# W / S = Throttle / Brake; Arrow Keys (Up/Down/Left/Right) = Move/Rotate Camera View!
@@ -1854,16 +1860,7 @@ func _handle_map_left_click(screen_pos: Vector2) -> void:
 		if sid < 0:
 			_show_toast("请点击已建成的 3D 车站将其加入新线路！（按下触摸板移动可拖动地图）")
 			return
-		if not _draft_station_ids.is_empty():
-			var prev_sid := _draft_station_ids[_draft_station_ids.size() - 1]
-			if prev_sid == sid:
-				return
-			var check_path := _graph.find_track_path_between_stations(prev_sid, sid)
-			if check_path.is_empty():
-				_show_toast("该车站与上一站之间没有连通的已建轨道！请先在【建设轨道】连通轨道。")
-				return
-		_draft_station_ids.append(sid)
-		_refresh_plan_ui()
+		_draft_insert_station(sid)
 
 
 func _mark_modified_and_quick_save() -> void:
@@ -2666,20 +2663,29 @@ func _build_ui() -> void:
 
 	_lbl_draft_stops = Label.new()
 	_lbl_draft_stops.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_lbl_draft_stops.custom_minimum_size = Vector2(365, 58)
+	_lbl_draft_stops.custom_minimum_size = Vector2(365, 0)
 	_lbl_draft_stops.add_theme_color_override("font_color", Color(0.92, 0.95, 0.98))
 	p_vbox.add_child(_lbl_draft_stops)
+
+	# Editable stop list: delete any stop, or pick where the next clicked station is inserted
+	var draft_scroll := ScrollContainer.new()
+	draft_scroll.custom_minimum_size = Vector2(365, 118)
+	draft_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	p_vbox.add_child(draft_scroll)
+	_draft_list_vbox = VBoxContainer.new()
+	_draft_list_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_draft_list_vbox.add_theme_constant_override("separation", 2)
+	draft_scroll.add_child(_draft_list_vbox)
 
 	var draft_btns := HBoxContainer.new()
 	draft_btns.add_theme_constant_override("separation", 6)
 	p_vbox.add_child(draft_btns)
 	draft_btns.add_child(_make_btn("撤销上一站 (Bksp)", func():
-		if not _draft_station_ids.is_empty():
-			_draft_station_ids.pop_back()
-			_refresh_plan_ui()
+		_draft_undo_last()
 	))
 	draft_btns.add_child(_make_btn("清空选站", func():
 		_draft_station_ids.clear()
+		_draft_insert_idx = -1
 		_refresh_plan_ui()
 	))
 
@@ -2713,7 +2719,15 @@ func _build_ui() -> void:
 	_lbl_fleet_cfg = Label.new()
 	p_vbox.add_child(_lbl_fleet_cfg)
 
-	p_vbox.add_child(_make_btn("✓ 确认开通此线路", func(): _commit_draft_line()))
+	var commit_row := HBoxContainer.new()
+	commit_row.add_theme_constant_override("separation", 6)
+	p_vbox.add_child(commit_row)
+	_btn_commit_line = _make_btn("✓ 确认开通此线路", func(): _commit_draft_line())
+	_btn_commit_line.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	commit_row.add_child(_btn_commit_line)
+	_btn_cancel_edit = _make_btn("取消编辑", func(): _cancel_line_edit(true))
+	_btn_cancel_edit.visible = false
+	commit_row.add_child(_btn_cancel_edit)
 
 	p_vbox.add_child(HSeparator.new())
 	var exist_lbl := Label.new()
@@ -3819,18 +3833,23 @@ func _step_plan_model(step_dir: int) -> void:
 func _refresh_plan_ui() -> void:
 	if _lbl_draft_stops == null:
 		return
+	if _editing_line_id >= 0 and not _graph.lines.has(_editing_line_id):
+		_editing_line_id = -1
+	var edit_tag := ""
+	if _editing_line_id >= 0:
+		edit_tag = "✎ 正在编辑【%s】· " % str(_graph.lines[_editing_line_id]["name"])
 	if _draft_station_ids.is_empty():
-		_lbl_draft_stops.text = "当前待建线路站点：（请直接单击地图上已建成的 3D 车站按顺序串联站点；再次点击首站可组成闭合环线）"
+		_lbl_draft_stops.text = edit_tag + "当前待建线路站点：（请直接单击地图上已建成的 3D 车站按顺序串联站点；再次点击首站可组成闭合环线）"
 		_route_preview_mi.mesh = null
 	else:
-		var names: PackedStringArray = []
-		for i in range(_draft_station_ids.size()):
-			var sid := _draft_station_ids[i]
-			if _graph.stations.has(sid):
-				names.append("%d.%s" % [i + 1, str(_graph.stations[sid]["name"])])
-		var mode_tag := "【闭合环线】" if (_draft_station_ids.size() >= 3 and _draft_station_ids[0] == _draft_station_ids[_draft_station_ids.size() - 1]) else "【双向往返线】"
-		_lbl_draft_stops.text = "%s 已选 %d 站：\n%s" % [mode_tag, _draft_station_ids.size(), " → ".join(names)]
+		var mode_tag := "【闭合环线】" if _draft_is_loop() else "【双向往返线】"
+		var where := "地图上点击车站将追加到末尾" if _draft_insert_idx < 0 else "地图上点击车站将插入到第 %d 站之后" % (_draft_insert_idx + 1)
+		_lbl_draft_stops.text = "%s%s 已选 %d 站 · %s" % [edit_tag, mode_tag, _draft_station_ids.size(), where]
 		_update_draft_route_preview()
+	_refresh_draft_list_ui()
+	if _btn_commit_line != null:
+		_btn_commit_line.text = "✓ 保存对线路的修改" if _editing_line_id >= 0 else "✓ 确认开通此线路"
+		_btn_cancel_edit.visible = _editing_line_id >= 0
 
 	if not _tram_models.is_empty():
 		var m: Dictionary = _tram_models[_plan_model_idx]
@@ -3855,6 +3874,148 @@ func _refresh_plan_ui() -> void:
 		_lbl_fleet_cfg.text = "配车规模：%d 辆 · 编组：%d/%d 节（适配所选站台长度 · 定员 %d 人）%s" % [_plan_fleet_count, _plan_sections, max_sec, total_cap, warn_single]
 
 	_refresh_lines_list_ui()
+
+
+func _draft_is_loop() -> bool:
+	var n := _draft_station_ids.size()
+	return n >= 3 and _draft_station_ids[0] == _draft_station_ids[n - 1]
+
+
+func _stations_linked(a: int, b: int) -> bool:
+	return a != b and not _graph.find_track_path_between_stations(a, b).is_empty()
+
+
+# Load an existing line into the planner: stops, vehicle model, fleet size and consist length can then be changed
+func _begin_line_edit(lid: int) -> void:
+	if not _graph.lines.has(lid):
+		return
+	var ln: Dictionary = _graph.lines[lid]
+	_editing_line_id = lid
+	_draft_insert_idx = -1
+	_draft_station_ids.clear()
+	for raw_sid in ln["station_ids"]:
+		_draft_station_ids.append(int(raw_sid))
+	_plan_era_filter = "all"
+	for i in range(_tram_models.size()):
+		if str(_tram_models[i].get("key", "")) == str(ln.get("model_key", "")):
+			_plan_model_idx = i
+	_plan_fleet_count = int(ln.get("trams_count", 2))
+	_plan_sections = int(ln.get("sections", 2))
+	_refresh_plan_ui()
+	_show_toast("✎ 正在编辑 %s：可增删车站、换车型、改配车数量与编组，完成后点【保存对线路的修改】" % str(ln["name"]))
+
+
+func _cancel_line_edit(toast: bool) -> void:
+	var was := _editing_line_id
+	_editing_line_id = -1
+	_draft_insert_idx = -1
+	_draft_station_ids.clear()
+	_refresh_plan_ui()
+	if toast and was >= 0:
+		_show_toast("已取消编辑，线路保持原样")
+
+
+# Station clicked on the map: append it, or insert it after the chosen stop (both neighbours must be linked by track)
+func _draft_insert_station(sid: int) -> void:
+	var n := _draft_station_ids.size()
+	var pos := n
+	if _draft_insert_idx >= 0 and _draft_insert_idx < n - 1:
+		pos = _draft_insert_idx + 1
+	elif _draft_is_loop():
+		pos = n - 1 # a closed loop grows before its closing stop
+	var prev_sid := _draft_station_ids[pos - 1] if pos > 0 else -1
+	var next_sid := _draft_station_ids[pos] if pos < n else -1
+	if sid == prev_sid or sid == next_sid:
+		return
+	if prev_sid >= 0 and not _stations_linked(prev_sid, sid):
+		_show_toast("该车站与前一站（%s）之间没有连通的已建轨道！请先在【建设轨道】连通轨道。" % str(_graph.stations[prev_sid]["name"]))
+		return
+	if next_sid >= 0 and not _stations_linked(sid, next_sid):
+		_show_toast("该车站与后一站（%s）之间没有连通的已建轨道，无法插入到这里！" % str(_graph.stations[next_sid]["name"]))
+		return
+	_draft_station_ids.insert(pos, sid)
+	if _draft_insert_idx >= 0:
+		_draft_insert_idx = pos # keep inserting after the stop just added
+	_refresh_plan_ui()
+
+
+func _draft_undo_last() -> void:
+	if _draft_station_ids.is_empty():
+		return
+	if _draft_insert_idx >= 0 and _draft_insert_idx < _draft_station_ids.size():
+		_draft_remove_at(_draft_insert_idx)
+		return
+	_draft_station_ids.pop_back()
+	_draft_insert_idx = -1
+	_refresh_plan_ui()
+
+
+# Remove one stop; the stops either side must still be linked by track
+func _draft_remove_at(idx: int) -> void:
+	var n := _draft_station_ids.size()
+	if idx < 0 or idx >= n:
+		return
+	var cand: Array[int] = []
+	if _draft_is_loop():
+		var ring: Array[int] = _draft_station_ids.slice(0, n - 1)
+		ring.remove_at(idx % (n - 1))
+		cand = ring
+		if ring.size() >= 2:
+			cand.append(ring[0])
+	else:
+		cand = _draft_station_ids.duplicate()
+		cand.remove_at(idx)
+	for i in range(cand.size() - 1):
+		if not _stations_linked(cand[i], cand[i + 1]):
+			_show_toast("删除后 %s 与 %s 之间没有连通轨道，无法删除这一站！" % [str(_graph.stations[cand[i]]["name"]), str(_graph.stations[cand[i + 1]]["name"])])
+			return
+	_draft_station_ids = cand
+	if _draft_insert_idx >= idx:
+		_draft_insert_idx -= 1 # cursor stays on the same stop (or the one before a removed cursor stop)
+	if _draft_insert_idx >= _draft_station_ids.size() - 1:
+		_draft_insert_idx = -1 # after the last stop is simply "append"
+	_refresh_plan_ui()
+
+
+func _refresh_draft_list_ui() -> void:
+	if _draft_list_vbox == null:
+		return
+	for c in _draft_list_vbox.get_children():
+		c.queue_free()
+	var n := _draft_station_ids.size()
+	var loop := _draft_is_loop()
+	for i in range(n):
+		var sid := _draft_station_ids[i]
+		if not _graph.stations.has(sid):
+			continue
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 4)
+		var lbl := Label.new()
+		var st_nm := str(_graph.stations[sid]["name"])
+		if loop and i == n - 1:
+			lbl.text = "    ↺ 回到 %s（闭合环线）" % st_nm
+			lbl.add_theme_color_override("font_color", Color(0.62, 0.78, 0.9))
+			_fit_label(lbl)
+			row.add_child(lbl)
+			_draft_list_vbox.add_child(row)
+			continue
+		var cur := i == _draft_insert_idx
+		lbl.text = "%s%d. %s" % ["▶ " if cur else "", i + 1, st_nm]
+		lbl.tooltip_text = st_nm
+		lbl.add_theme_color_override("font_color", Color(0.98, 0.86, 0.45) if cur else Color(0.9, 0.93, 0.97))
+		_fit_label(lbl)
+		row.add_child(lbl)
+		var i_copy := i
+		var ins_btn := _make_btn("取消插入" if cur else "在此后插入", func():
+			_draft_insert_idx = -1 if _draft_insert_idx == i_copy else i_copy
+			_refresh_plan_ui()
+		)
+		ins_btn.tooltip_text = "之后在地图上点击的车站会插入到这一站后面"
+		row.add_child(ins_btn)
+		var del_btn := _make_btn("✕", func(): _draft_remove_at(i_copy))
+		del_btn.tooltip_text = "从线路中删除这一站"
+		row.add_child(del_btn)
+		_draft_list_vbox.add_child(row)
 
 
 func _update_draft_route_preview() -> void:
@@ -3904,11 +4065,32 @@ func _commit_draft_line() -> void:
 				_plan_model_idx = mi_k
 				break
 		_show_toast("已自动换成%s车型：%s" % ["单轨" if on_mono else "电车", str(m.get("name_zh", ""))])
+	if _editing_line_id >= 0:
+		var elid := _editing_line_id
+		if not _graph.update_line(elid, _draft_station_ids, str(m["key"]), _plan_fleet_count, _plan_sections):
+			_show_toast("无法保存修改：站点间缺少连通轨道！")
+			return
+		_editing_line_id = -1
+		_draft_insert_idx = -1
+		_draft_station_ids.clear()
+		_ops_dirty = true
+		_refresh_plan_ui()
+		_mark_modified_and_quick_save()
+		_show_toast("✓ 已保存 %s 的修改（%d 站 · 配车 %d 辆 · %s · %d 节编组），进入【3.运行与驾驶】后按新方案发车" % [
+			str(_graph.lines[elid]["name"]),
+			(_graph.lines[elid]["station_ids"] as Array).size(),
+			_plan_fleet_count,
+			str(m["name_zh"]),
+			_plan_sections,
+		])
+		return
 	var lid := _graph.create_line(_draft_station_ids, str(m["key"]), _plan_fleet_count, _plan_sections)
 	if lid < 0:
 		_show_toast("无法生成线路：站点间缺少连通轨道！")
 		return
 	_draft_station_ids.clear()
+	_draft_insert_idx = -1
+	_ops_dirty = true
 	_refresh_plan_ui()
 	_mark_modified_and_quick_save()
 	_show_toast("✓ 已成功开通 %s（配车 %d 辆 · %s）！点击顶部【3.运行与驾驶】即可发车！" % [
@@ -3939,14 +4121,25 @@ func _refresh_lines_list_ui() -> void:
 		row.add_child(dot)
 
 		var lbl := Label.new()
-		lbl.text = "%s (%d站 · %d辆)" % [str(ln["name"]), (ln["station_ids"] as Array).size(), int(ln["trams_count"])]
-		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var mdl_nm := ""
+		for md: Dictionary in _tram_models:
+			if str(md.get("key", "")) == str(ln.get("model_key", "")):
+				mdl_nm = str(md.get("name_zh", ""))
+		lbl.text = "%s%s (%d站 · %d辆 · %s)" % ["✎ " if lid == _editing_line_id else "", str(ln["name"]), (ln["station_ids"] as Array).size(), int(ln["trams_count"]), mdl_nm]
+		lbl.tooltip_text = lbl.text
+		_fit_label(lbl)
+		if lid == _editing_line_id:
+			lbl.add_theme_color_override("font_color", Color(0.98, 0.86, 0.45))
 		row.add_child(lbl)
 
 		var lid_copy := lid
+		row.add_child(_make_btn("编辑", func(): _begin_line_edit(lid_copy)))
 		row.add_child(_make_btn("删除", func():
 			_graph.lines.erase(lid_copy)
-			_refresh_lines_list_ui()
+			if _editing_line_id == lid_copy:
+				_cancel_line_edit(false)
+			_ops_dirty = true
+			_refresh_plan_ui()
 			_mark_modified_and_quick_save()
 		))
 		_lines_list_vbox.add_child(row)

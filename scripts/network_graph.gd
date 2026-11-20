@@ -447,6 +447,21 @@ func create_line(
 	return lid
 
 
+# Edit an existing line in place (keeps its id, name and colour). False if a station pair has no connecting track.
+func update_line(lid: int, station_ids: Array[int], model_key: String, trams_count: int, sections: int) -> bool:
+	if not lines.has(lid) or station_ids.size() < 2:
+		return false
+	for i in range(station_ids.size() - 1):
+		if find_track_path_between_stations(station_ids[i], station_ids[i + 1]).is_empty():
+			return false
+	var ln: Dictionary = lines[lid]
+	ln["station_ids"] = station_ids.duplicate()
+	ln["model_key"] = model_key
+	ln["trams_count"] = clampi(trams_count, 1, 8)
+	ln["sections"] = clampi(sections, 1, 4)
+	return true
+
+
 func sample_edge(edge_id: int, t: float) -> Dictionary:
 	var ed: Dictionary = edges[edge_id]
 	var pts: Array = ed["pts"]
