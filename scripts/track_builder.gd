@@ -133,13 +133,9 @@ static func edge_track_geom(graph: NetworkGraph, eid: int) -> Dictionary:
 	if not graph.edges.has(eid):
 		return {}
 	var ed: Dictionary = graph.edges[eid]
-	var pts2: Array = ed["pts"]
-	if pts2.size() < 2:
+	var curve := _edge_smooth_curve(graph, eid)
+	if curve == null:
 		return {}
-	var raw3: Array = []
-	for p2: Vector2 in pts2:
-		raw3.append([p2.x, 0.0, p2.y])
-	var curve := create_smooth_curve(raw3, false)
 	var clen := curve.get_baked_length()
 	if clen < 2.0:
 		return {}
@@ -164,8 +160,11 @@ static func edge_track_geom(graph: NetworkGraph, eid: int) -> Dictionary:
 	}
 	if is_double:
 		var prof := _curve_clearance_sep_profile(curve, clen, sep)
+		var n_prof := prof.size()
 		# Rails flow straight through plain 2-edge nodes (no connector arc), so the spacing must match on both
 		# sides of the joint: meet at the larger of the two widenings and ease back over SEP_JOIN_RAMP_M.
+		# Keep ramp strictly under half the edge length so opposite ends never perturb each other's endpoint sep.
+		var ramp_len := minf(SEP_JOIN_RAMP_M, maxf(clen * 0.48, 1.0))
 		for end_i in range(2):
 			var nid := na_id if end_i == 0 else nb_id
 			var bare := is_bare_a if end_i == 0 else is_bare_b
@@ -177,25 +176,26 @@ static func edge_track_geom(graph: NetworkGraph, eid: int) -> Dictionary:
 			var other := int(el[0]) if int(el[1]) == eid else int(el[1])
 			if int(graph.built_track_modes.get(other, NetworkGraph.TrackMode.SINGLE)) != NetworkGraph.TrackMode.DOUBLE:
 				continue
-			var o_curve := _edge_raw_curve(graph, other)
+			var o_curve := _edge_smooth_curve(graph, other)
 			if o_curve == null:
 				continue
 			var o_len := o_curve.get_baked_length()
 			var o_prof := _curve_clearance_sep_profile(o_curve, o_len, graph.get_edge_track_half_sep(other))
 			var o_end := o_prof[0] if int(graph.edges[other]["a"]) == nid else o_prof[o_prof.size() - 1]
-			var own_end := prof[0] if end_i == 0 else prof[prof.size() - 1]
+			var own_end := prof[0] if end_i == 0 else prof[n_prof - 1]
 			var target := maxf(own_end, o_end)
-			for i in range(prof.size()):
-				var d := float(i) if end_i == 0 else float(prof.size() - 1 - i)
-				if d > SEP_JOIN_RAMP_M:
+			for i in range(n_prof):
+				var s_i := clen * float(i) / float(maxi(n_prof - 1, 1))
+				var d := s_i if end_i == 0 else (clen - s_i)
+				if d > ramp_len:
 					continue
-				var w := 1.0 - smoothstep(0.0, SEP_JOIN_RAMP_M, d)
+				var w := 1.0 - smoothstep(0.0, ramp_len, d)
 				prof[i] = maxf(prof[i], lerpf(sep, target, w))
 		g["sep_prof"] = prof
 	return g
 
 
-const SEP_JOIN_RAMP_M := 30.0
+const SEP_JOIN_RAMP_M := 22.0
 
 
 # ---------------------------------------------------------------------------------------------
@@ -313,16 +313,71 @@ static func track_clearance_dist(idx: Dictionary, p: Vector2) -> float:
 	return sqrt(best_sq)
 
 
-static func _edge_raw_curve(graph: NetworkGraph, eid: int) -> Curve3D:
+static func _edge_neighbor_dir(graph: NetworkGraph, eid: int, nid: int) -> Vector3:
+	if not graph.edges.has(eid):
+		return Vector3.ZERO
+	var ed: Dictionary = graph.edges[eid]
+	var pts2: Array = ed["pts"]
+	var n := pts2.size()
+	if n < 2:
+		return Vector3.ZERO
+	var is_a := (int(ed["a"]) == nid)
+	var p0_2: Vector2 = pts2[0] if is_a else pts2[n - 1]
+	var p0 := Vector3(p0_2.x, 0.0, p0_2.y)
+	var step := 1 if is_a else -1
+	var idx := 1 if is_a else (n - 2)
+	while idx >= 0 and idx < n:
+		var pk_2: Vector2 = pts2[idx]
+		var pk := Vector3(pk_2.x, 0.0, pk_2.y)
+		var dv := pk - p0
+		if dv.length_squared() > 0.01:
+			return dv.normalized()
+		idx += step
+	return Vector3.ZERO
+
+
+# Builds the edge's smoothed centerline curve, enforcing exact G1 tangent continuity across every plain
+# non-bare 2-edge node so double-track rails and trackbeds meet with 0.000m lateral gap/overlap on curves.
+static func _edge_smooth_curve(graph: NetworkGraph, eid: int) -> Curve3D:
 	if not graph.edges.has(eid):
 		return null
-	var pts2: Array = graph.edges[eid]["pts"]
+	var ed: Dictionary = graph.edges[eid]
+	var pts2: Array = ed["pts"]
 	if pts2.size() < 2:
 		return null
 	var raw3: Array = []
 	for p2: Vector2 in pts2:
 		raw3.append([p2.x, 0.0, p2.y])
 	var c := create_smooth_curve(raw3, false)
+	var n := c.point_count
+	if n < 2:
+		return null
+	var e_sys := edge_system(graph, eid)
+	for end_i in range(2):
+		var nid := int(ed["a"]) if end_i == 0 else int(ed["b"])
+		if (graph.adj.get(nid, []) as Array).size() >= 3:
+			continue
+		var info := node_track_info(graph, nid, e_sys)
+		if bool(info["bare"]):
+			continue
+		var el: Array = info["edges"]
+		if el.size() != 2:
+			continue
+		var other := int(el[0]) if int(el[1]) == eid else int(el[1])
+		var u_self := _edge_neighbor_dir(graph, eid, nid)
+		var u_other := _edge_neighbor_dir(graph, other, nid)
+		var diff := u_other - u_self
+		if diff.length_squared() < 0.04:
+			continue
+		var t_to_other := diff.normalized()
+		if end_i == 0:
+			var seg_len := c.get_point_position(0).distance_to(c.get_point_position(1))
+			c.set_point_in(0, Vector3.ZERO)
+			c.set_point_out(0, -t_to_other * (seg_len * 0.24))
+		else:
+			var seg_len := c.get_point_position(n - 1).distance_to(c.get_point_position(n - 2))
+			c.set_point_in(n - 1, -t_to_other * (seg_len * 0.24))
+			c.set_point_out(n - 1, Vector3.ZERO)
 	return c if c.get_baked_length() >= 2.0 else null
 
 
@@ -334,12 +389,12 @@ const CLEARANCE_MAX_EXTRA := 2.4
 
 
 static func _curve_clearance_sep_profile(curve: Curve3D, clen: float, base_sep: float) -> PackedFloat32Array:
-	var n := int(ceil(clen)) + 1
+	var n := maxi(2, int(ceil(clen)) + 1)
 	var need := PackedFloat32Array()
 	need.resize(n)
 	var l2 := CLEARANCE_DESIGN_CAR_LEN * CLEARANCE_DESIGN_CAR_LEN
 	for i in range(n):
-		var s := minf(float(i), clen)
+		var s := clen * float(i) / float(n - 1)
 		var fb := -sample_track_frame(curve, maxf(0.0, s - 2.0), clen, false).basis.z
 		var ff := -sample_track_frame(curve, minf(clen, s + 2.0), clen, false).basis.z
 		var chord := minf(clen, s + 2.0) - maxf(0.0, s - 2.0)
@@ -376,7 +431,8 @@ static func geom_sep_at(geom: Dictionary, s: float) -> float:
 	if not geom.has("sep_prof"):
 		return float(geom.get("sep", 0.0))
 	var prof: PackedFloat32Array = geom["sep_prof"]
-	var f := clampf(s, 0.0, float(prof.size() - 1))
+	var clen := maxf(float(geom.get("clen", 1.0)), 0.001)
+	var f := clampf(s / clen, 0.0, 1.0) * float(prof.size() - 1)
 	var i0 := int(floor(f))
 	var i1 := mini(i0 + 1, prof.size() - 1)
 	return lerpf(prof[i0], prof[i1], f - float(i0))
@@ -388,28 +444,146 @@ static func edge_crossover_span(graph: NetworkGraph, eid: int, geom: Dictionary)
 		return {}
 	if int(graph.crossovers.get(eid, NetworkGraph.CrossoverType.NONE)) <= NetworkGraph.CrossoverType.NONE:
 		return {}
-	var span := float(geom["s_end"]) - float(geom["s_start"])
+	var s0 := float(geom["s_start"])
+	var s1 := float(geom["s_end"])
+	var span := s1 - s0
 	if span < 10.0:
 		return {}
 	# Monorail beams sit 4.8m apart: a long beam switch keeps the S-bend gentle (real switches are long, slow)
 	var max_half := 20.0 if edge_system(graph, eid) == 1 else 9.5
+	var x_half := minf(max_half, span * 0.44)
+	var t_xo := clampf(float(graph.crossover_t.get(eid, 0.5)), 0.0, 1.0)
+	var clen := float(geom["clen"])
+	var s_min := s0 + x_half + 0.8
+	var s_max := s1 - x_half - 0.8
+	var s_mid := (s0 + s1) * 0.5 if s_min >= s_max else clampf(t_xo * clen, s_min, s_max)
 	return {
-		"s_mid": (float(geom["s_start"]) + float(geom["s_end"])) * 0.5,
-		"x_half": minf(max_half, span * 0.44),
+		"s_mid": s_mid,
+		"x_half": x_half,
 	}
+
+
+# Validates and computes exact placement for a crossover near cursor `t_val` along double-track `eid`.
+# Automatically snaps cleanly right outside an island-station track merge taper while strictly forbidding
+# any overlap with station platforms!
+static func compute_crossover_placement(graph: NetworkGraph, eid: int, t_val: float) -> Dictionary:
+	if not graph.built_tracks.has(eid) or not graph.edges.has(eid):
+		return {"valid": false, "reason": "no_track"}
+	if int(graph.built_track_modes.get(eid, NetworkGraph.TrackMode.SINGLE)) != NetworkGraph.TrackMode.DOUBLE:
+		return {"valid": false, "reason": "single_track"}
+	var geom := edge_track_geom(graph, eid)
+	if geom.is_empty():
+		return {"valid": false, "reason": "too_short"}
+	var s0 := float(geom["s_start"])
+	var s1 := float(geom["s_end"])
+	var clen := float(geom["clen"])
+	var span := s1 - s0
+	var is_mono := (edge_system(graph, eid) == 1)
+	var min_span := 26.0 if is_mono else 18.0
+	if span < min_span or float(graph.edges[eid]["length"]) < 22.0:
+		return {"valid": false, "reason": "too_short"}
+
+	var max_half := 20.0 if is_mono else 9.5
+	var x_half := minf(max_half, span * 0.44)
+	var s_min := s0 + x_half + 0.8
+	var s_max := s1 - x_half - 0.8
+	if s_min > s_max:
+		return {"valid": false, "reason": "too_short"}
+
+	var curve: Curve3D = geom["curve"]
+	var std_sep := MONORAIL_HALF_SEP if is_mono else NetworkGraph.DOUBLE_TRACK_HALF_SEP
+	var s_cand := clampf(t_val * clen, s_min, s_max)
+
+	# If tracks near this edge end are still tapering down from an adjacent island station,
+	# gently snap s_cand to the nearest point right where the twin tracks finish merging back together!
+	var check_clear := func(sc: float) -> String:
+		var tf_c := sample_track_frame(curve, sc, clen, false)
+		var pos_c := tf_c.origin
+		for sid: int in graph.stations.keys():
+			var st: Dictionary = graph.stations[sid]
+			var st_half := float(st.get("platform_len", 27.0)) * 0.5
+			if int(st["edge_id"]) == eid:
+				var st_s := clampf(float(st["t"]), 0.0, 1.0) * clen
+				var need_d := st_half + x_half + 2.0
+				if absf(sc - st_s) < need_d:
+					return "on_station"
+			else:
+				var st_pos: Vector3 = st["pos"]
+				if pos_c.distance_to(st_pos) < st_half + x_half + 1.5:
+					return "on_station"
+		return ""
+
+	var err: String = check_clear.call(s_cand)
+	# Also ensure the crossover doesn't sit in the widened splay zone right next to an island station;
+	# if the user hovered inside the taper, snap cleanly to the start of the merged straight throat!
+	if err == "" and (geom_sep_at(geom, s_cand - x_half) > std_sep + 0.22 or geom_sep_at(geom, s_cand + x_half) > std_sep + 0.22):
+		var best_s := -1.0
+		var best_d := 1e9
+		var probe := s_min
+		while probe <= s_max + 0.01:
+			var sp_p := minf(probe, s_max)
+			if geom_sep_at(geom, sp_p - x_half) <= std_sep + 0.22 and geom_sep_at(geom, sp_p + x_half) <= std_sep + 0.22:
+				if str(check_clear.call(sp_p)) == "":
+					var dd := absf(sp_p - s_cand)
+					if dd < best_d:
+						best_d = dd
+						best_s = sp_p
+			probe += 2.0
+		if best_s >= 0.0:
+			s_cand = best_s
+
+	err = check_clear.call(s_cand)
+	var tf_mid := sample_track_frame(curve, s_cand, clen, false)
+	if err != "":
+		return {
+			"valid": false,
+			"reason": err,
+			"s_mid": s_cand,
+			"t_clamped": s_cand / maxf(clen, 1.0),
+			"x_half": x_half,
+			"pos": tf_mid.origin,
+			"fwd": -tf_mid.basis.z,
+		}
+
+	return {
+		"valid": true,
+		"reason": "",
+		"s_mid": s_cand,
+		"t_clamped": s_cand / maxf(clen, 1.0),
+		"x_half": x_half,
+		"pos": tf_mid.origin,
+		"fwd": -tf_mid.basis.z,
+	}
+
+
+static func station_overlaps_crossover(
+	graph: NetworkGraph,
+	eid: int,
+	t_val: float,
+	_req_kind: int = NetworkGraph.StationKind.SIDE_SINGLE,
+	plat_len: float = 27.0
+) -> bool:
+	if not graph.crossovers.has(eid):
+		return false
+	var geom := edge_track_geom(graph, eid)
+	var xo := edge_crossover_span(graph, eid, geom)
+	if xo.is_empty():
+		return false
+	var st_s := clampf(t_val, 0.15, 0.85) * float(geom["clen"])
+	return absf(st_s - float(xo["s_mid"])) < (plat_len * 0.5) + float(xo["x_half"]) + 2.0
 
 
 # Cubic junction connector arc from rail end point `pa` (travelling along `ta`) to rail start `pb` (travelling along `tb`).
 static func junction_connector_curve(pa: Vector3, ta: Vector3, pb: Vector3, tb: Vector3) -> Curve3D:
 	var chord_d := pa.distance_to(pb)
-	if chord_d < 0.25:
+	if chord_d < 0.02:
 		return null
-	var h_len := clampf(chord_d * 0.42, 1.2, 9.5)
+	var h_len := minf(chord_d * 0.42, 9.5)
 	var j_curve := Curve3D.new()
 	j_curve.bake_interval = 0.35
 	j_curve.add_point(pa, Vector3.ZERO, ta.normalized() * h_len)
 	j_curve.add_point(pb, -tb.normalized() * h_len, Vector3.ZERO)
-	if j_curve.get_baked_length() < 0.35:
+	if j_curve.get_baked_length() < 0.02:
 		return null
 	return j_curve
 
@@ -431,13 +605,25 @@ static func sample_track_frame(curve: Curve3D, s: float, total_len: float, close
 	var s_behind := fposmod(s0 - ds, total_len) if closed_loop else maxf(s0 - ds, 0.0)
 
 	var pos := curve.sample_baked(s0, true)
-	var p_ahead := curve.sample_baked(s_ahead, true)
-	var p_behind := curve.sample_baked(s_behind, true)
-	var fwd := (p_ahead - p_behind)
+	var fwd := Vector3.ZERO
+	# Use exact analytical Bezier endpoint tangents at non-loop curve ends so meeting curves align to 0.000deg
+	if not closed_loop and curve.point_count >= 2:
+		if s0 <= 0.001:
+			var out0 := curve.get_point_out(0)
+			if out0.length_squared() > 1e-6:
+				fwd = out0.normalized()
+		elif s0 >= total_len - 0.001:
+			var in_last := curve.get_point_in(curve.point_count - 1)
+			if in_last.length_squared() > 1e-6:
+				fwd = (-in_last).normalized()
 	if fwd.length_squared() < 1e-6:
-		fwd = Vector3.FORWARD
-	else:
-		fwd = fwd.normalized()
+		var p_ahead := curve.sample_baked(s_ahead, true)
+		var p_behind := curve.sample_baked(s_behind, true)
+		fwd = (p_ahead - p_behind)
+		if fwd.length_squared() < 1e-6:
+			fwd = Vector3.FORWARD
+		else:
+			fwd = fwd.normalized()
 
 	var right := fwd.cross(Vector3.UP).normalized()
 	var up := right.cross(fwd).normalized()
@@ -525,6 +711,7 @@ static func build_network_tracks_and_stations(
 	# Exact saved endpoint Transform3D frames for every built edge (guarantees 0.000m rail gaps at corners!)
 	var edge_end_frames: Dictionary = {}
 	var edge_geoms: Dictionary = {}
+	var edge_eff_vignole: Dictionary = {}
 
 	# Extrude every built street edge with its own permanently saved bed_style & track_mode (single / double)
 	for eid: int in graph.built_tracks.keys():
@@ -563,6 +750,7 @@ static func build_network_tracks_and_stations(
 				eff_seg_st = BedStyle.ASPHALT
 
 		var vignole := is_vignole_style(eff_seg_st)
+		edge_eff_vignole[eid] = vignole
 		for i in range(frames.size() - 1):
 			var f0 := frames[i]
 			var f1 := frames[i + 1]
@@ -572,69 +760,81 @@ static func build_network_tracks_and_stations(
 			var sep := geom_sep_at(geom, (s0 + s1) * 0.5)
 			var sep_f0 := geom_sep_at(geom, s0)
 			var sep_f1 := geom_sep_at(geom, s1)
-			var track_offsets: Array[float] = [0.0]
-			if is_double:
-				track_offsets = [-sep, sep]
-
-			if eff_seg_st == BedStyle.GRASS_VIGNOLE:
-				for t_off: float in track_offsets:
-					var gf0 := f0; gf0.origin += f0.basis.x * t_off
-					var gf1 := f1; gf1.origin += f1.basis.x * t_off
-					_emit_turf_quad(grass_st, gf0, gf1, s0, s1, 1.38, 0.076)
-				if is_double and sep > 1.38 and sep < 2.2:
-					_emit_turf_quad_uv(grass_st, f0, f1, s0, s1, sep - 1.30, 0.075, 0.35)
-				has_grass = true
-				_extrude_open_profile(curb_st, f0, f1, _shift_prof(row_curb_l, -sep))
-				_extrude_open_profile(curb_st, f0, f1, _shift_prof(row_curb_r, sep))
-				has_curb = true
-			elif eff_seg_st == BedStyle.GRASS_EMBED:
-				for t_off: float in track_offsets:
-					var gf0 := f0; gf0.origin += f0.basis.x * t_off
-					var gf1 := f1; gf1.origin += f1.basis.x * t_off
-					_emit_turf_quad(grass_st, gf0, gf1, s0, s1, 1.36, 0.068)
-				if is_double and sep > 1.36 and sep < 2.2:
-					_emit_turf_quad_uv(grass_st, f0, f1, s0, s1, sep - 1.28, 0.067, 0.35)
-				has_grass = true
-				_extrude_open_profile(curb_st, f0, f1, _shift_prof(low_curb_l, -sep))
-				_extrude_open_profile(curb_st, f0, f1, _shift_prof(low_curb_r, sep))
-				has_curb = true
-			elif eff_seg_st == BedStyle.STONE_SLAB:
-				var w_stone_prof: Array[Vector2] = [
-					Vector2(-1.38 - sep, 0.044), Vector2(-1.34 - sep, 0.068),
-					Vector2(1.34 + sep, 0.068), Vector2(1.38 + sep, 0.044),
-				]
-				_extrude_open_profile(stone_st, f0, f1, w_stone_prof)
-				_extrude_open_profile(curb_st, f0, f1, _shift_prof(low_curb_l, -sep))
-				_extrude_open_profile(curb_st, f0, f1, _shift_prof(low_curb_r, sep))
-				has_stone = true
-				has_curb = true
-			elif eff_seg_st == BedStyle.BALLAST:
-				var w_bal_prof: Array[Vector2] = [
-					Vector2(-1.68 - sep, 0.040), Vector2(-1.32 - sep, 0.102),
-					Vector2(1.32 + sep, 0.102), Vector2(1.68 + sep, 0.040),
-				]
-				_extrude_open_profile(bal_st, f0, f1, w_bal_prof)
-				has_ballast = true
-			else:
-				for t_off: float in track_offsets:
-					for side: float in [-1.0, 1.0]:
-						var rx := t_off + side * RAIL_HALF_GAUGE
-						var col_prof: Array[Vector2] = [
-							Vector2(rx - 0.24, 0.045), Vector2(rx - 0.22, 0.062),
-							Vector2(rx + 0.22, 0.062), Vector2(rx + 0.24, 0.045),
-						]
-						_extrude_open_profile(collar_st, f0, f1, col_prof)
-				has_collar = true
-				if int(floor(s0 / 2.4)) % 2 == 0:
-					for side: float in [-1.0, 1.0]:
-						var lx := side * (1.40 + sep)
-						var m_prof: Array[Vector2] = [Vector2(lx - 0.065, 0.055), Vector2(lx + 0.065, 0.055)]
-						_extrude_open_profile(lane_mark_st, f0, f1, m_prof)
-					has_lane_mark = true
-
 			var lane_signs: Array[float] = [0.0]
 			if is_double:
 				lane_signs = [-1.0, 1.0]
+
+			if eff_seg_st == BedStyle.GRASS_VIGNOLE:
+				for lane_s: float in lane_signs:
+					var gf0 := f0; gf0.origin += f0.basis.x * (lane_s * sep_f0)
+					var gf1 := f1; gf1.origin += f1.basis.x * (lane_s * sep_f1)
+					_emit_turf_quad(grass_st, gf0, gf1, s0, s1, 1.38, 0.076)
+				if is_double and sep > 1.38 and sep < 2.2:
+					_emit_turf_quad_uv_var(grass_st, f0, f1, s0, s1, maxf(0.05, sep_f0 - 1.30), maxf(0.05, sep_f1 - 1.30), 0.075, 0.35)
+				has_grass = true
+				_extrude_open_profile_2(curb_st, f0, f1, _shift_prof(row_curb_l, -sep_f0), _shift_prof(row_curb_l, -sep_f1))
+				_extrude_open_profile_2(curb_st, f0, f1, _shift_prof(row_curb_r, sep_f0), _shift_prof(row_curb_r, sep_f1))
+				has_curb = true
+			elif eff_seg_st == BedStyle.GRASS_EMBED:
+				for lane_s: float in lane_signs:
+					var gf0 := f0; gf0.origin += f0.basis.x * (lane_s * sep_f0)
+					var gf1 := f1; gf1.origin += f1.basis.x * (lane_s * sep_f1)
+					_emit_turf_quad(grass_st, gf0, gf1, s0, s1, 1.36, 0.068)
+				if is_double and sep > 1.36 and sep < 2.2:
+					_emit_turf_quad_uv_var(grass_st, f0, f1, s0, s1, maxf(0.05, sep_f0 - 1.28), maxf(0.05, sep_f1 - 1.28), 0.067, 0.35)
+				has_grass = true
+				_extrude_open_profile_2(curb_st, f0, f1, _shift_prof(low_curb_l, -sep_f0), _shift_prof(low_curb_l, -sep_f1))
+				_extrude_open_profile_2(curb_st, f0, f1, _shift_prof(low_curb_r, sep_f0), _shift_prof(low_curb_r, sep_f1))
+				has_curb = true
+			elif eff_seg_st == BedStyle.STONE_SLAB:
+				var w_stone_p0: Array[Vector2] = [
+					Vector2(-1.38 - sep_f0, 0.044), Vector2(-1.34 - sep_f0, 0.068),
+					Vector2(1.34 + sep_f0, 0.068), Vector2(1.38 + sep_f0, 0.044),
+				]
+				var w_stone_p1: Array[Vector2] = [
+					Vector2(-1.38 - sep_f1, 0.044), Vector2(-1.34 - sep_f1, 0.068),
+					Vector2(1.34 + sep_f1, 0.068), Vector2(1.38 + sep_f1, 0.044),
+				]
+				_extrude_open_profile_2(stone_st, f0, f1, w_stone_p0, w_stone_p1)
+				_extrude_open_profile_2(curb_st, f0, f1, _shift_prof(low_curb_l, -sep_f0), _shift_prof(low_curb_l, -sep_f1))
+				_extrude_open_profile_2(curb_st, f0, f1, _shift_prof(low_curb_r, sep_f0), _shift_prof(low_curb_r, sep_f1))
+				has_stone = true
+				has_curb = true
+			elif eff_seg_st == BedStyle.BALLAST:
+				var w_bal_p0: Array[Vector2] = [
+					Vector2(-1.68 - sep_f0, 0.040), Vector2(-1.32 - sep_f0, 0.102),
+					Vector2(1.32 + sep_f0, 0.102), Vector2(1.68 + sep_f0, 0.040),
+				]
+				var w_bal_p1: Array[Vector2] = [
+					Vector2(-1.68 - sep_f1, 0.040), Vector2(-1.32 - sep_f1, 0.102),
+					Vector2(1.32 + sep_f1, 0.102), Vector2(1.68 + sep_f1, 0.040),
+				]
+				_extrude_open_profile_2(bal_st, f0, f1, w_bal_p0, w_bal_p1)
+				has_ballast = true
+			else:
+				for lane_s: float in lane_signs:
+					for side: float in [-1.0, 1.0]:
+						var rx0 := lane_s * sep_f0 + side * RAIL_HALF_GAUGE
+						var rx1 := lane_s * sep_f1 + side * RAIL_HALF_GAUGE
+						var col_p0: Array[Vector2] = [
+							Vector2(rx0 - 0.24, 0.045), Vector2(rx0 - 0.22, 0.062),
+							Vector2(rx0 + 0.22, 0.062), Vector2(rx0 + 0.24, 0.045),
+						]
+						var col_p1: Array[Vector2] = [
+							Vector2(rx1 - 0.24, 0.045), Vector2(rx1 - 0.22, 0.062),
+							Vector2(rx1 + 0.22, 0.062), Vector2(rx1 + 0.24, 0.045),
+						]
+						_extrude_open_profile_2(collar_st, f0, f1, col_p0, col_p1)
+				has_collar = true
+				if int(floor(s0 / 2.4)) % 2 == 0:
+					for side: float in [-1.0, 1.0]:
+						var lx0 := side * (1.40 + sep_f0)
+						var lx1 := side * (1.40 + sep_f1)
+						var m_p0: Array[Vector2] = [Vector2(lx0 - 0.065, 0.055), Vector2(lx0 + 0.065, 0.055)]
+						var m_p1: Array[Vector2] = [Vector2(lx1 - 0.065, 0.055), Vector2(lx1 + 0.065, 0.055)]
+						_extrude_open_profile_2(lane_mark_st, f0, f1, m_p0, m_p1)
+					has_lane_mark = true
+
 			for lane_s: float in lane_signs:
 				var sf0 := f0; sf0.origin += f0.basis.x * (lane_s * sep_f0)
 				var sf1 := f1; sf1.origin += f1.basis.x * (lane_s * sep_f1)
@@ -673,21 +873,28 @@ static func build_network_tracks_and_stations(
 						_extrude_open_profile(stone_st, prev_xf, xf, xo_bed_prof)
 						has_stone = true
 					prev_xf = xf
-			# Add amber switch indicator box beside the crossover midpoint
+			# Add amber switch indicator box beside the crossover midpoint (strictly clear of tracks)
 			var tf_xo_mid := sample_track_frame(curve, s_mid, clen, false)
-			var xo_box := MeshInstance3D.new()
-			var xo_bm := BoxMesh.new()
-			xo_bm.size = Vector3(0.46, 0.52, 0.46)
-			var xo_mat := StandardMaterial3D.new()
-			xo_mat.albedo_color = Color(0.96, 0.72, 0.12)
-			xo_mat.emission_enabled = true
-			xo_mat.emission = Color(0.96, 0.68, 0.10)
-			xo_mat.emission_energy_multiplier = 1.1
-			xo_bm.material = xo_mat
-			xo_box.mesh = xo_bm
-			xo_box.position = tf_xo_mid.origin + tf_xo_mid.basis.x * (geom_sep_at(geom, s_mid) + 1.55) + Vector3(0.0, 0.28, 0.0)
-			xo_box.visibility_range_end = 240.0
-			parent.add_child(xo_box)
+			var xo_sep := geom_sep_at(geom, s_mid)
+			var xo_pos := tf_xo_mid.origin + tf_xo_mid.basis.x * (xo_sep + 2.05) + Vector3(0.0, 0.28, 0.0)
+			if track_clearance_dist(clear_idx, Vector2(xo_pos.x, xo_pos.z)) < 1.95:
+				var alt_xo := tf_xo_mid.origin - tf_xo_mid.basis.x * (xo_sep + 2.05) + Vector3(0.0, 0.28, 0.0)
+				if track_clearance_dist(clear_idx, Vector2(alt_xo.x, alt_xo.z)) >= 1.95:
+					xo_pos = alt_xo
+			if track_clearance_dist(clear_idx, Vector2(xo_pos.x, xo_pos.z)) >= 1.95:
+				var xo_box := MeshInstance3D.new()
+				var xo_bm := BoxMesh.new()
+				xo_bm.size = Vector3(0.46, 0.52, 0.46)
+				var xo_mat := StandardMaterial3D.new()
+				xo_mat.albedo_color = Color(0.96, 0.72, 0.12)
+				xo_mat.emission_enabled = true
+				xo_mat.emission = Color(0.96, 0.68, 0.10)
+				xo_mat.emission_energy_multiplier = 1.1
+				xo_bm.material = xo_mat
+				xo_box.mesh = xo_bm
+				xo_box.position = xo_pos
+				xo_box.visibility_range_end = 240.0
+				parent.add_child(xo_box)
 
 		# Sleepers, Pandrol clips & ROW bollards on Vignole edges
 		if vignole:
@@ -799,7 +1006,7 @@ static func build_network_tracks_and_stations(
 					lanes = [-1.0, 1.0]
 				var bst_a := int(graph.built_tracks[ea])
 				var bst_b := int(graph.built_tracks[eb])
-				var vig_j := is_vignole_style(bst_a) and is_vignole_style(bst_b)
+				var vig_j := bool(edge_eff_vignole.get(ea, is_vignole_style(bst_a))) and bool(edge_eff_vignole.get(eb, is_vignole_style(bst_b)))
 				var is_real_road_int := ((graph.adj.get(nid, []) as Array).size() >= 3)
 				var keep_grass := (not is_real_road_int) and (not _is_bare_junction_node(graph, nid, e_list)) and (bst_a == BedStyle.GRASS_VIGNOLE or bst_a == BedStyle.GRASS_EMBED) and (bst_b == BedStyle.GRASS_VIGNOLE or bst_b == BedStyle.GRASS_EMBED)
 
@@ -938,7 +1145,7 @@ static func build_network_tracks_and_stations(
 		parent.add_child(a_inst)
 
 	# Build 3D Wayside Speed Limit Signs & Turnout Switch Indicators ahead of curves & turnouts!
-	_build_wayside_speed_signs(parent, graph, node_built_edges, cjk_font)
+	_build_wayside_speed_signs(parent, graph, node_built_edges, edge_geoms, clear_idx, st_positions, cjk_font)
 
 	# Build detailed 3D stations for every station in graph.stations!
 	var bays: Array = []
@@ -984,11 +1191,12 @@ static func station_bay(graph: NetworkGraph, st_d: Dictionary, sep_st: float) ->
 	var w := float(graph.edges[int(st_d["edge_id"])]["width"])
 	var hw := clampf(w * 0.5, 3.2, 10.5)
 	var kerb_rel := hw - sep_st
+	var bay_half := maxf(BAY_HALF, float(st_d.get("platform_len", 27.0)) * 0.5 + 3.5)
 	return {
 		"pos": st_d["pos"],
 		"fwd": fwd,
 		"out": out,
-		"half": BAY_HALF,
+		"half": bay_half,
 		"taper": BAY_TAPER,
 		"kerb_q": kerb_rel,
 		"bay_q": maxf(kerb_rel, BAY_KERB_Q),
@@ -1152,6 +1360,9 @@ static func _build_wayside_speed_signs(
 	parent: Node3D,
 	graph: NetworkGraph,
 	node_built_edges: Dictionary,
+	edge_geoms: Dictionary,
+	clear_idx: Dictionary,
+	st_positions: Array[Dictionary],
 	cjk_font: Font
 ) -> void:
 	var holder := Node3D.new()
@@ -1178,7 +1389,7 @@ static func _build_wayside_speed_signs(
 		var j_pos2: Vector2 = graph.nodes[nid]["pos"]
 		var j_pos3 := Vector3(j_pos2.x, 0.0, j_pos2.y)
 
-		# Check if a 2-edge node is a sharp corner (dot > -0.65 means turn >= ~50 deg)
+		# Check if a 2-edge node is a sharp corner (dot > -0.68 means turn >= ~47 deg)
 		var is_sharp_corner := false
 		if e_list.size() == 2:
 			var p0 := _edge_trim_point_near_node(graph, int(e_list[0]), nid, 8.0)
@@ -1191,38 +1402,92 @@ static func _build_wayside_speed_signs(
 		if not is_turnout and not is_sharp_corner:
 			continue
 
-		# Place illuminated ground switch-box indicator at every 3-way/4-way turnout!
+		# Place illuminated ground switch-box indicator beside every 3-way/4-way turnout, strictly clear of all rails!
 		if is_turnout:
-			var sw_box := MeshInstance3D.new()
-			var bm := BoxMesh.new()
-			bm.size = Vector3(0.42, 0.46, 0.42)
-			bm.material = amber_mat
-			sw_box.mesh = bm
-			sw_box.position = j_pos3 + Vector3(1.85, 0.28, 1.85)
-			sw_box.visibility_range_end = 180.0
-			holder.add_child(sw_box)
+			var sw_pos := Vector3.ZERO
+			var sw_ok := false
+			for r_sw: float in [4.2, 5.6, 7.0]:
+				for ai in range(8):
+					var ang := (float(ai) + 0.5) * (TAU / 8.0)
+					var cand := j_pos3 + Vector3(cos(ang) * r_sw, 0.28, sin(ang) * r_sw)
+					if track_clearance_dist(clear_idx, Vector2(cand.x, cand.z)) >= 1.95:
+						sw_pos = cand
+						sw_ok = true
+						break
+				if sw_ok:
+					break
+			if sw_ok:
+				var sw_box := MeshInstance3D.new()
+				var bm := BoxMesh.new()
+				bm.size = Vector3(0.42, 0.46, 0.42)
+				bm.material = amber_mat
+				sw_box.mesh = bm
+				sw_box.position = sw_pos
+				sw_box.visibility_range_end = 180.0
+				holder.add_child(sw_box)
 
-		# Place approach speed limit sign on each approaching built edge (~11m before junction)
+		# Place approach speed limit sign strictly BESIDE the outer rail on each approaching built edge!
 		for raw_eid in e_list:
 			var eid := int(raw_eid)
+			var geom: Dictionary = edge_geoms.get(eid, {})
+			if geom.is_empty():
+				continue
+			var curve: Curve3D = geom["curve"]
+			var clen := float(geom["clen"])
+			var s_lo := float(geom["s_start"])
+			var s_hi := float(geom["s_end"])
+			if s_hi - s_lo < 6.0 or clen < 20.0:
+				continue
 			var ed: Dictionary = graph.edges[eid]
-			var elen := float(ed["length"])
-			if elen < 22.0:
-				continue
 			var from_a := (int(ed["a"]) == nid)
-			var t_sign := minf(11.5 / elen, 0.35)
-			var smp := graph.sample_edge(eid, t_sign if from_a else (1.0 - t_sign))
-			var pos_s: Vector3 = smp["pos"]
-			var fwd_toward_j: Vector3 = -(smp["fwd"] as Vector3) if from_a else (smp["fwd"] as Vector3)
-			if fwd_toward_j.length_squared() < 0.01:
-				continue
-			fwd_toward_j = fwd_toward_j.normalized()
+			var s_sign := clampf(maxf(s_lo + 2.5, 11.5), s_lo + 1.0, s_hi - 1.0) if from_a else clampf(minf(s_hi - 2.5, clen - 11.5), s_lo + 1.0, s_hi - 1.0)
+			var tf_s := sample_track_frame(curve, s_sign, clen, false)
+			var pos_s := tf_s.origin
+			# Direction of a tram approaching junction `nid` along `eid`
+			var fwd_toward_j := (tf_s.basis.z if from_a else -tf_s.basis.z).normalized()
 			var right_v := fwd_toward_j.cross(Vector3.UP).normalized()
+			var sep_here := geom_sep_at(geom, s_sign) if bool(geom["is_double"]) else 0.0
+
+			# Place outside the outer rail curb (sep + 2.05m), stepping further outward if a curve/cross-track is near
+			var sign_pos := Vector3.ZERO
+			var sign_ok := false
+			var lat_candidates: Array[float] = [
+				sep_here + 2.05,
+				sep_here + 2.45,
+				sep_here + 2.95,
+				sep_here + 3.45,
+				-(sep_here + 2.05),
+				-(sep_here + 2.55),
+			]
+			for lat: float in lat_candidates:
+				var cand := pos_s + right_v * lat
+				if track_clearance_dist(clear_idx, Vector2(cand.x, cand.z)) < 1.95:
+					continue
+				# Also avoid planting a post inside a station platform
+				var hits_stn := false
+				for st_d: Dictionary in st_positions:
+					var st_p: Vector3 = st_d["pos"]
+					var st_half := float(st_d.get("platform_len", 27.0)) * 0.5 + 1.5
+					if cand.distance_to(st_p) < st_half:
+						var st_fw := (st_d["fwd"] as Vector3).normalized()
+						var rel := cand - st_p
+						var along := absf(rel.dot(st_fw))
+						var across := absf(rel.dot(st_fw.cross(Vector3.UP).normalized()))
+						if along < st_half and across < 5.2:
+							hits_stn = true
+							break
+				if hits_stn:
+					continue
+				sign_pos = cand
+				sign_ok = true
+				break
+			if not sign_ok:
+				continue
 
 			var sign_root := Node3D.new()
 			sign_root.transform = Transform3D(
 				Basis(right_v, Vector3.UP, -fwd_toward_j),
-				pos_s + right_v * 1.92
+				sign_pos
 			)
 			holder.add_child(sign_root)
 
@@ -1292,6 +1557,30 @@ static func _emit_turf_quad_uv(
 	grass_st.set_normal(up_n); grass_st.set_uv(Vector2(uv_hw, s1)); grass_st.add_vertex(v11)
 
 
+static func _emit_turf_quad_uv_var(
+	grass_st: SurfaceTool,
+	f0: Transform3D,
+	f1: Transform3D,
+	s0: float,
+	s1: float,
+	hw0: float,
+	hw1: float,
+	y_h: float,
+	uv_hw: float
+) -> void:
+	var v00 := f0 * Vector3(-hw0, y_h, 0.0)
+	var v01 := f0 * Vector3(hw0, y_h, 0.0)
+	var v11 := f1 * Vector3(hw1, y_h, 0.0)
+	var v10 := f1 * Vector3(-hw1, y_h, 0.0)
+	var up_n := f0.basis.y
+	grass_st.set_normal(up_n); grass_st.set_uv(Vector2(-uv_hw, s0)); grass_st.add_vertex(v00)
+	grass_st.set_normal(up_n); grass_st.set_uv(Vector2(uv_hw, s1)); grass_st.add_vertex(v11)
+	grass_st.set_normal(up_n); grass_st.set_uv(Vector2(uv_hw, s0)); grass_st.add_vertex(v01)
+	grass_st.set_normal(up_n); grass_st.set_uv(Vector2(-uv_hw, s0)); grass_st.add_vertex(v00)
+	grass_st.set_normal(up_n); grass_st.set_uv(Vector2(-uv_hw, s1)); grass_st.add_vertex(v10)
+	grass_st.set_normal(up_n); grass_st.set_uv(Vector2(uv_hw, s1)); grass_st.add_vertex(v11)
+
+
 static func _emit_turf_quad(
 	grass_st: SurfaceTool,
 	f0: Transform3D,
@@ -1320,16 +1609,28 @@ static func _extrude_open_profile(
 	f1: Transform3D,
 	prof: Array[Vector2]
 ) -> void:
-	for j in range(prof.size() - 1):
-		var a := prof[j]
-		var b := prof[j + 1]
-		var v00 := f0 * Vector3(a.x, a.y, 0.0)
-		var v01 := f0 * Vector3(b.x, b.y, 0.0)
-		var v11 := f1 * Vector3(b.x, b.y, 0.0)
-		var v10 := f1 * Vector3(a.x, a.y, 0.0)
-		var edge2 := b - a
+	_extrude_open_profile_2(st, f0, f1, prof, prof)
+
+
+static func _extrude_open_profile_2(
+	st: SurfaceTool,
+	f0: Transform3D,
+	f1: Transform3D,
+	prof0: Array[Vector2],
+	prof1: Array[Vector2]
+) -> void:
+	for j in range(prof0.size() - 1):
+		var a0 := prof0[j]
+		var b0 := prof0[j + 1]
+		var a1 := prof1[j]
+		var b1 := prof1[j + 1]
+		var v00 := f0 * Vector3(a0.x, a0.y, 0.0)
+		var v01 := f0 * Vector3(b0.x, b0.y, 0.0)
+		var v11 := f1 * Vector3(b1.x, b1.y, 0.0)
+		var v10 := f1 * Vector3(a1.x, a1.y, 0.0)
+		var edge2 := b0 - a0
 		var local_nrm := Vector3(-edge2.y, edge2.x, 0.0).normalized()
-		if local_nrm.y < 0.0 and absf(a.y - b.y) < 0.02:
+		if local_nrm.y < 0.0 and absf(a0.y - b0.y) < 0.02:
 			local_nrm = -local_nrm
 		var nrm := (f0.basis * local_nrm).normalized()
 		for v: Vector3 in [v00, v11, v01, v00, v10, v11]:
@@ -1584,6 +1885,7 @@ static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> vo
 	var hw := MONO_BEAM_W * 0.5
 	var any := false
 	var geoms := {}
+	var placed_piers: Array[Vector2] = []
 	for eid: int in graph.built_tracks.keys():
 		if not is_monorail_style(int(graph.built_tracks[eid])):
 			continue
@@ -1632,12 +1934,24 @@ static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> vo
 				var la := ln * geom_sep_at(g, sa)
 				var lb := ln * geom_sep_at(g, sb)
 				_mono_beam_segment(beam_st, rail_st, fa, fb, la, lb, top, bot, hw)
-		# T-piers every ~28m in the median (single column + cap beam under both guideways)
+		# T-piers every ~28m in the median — strictly under the actual beam(s) and CLEAR of intersections & crosswalks!
 		var ps := s0 + 9.0
-		while ps < s1 - 6.0:
-			var pf := sample_track_frame(c, ps, clen, false)
-			var sep := geom_sep_at(g, ps) if bool(g["is_double"]) else 0.0
-			_mono_pier(pier_st, pf, sep, bot)
+		while ps < s1 - 5.5:
+			if xo.is_empty() or ps < gap0 - 4.5 or ps > gap1 + 4.5:
+				for shift_s: float in [0.0, 4.5, -4.5, 9.0, -9.0]:
+					var cand_s := ps + shift_s
+					if cand_s < s0 + 4.5 or cand_s > s1 - 4.5:
+						continue
+					if not xo.is_empty() and cand_s >= gap0 - 4.5 and cand_s <= gap1 + 4.5:
+						continue
+					var pf := sample_track_frame(c, cand_s, clen, false)
+					var p2 := Vector2(pf.origin.x, pf.origin.z)
+					var fw2 := Vector2(-pf.basis.z.x, -pf.basis.z.z).normalized()
+					if _is_mono_pier_clear(graph, p2, eid, fw2, placed_piers, 13.0):
+						var sep := geom_sep_at(g, cand_s) if bool(g["is_double"]) else 0.0
+						_mono_pier(pier_st, pf, sep, bot)
+						placed_piers.append(p2)
+						break
 			ps += 28.0
 		# Monorail crossover = an articulated moving-beam switch: the anchored guideway's beam over this span
 		# flexes across to the other guideway when a train needs to cross (driven by TransitSim).
@@ -1662,10 +1976,15 @@ static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> vo
 			switch_setup.append([sw, frames_sw, seps_sw, sig_frames, sig_seps])
 			for se: float in [gap0, gapm, gap1]:
 				var pf := sample_track_frame(c, se, clen, false)
-				_mono_pier(pier_st, pf, geom_sep_at(g, se), bot)
-				var mb := pf
-				mb.origin += Vector3.UP * (bot - 0.75)
-				_mono_box(pier_st, mb, Vector3(2.0 * geom_sep_at(g, se) + 1.2, 0.5, 2.2))
+				var p2 := Vector2(pf.origin.x, pf.origin.z)
+				var fw2 := Vector2(-pf.basis.z.x, -pf.basis.z.z).normalized()
+				if _is_mono_pier_clear(graph, p2, eid, fw2, placed_piers, 6.0):
+					var sep_sw := geom_sep_at(g, se) if bool(g["is_double"]) else 0.0
+					_mono_pier(pier_st, pf, sep_sw, bot)
+					var mb := pf
+					mb.origin += Vector3.UP * (bot - 0.75)
+					_mono_box(pier_st, mb, Vector3(2.0 * sep_sw + 1.2, 0.5, 2.2))
+					placed_piers.append(p2)
 	if not any:
 		return
 	# Junction connectors between monorail edges (same rule as the route compiler)
@@ -1712,8 +2031,8 @@ static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> vo
 						var f := sample_track_frame(jc, jl * float(k) / float(jn), jl, false)
 						_mono_beam_segment(beam_st, rail_st, prev_f, f, 0.0, 0.0, top, bot, hw)
 						prev_f = f
-				var mid_f := sample_track_frame(ga["curve"], s_a, float(ga["clen"]), false)
-				_mono_pier(pier_st, mid_f, 0.0, bot)
+				# Do NOT drop a junction pier at s_a (it sits on the crosswalk/intersection with sep=0 between beams!)
+				# Adjacent mid-block piers cleanly support the beam span across intersections.
 	beam_st.generate_normals()
 	var bm := StandardMaterial3D.new()
 	bm.albedo_color = Color(0.80, 0.79, 0.76)
@@ -1770,6 +2089,59 @@ static func _mono_beam_segment(beam_st: SurfaceTool, rail_st: SurfaceTool, fa: T
 		var q2 := [c.call(ca, ra, x, top - 0.25), c.call(cb, rb, x, top - 0.25), c.call(cb, rb, x, top - 0.45), c.call(ca, ra, x, top - 0.45)]
 		for idx: int in ([0, 1, 2, 0, 2, 3] if sd > 0.0 else [0, 2, 1, 0, 3, 2]):
 			rail_st.add_vertex(q2[idx])
+
+
+static func _is_mono_pier_clear(
+	graph: NetworkGraph,
+	p2: Vector2,
+	own_eid: int,
+	beam_fwd_xz: Vector2,
+	placed_piers: Array[Vector2],
+	min_pier_gap: float
+) -> bool:
+	# 1. Never clump duplicate piers too close together
+	for ep: Vector2 in placed_piers:
+		if p2.distance_squared_to(ep) < min_pier_gap * min_pier_gap:
+			return false
+
+	# 2. Never place a pier inside ANY street intersection or on its crosswalk zebra stripes!
+	for nid: int in graph.nodes.keys():
+		var np: Vector2 = graph.nodes[nid]["pos"]
+		var deg := (graph.adj.get(nid, []) as Array).size()
+		if deg >= 3:
+			var clr := _node_intersection_trim(graph, nid) + 6.0
+			if p2.distance_squared_to(np) < clr * clr:
+				return false
+		elif deg == 2:
+			var nbs: Array = graph.adj[nid]
+			if _is_bare_junction_node(graph, nid, [int(nbs[0]["edge_id"]), int(nbs[1]["edge_id"])]):
+				if p2.distance_squared_to(np) < 9.5 * 9.5:
+					return false
+
+	# 3. Never drop a pier onto a crossing / side street roadway or crosswalk!
+	for other_eid: int in graph.edges.keys():
+		if other_eid == own_eid:
+			continue
+		var oe: Dictionary = graph.edges[other_eid]
+		var pts: Array = oe["pts"]
+		var hw := float(oe.get("width", 12.0)) * 0.5
+		var clr_d := hw + 4.8
+		for i in range(pts.size() - 1):
+			var a: Vector2 = pts[i]
+			var b: Vector2 = pts[i + 1]
+			var d := b - a
+			var slen := d.length()
+			if slen < 0.2:
+				continue
+			var sdir := d / slen
+			# Skip collinear continuation segments of the same street; strictly avoid cross streets!
+			if absf(sdir.dot(beam_fwd_xz)) > 0.85:
+				continue
+			var q := Geometry2D.get_closest_point_to_segment(p2, a, b)
+			if p2.distance_squared_to(q) < clr_d * clr_d:
+				return false
+
+	return true
 
 
 static func _mono_pier(st: SurfaceTool, f: Transform3D, sep: float, bot: float) -> void:

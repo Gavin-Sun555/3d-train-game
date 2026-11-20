@@ -27,7 +27,8 @@ static func build_detailed_station(
 
 	var is_island := (int(side) == 0)
 	var plat_h := 0.30 + maxf(0.0, rail_top_y - TrackBuilder.EMBED_RAIL_TOP)
-	var plat_len := 27.0
+	var plat_len := clampf(float(st_data.get("platform_len", 27.0)), 20.0, 56.0)
+	var plat_half := plat_len * 0.5
 	var plat_w := 3.10 if is_island else 2.95
 	var inner_edge_x := (-plat_w * 0.5) if is_island else (side * 1.46)
 	var plat_cx := 0.0 if is_island else (inner_edge_x + side * (plat_w * 0.5))
@@ -43,9 +44,12 @@ static func build_detailed_station(
 	if elevated:
 		_box(st_node, Vector3(plat_w, 0.55, plat_len), Vector3(plat_cx, plat_h - 0.275, 0.0), mats["paver"])
 		_box(st_node, Vector3(plat_w + 0.3, 0.35, plat_len + 0.3), Vector3(plat_cx, plat_h - 0.72, 0.0), mats["coping"])
-		for cz in range(-12, 13, 6):
+		var pier_end := plat_half - 1.5
+		var n_piers := maxi(3, int(round(plat_len / 6.0)) + 1)
+		for pi_ in range(n_piers):
+			var cz := lerpf(-pier_end, pier_end, float(pi_) / float(n_piers - 1))
 			for cx_off: float in ([-0.8, 0.8] if plat_w > 2.0 else [0.0]):
-				_cyl(st_node, 0.32, plat_h - 0.9, Vector3(plat_cx + cx_off, (plat_h - 0.9) * 0.5, float(cz)), mats["coping"])
+				_cyl(st_node, 0.32, plat_h - 0.9, Vector3(plat_cx + cx_off, (plat_h - 0.9) * 0.5, cz), mats["coping"])
 	else:
 		_box(st_node, Vector3(plat_w, plat_h, plat_len), Vector3(plat_cx, plat_h * 0.5, 0.0), mats["paver"])
 	var edges: Array[float] = []
@@ -61,14 +65,18 @@ static func build_detailed_station(
 		var rub_h := 0.5 if elevated else plat_h * 0.7
 		_box(st_node, Vector3(0.04, rub_h, plat_len), Vector3(edge_x + track_dir * 0.005, plat_h - rub_h * 0.5 - 0.04, 0.0), mats["rubber"])
 		_box(st_node, Vector3(0.30, 0.012, plat_len - 0.6), Vector3(edge_x - track_dir * 0.55, plat_top + 0.006, 0.0), mats["tactile"])
-		# Door-position boarding marks every 0.25 platform length
-		for mz: float in [-9.6, -3.2, 3.2, 9.6]:
+		# Door-position boarding marks evenly distributed along the platform
+		var n_marks := maxi(4, int(round(plat_len / 6.4)))
+		var mark_span := plat_half - 3.6
+		for mi_m in range(n_marks):
+			var mz := lerpf(-mark_span, mark_span, float(mi_m) / float(n_marks - 1))
 			_box(st_node, Vector3(0.36, 0.008, 1.3), Vector3(edge_x - track_dir * 0.98, plat_top + 0.004, mz), mats["mark"])
 	# Back/outer edge: low granite kerb + stainless guardrail with glass infill (side platforms)
 	if not is_island:
 		var rail_x := outer_edge_x - side * 0.08
 		_box(st_node, Vector3(0.16, 0.12, plat_len), Vector3(outer_edge_x - side * 0.08, plat_top + 0.06, 0.0), mats["coping"])
-		for gz: float in [-11.0, 11.0]:
+		var gz_end := plat_half - 2.5
+		for gz: float in [-gz_end, gz_end]:
 			_box(st_node, Vector3(0.05, 0.05, 4.6), Vector3(rail_x, plat_top + 1.05, gz), mats["stainless"])
 			_box(st_node, Vector3(0.02, 0.86, 4.5), Vector3(rail_x, plat_top + 0.58, gz), mats["glass"])
 			for pz: float in [-2.25, 0.0, 2.25]:
@@ -104,12 +112,15 @@ static func build_detailed_station(
 			hr.rotation.x = end_sign * ramp_angle
 
 	# 3. Shelter: round steel columns, thick roof with accent fascia + light soffit + LED strips, framed glass walls
-	var sh_half := 8.4
+	var sh_half := clampf(plat_half - 5.1, 7.5, 22.0)
 	var roof_y := plat_top + 2.95
 	var roof_w := 2.6 if is_island else 2.55
 	var roof_cx := 0.0 if is_island else (outer_edge_x - side * (roof_w * 0.5 - 0.05))
 	var col_x := 0.0 if is_island else (outer_edge_x - side * 0.42)
-	for cz: float in [-7.4, -2.5, 2.5, 7.4]:
+	var n_cols := maxi(4, int(round((sh_half * 2.0) / 5.2)) + 1)
+	var col_span := sh_half - 1.0
+	for ci_ in range(n_cols):
+		var cz := lerpf(-col_span, col_span, float(ci_) / float(n_cols - 1))
 		_cyl(st_node, 0.085, 2.95, Vector3(col_x, plat_top + 1.475, cz), mats["steel_dark"])
 		_box(st_node, Vector3(0.34, 0.025, 0.34), Vector3(col_x, plat_top + 0.012, cz), mats["steel_dark"])
 		_box(st_node, Vector3(roof_w - 0.3, 0.10, 0.12), Vector3(roof_cx, roof_y - 0.14, cz), mats["steel_dark"])
@@ -130,7 +141,7 @@ static func build_detailed_station(
 
 	# Framed glass windscreen (back wall on side platforms / spine on islands) with frit band
 	var wall_x := 0.0 if is_island else (outer_edge_x - side * 0.22)
-	var pan_n := 10
+	var pan_n := maxi(8, int(round((sh_half * 2.0) / 1.7)))
 	var pan_len := (sh_half * 2.0 - 0.4) / float(pan_n)
 	var z0 := -sh_half + 0.2
 	_box(st_node, Vector3(0.07, 0.07, sh_half * 2.0 - 0.4), Vector3(wall_x, plat_top + 0.12, 0.0), mats["frame"])
@@ -171,27 +182,32 @@ static func build_detailed_station(
 		for hz2: float in [-4.4, -3.2]:
 			_cyl(st_node, 0.012, 0.22, Vector3(bx, roof_y - 0.17, hz2), mats["steel_dark"])
 
-	# 5. Furniture
+	# 5. Furniture (scales proportionally with platform length)
+	var furn_n := maxi(3, int(round((sh_half * 2.0) / 5.4)))
+	var furn_span := sh_half - 2.6
 	if is_island:
 		# Leaning rails along the spine (islands are too narrow for benches)
-		for lz: float in [-5.0, 0.6, 5.6]:
+		for fi_ in range(furn_n):
+			var lz := lerpf(-furn_span, furn_span, float(fi_) / float(furn_n - 1))
 			for ls: float in [-1.0, 1.0]:
 				_box(st_node, Vector3(0.10, 0.07, 2.2), Vector3(ls * 0.12, plat_top + 0.78, lz), mats["wood"])
 			for lp: float in [-0.9, 0.9]:
 				_box(st_node, Vector3(0.18, 0.78, 0.05), Vector3(0.0, plat_top + 0.39, lz + lp), mats["steel_dark"])
 	else:
 		var bench_x := outer_edge_x - side * 0.72
-		for bz: float in [-4.9, 0.2, 4.9]:
+		for fi_ in range(furn_n):
+			var bz := lerpf(-furn_span, furn_span, float(fi_) / float(furn_n - 1))
 			_build_bench(st_node, Vector3(bench_x, plat_top, bz), side, mats)
 		# Litter + recycling bins
-		for bin_z: float in [-6.6, 6.6]:
+		var bin_off := sh_half - 1.6
+		for bin_z: float in [-bin_off, bin_off]:
 			_cyl(st_node, 0.24, 0.86, Vector3(bench_x, plat_top + 0.43, bin_z), mats["steel_dark"])
 			_cyl(st_node, 0.255, 0.07, Vector3(bench_x, plat_top + 0.88, bin_z), mats["stainless"])
 			_cyl(st_node, 0.245, 0.10, Vector3(bench_x, plat_top + 0.62, bin_z), mats["accent"])
 	# Ticket vending machine (outside shelter)
 	var tvm_x := 0.0 if is_island else (outer_edge_x - side * 0.55)
 	var tvm_face := 1.0 if is_island else -side
-	var tvm_z := -10.2
+	var tvm_z := -(sh_half + 1.8)
 	_box(st_node, Vector3(0.62, 1.70, 0.95), Vector3(tvm_x, plat_top + 0.85, tvm_z), mats["steel_dark"])
 	_box(st_node, Vector3(0.66, 0.34, 0.99), Vector3(tvm_x, plat_top + 1.88, tvm_z), mats["accent"])
 	var scr := _box(st_node, Vector3(0.05, 0.42, 0.56), Vector3(tvm_x + tvm_face * 0.31, plat_top + 1.32, tvm_z - 0.1), mats["tvm_screen"])
@@ -201,7 +217,8 @@ static func build_detailed_station(
 	_box(st_node, Vector3(0.04, 0.12, 0.3), Vector3(tvm_x + tvm_face * 0.32, plat_top + 0.55, tvm_z), mats["black"])
 	_label(st_node, "TICKETS", Vector3(tvm_x + tvm_face * 0.34, plat_top + 1.88, tvm_z), tvm_face * -90.0 + 180.0, 40, 0.004, Color(1, 1, 1), null)
 	# Card validators at both entries
-	for vz: float in [-12.0, 12.0]:
+	var val_z := plat_half - 1.5
+	for vz: float in [-val_z, val_z]:
 		var vx := 0.0 if is_island else (outer_edge_x - side * 0.6)
 		_cyl(st_node, 0.06, 1.05, Vector3(vx, plat_top + 0.525, vz), mats["steel_dark"])
 		var vh := _box(st_node, Vector3(0.20, 0.30, 0.16), Vector3(vx, plat_top + 1.15, vz), mats["accent"])
@@ -215,12 +232,14 @@ static func build_detailed_station(
 	_box(st_node, Vector3(0.17, 0.07, 0.07), Vector3(col_x + (0.0 if is_island else -side * 0.12), plat_top + 1.30, -2.5), mats["red_btn"])
 	# Station totem with lit "T" roundel
 	var pylon_x := 0.0 if is_island else (outer_edge_x - side * 0.4)
-	_box(st_node, Vector3(0.24, 3.4, 0.6), Vector3(pylon_x, plat_top + 1.7, 10.9), mats["sign_blue"])
-	_box(st_node, Vector3(0.26, 0.56, 0.5), Vector3(pylon_x, plat_top + 2.95, 10.9), mats["fascia_white"])
-	_label(st_node, "T", Vector3(pylon_x + 0.14, plat_top + 2.95, 10.9), 90.0, 120, 0.004, Color(0.08, 0.3, 0.6), null)
-	_label(st_node, "T", Vector3(pylon_x - 0.14, plat_top + 2.95, 10.9), -90.0, 120, 0.004, Color(0.08, 0.3, 0.6), null)
+	var pylon_z := sh_half + 2.5
+	_box(st_node, Vector3(0.24, 3.4, 0.6), Vector3(pylon_x, plat_top + 1.7, pylon_z), mats["sign_blue"])
+	_box(st_node, Vector3(0.26, 0.56, 0.5), Vector3(pylon_x, plat_top + 2.95, pylon_z), mats["fascia_white"])
+	_label(st_node, "T", Vector3(pylon_x + 0.14, plat_top + 2.95, pylon_z), 90.0, 120, 0.004, Color(0.08, 0.3, 0.6), null)
+	_label(st_node, "T", Vector3(pylon_x - 0.14, plat_top + 2.95, pylon_z), -90.0, 120, 0.004, Color(0.08, 0.3, 0.6), null)
 	# Platform lamp posts at both ends
-	for lpz: float in [-12.6, 12.6]:
+	var lp_end := plat_half - 0.9
+	for lpz: float in [-lp_end, lp_end]:
 		var lpx := 0.0 if is_island else (outer_edge_x - side * 0.25)
 		_cyl(st_node, 0.06, 4.6, Vector3(lpx, plat_top + 2.3, lpz), mats["steel_dark"])
 		var arm_dir := 0.0 if is_island else -side
@@ -268,12 +287,14 @@ static func build_detailed_station(
 		st_node.add_child(light)
 		station_lights.append(light)
 
-	# Precompute 20 world-space passenger waiting positions safely behind the yellow line
+	# Precompute world-space passenger waiting positions along the full platform length safely behind the yellow line
 	var waiting_slots: Array[Vector3] = []
+	var slot_cols := maxi(10, int(round(plat_len / 2.2)))
+	var slot_span := plat_half - 4.2
 	for row_i in range(2):
 		var wx_local := (-0.68 if row_i == 0 else 0.68) if is_island else (inner_edge_x + side * (0.88 + float(row_i) * 0.68))
-		for col_i in range(10):
-			var wz_local := -8.2 + float(col_i) * 1.82 + float(row_i) * 0.45
+		for col_i in range(slot_cols):
+			var wz_local := lerpf(-slot_span, slot_span, float(col_i) / float(slot_cols - 1)) + float(row_i) * 0.35
 			waiting_slots.append(tf * Vector3(wx_local, plat_h, wz_local))
 
 	var ramp_world := tf * Vector3(plat_cx, 0.04, (plat_len * 0.5 + ramp_len + 1.0))
@@ -289,6 +310,7 @@ static func build_detailed_station(
 		"fwd": fwd,
 		"side": side,
 		"plat_h": plat_h,
+		"platform_len": plat_len,
 		"waiting_slots": waiting_slots,
 		"ramp_entry": ramp_world,
 		"board_edge": board_edge_center,

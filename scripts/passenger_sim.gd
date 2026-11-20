@@ -35,6 +35,8 @@ var _acc_mats: Array[Material] = []
 var _phone_mat: StandardMaterial3D
 var _screen_mat: StandardMaterial3D
 var _sneaker_mat: StandardMaterial3D
+var _zipper_mat: StandardMaterial3D
+var _strap_mat: StandardMaterial3D
 
 var _leg_mesh: CapsuleMesh
 var _shoe_mesh: CapsuleMesh
@@ -153,8 +155,15 @@ func _ready() -> void:
 	_sneaker_mat.albedo_color = Color(0.88, 0.88, 0.86)
 	_sneaker_mat.roughness = 0.7
 	_shirt_mat = StandardMaterial3D.new()
-	_shirt_mat.albedo_color = Color(0.86, 0.86, 0.84)
-	_shirt_mat.roughness = 0.85
+	_shirt_mat.albedo_color = Color(0.88, 0.87, 0.85)
+	_shirt_mat.roughness = 0.86
+	_zipper_mat = StandardMaterial3D.new()
+	_zipper_mat.albedo_color = Color(0.64, 0.66, 0.70)
+	_zipper_mat.metallic = 0.72
+	_zipper_mat.roughness = 0.34
+	_strap_mat = StandardMaterial3D.new()
+	_strap_mat.albedo_color = Color(0.15, 0.15, 0.17)
+	_strap_mat.roughness = 0.78
 
 	_leg_mesh = CapsuleMesh.new()
 	_leg_mesh.radius = 0.056; _leg_mesh.height = 0.43; _leg_mesh.radial_segments = 10; _leg_mesh.rings = 4
@@ -249,11 +258,17 @@ func step_simulation(dt: float, graph: NetworkGraph) -> void:
 
 # Called by TransitSim when a tram has open doors at `station_id`.
 # Handles alighting passengers AND visible multi-waypoint boarding through the open tram doors!
+# At turnback terminals:
+#   Phase 1 (before cab change): allow_alight=true, allow_board=false, force_alight_all=true  (只下不上，全员清客)
+#   Phase 2 (after cab change):  allow_alight=false, allow_board=true, force_alight_all=false (只上车)
 func exchange_passengers_at_station(
 	tram_state: Dictionary,
 	station_id: int,
 	upcoming_sids: Array[int],
-	dt: float
+	dt: float,
+	allow_alight: bool = true,
+	allow_board: bool = true,
+	force_alight_all: bool = false
 ) -> void:
 	if not _station_views.has(station_id):
 		return
@@ -262,19 +277,21 @@ func exchange_passengers_at_station(
 	if portals.is_empty():
 		return
 
-	# ~7.5 passengers/sec with every doorway on the platform side open; a badly placed stop that lines up
-	# fewer doorways with the platform exchanges proportionally slower (one door ~ a third of the rate).
+	# ~7.5 passengers/sec normally (~11.0/sec during terminal full-train evacuation so packed monorails clear briskly)
 	var n_open := maxi(1, portals.size())
 	var n_total := maxi(n_open, int(tram_state.get("total_doorways", n_open)))
-	var xfer_rate := 7.5 * float(n_open) / float(n_total)
+	var base_rate := 11.0 if force_alight_all else 7.5
+	var xfer_rate := base_rate * float(n_open) / float(n_total)
 	tram_state["pax_xfer_accum"] = float(tram_state.get("pax_xfer_accum", 0.0)) + dt * xfer_rate
 	while float(tram_state["pax_xfer_accum"]) >= 1.0:
 		var did_work := false
 		var onboard_list: Array = tram_state["pax_dests"]
 		var lid_t := int(tram_state.get("line_id", 0))
-		var alight_idx := onboard_list.find(station_id)
-		if alight_idx < 0 and upcoming_sids.is_empty() and not onboard_list.is_empty():
-			alight_idx = 0
+		var alight_idx := -1
+		if allow_alight:
+			alight_idx = onboard_list.find(station_id)
+			if alight_idx < 0 and (force_alight_all or upcoming_sids.is_empty()) and not onboard_list.is_empty():
+				alight_idx = 0
 
 		if alight_idx >= 0:
 			onboard_list.remove_at(alight_idx)
@@ -286,7 +303,7 @@ func exchange_passengers_at_station(
 			var p_info: Dictionary = portals[_rng.randi() % portals.size()]
 			_spawn_alighting_walker(p_info, sview)
 			did_work = true
-		else:
+		elif allow_board:
 			var cap: int = int(tram_state["capacity"])
 			var pending_n: int = int(tram_state.get("pending_boarders", 0))
 			if onboard_list.size() + pending_n < cap and station_queues.has(station_id):
@@ -668,61 +685,56 @@ func _create_3d_person(world_pos: Vector3) -> Dictionary:
 		var skirt_mat: Material = coat_mat if arch == 2 else _coat_mats[_rng.randi() % _coat_mats.size()]
 		_inst(root, HumanMeshGen.get_skirt_mesh(_rng.randf() < 0.45), Vector3(0.0, 0.90, 0.0), skirt_mat)
 	elif arch != 2:
-		_box(torso, Vector3(0.30, 0.032, 0.20), Vector3(0.0, -0.22, 0.0), _belt_mat)
-	_box(torso, Vector3(0.088, 0.095, 0.145), Vector3(0.0, 0.21, -0.02), _shirt_mat)
-	# Collar, front placket/zip and patch pockets
-	var trim_mat: Material = _acc_mats[0] if _rng.randf() < 0.5 else _shirt_mat
-	var collar := _inst(torso, _hair_dome_mesh, Vector3(0.0, 0.255, 0.0), coat_mat)
-	collar.scale = Vector3(0.95, 0.32, 0.82)
-	_box(torso, Vector3(0.012, 0.40, 0.008), Vector3(0.0, 0.02, -0.112), trim_mat)
-	if arch != 2:
-		for pk: float in [-1.0, 1.0]:
-			_box(torso, Vector3(0.075, 0.008, 0.012), Vector3(pk * 0.085, -0.13, -0.108), trim_mat)
+		_inst(torso, HumanMeshGen.get_belt_mesh(arch), Vector3.ZERO, _belt_mat)
+
+	# Surface-conforming tailored collar, inner shirt V-neck & subtle metallic zipper (zero floating bars!)
+	_inst(torso, HumanMeshGen.get_collar_mesh(arch), Vector3.ZERO, coat_mat)
+	_inst(torso, HumanMeshGen.get_shirt_vneck_mesh(arch), Vector3.ZERO, _shirt_mat)
+	if arch == 1 or _rng.randf() < 0.45:
+		_inst(torso, HumanMeshGen.get_zipper_mesh(arch), Vector3.ZERO, _zipper_mat)
+
 	var bag_mat: Material = _acc_mats[_rng.randi() % _acc_mats.size()]
 	var bag_roll := _rng.randf()
-	if arch == 3 or bag_roll < 0.30:
-		# Rounded daypack with shoulder straps
-		var bp := _inst(torso, _torso_mesh, Vector3(0.0, 0.0, 0.16), bag_mat)
-		bp.scale = Vector3(0.92, 0.66, 0.42)
-		_box(torso, Vector3(0.20, 0.10, 0.03), Vector3(0.0, -0.10, 0.215), bag_mat)
-		for bs: float in [-1.0, 1.0]:
-			_box(torso, Vector3(0.035, 0.012, 0.12), Vector3(bs * 0.085, 0.235, 0.09), bag_mat)
-	elif bag_roll < 0.52:
-		# Cross-body shoulder bag / tote at the hip
+	if arch == 3 or bag_roll < 0.32:
+		# High-precision contoured commuter backpack + metallic zipper trims + ergonomic S-curved shoulder straps
+		_inst(torso, HumanMeshGen.get_backpack_body_mesh(), Vector3.ZERO, bag_mat)
+		_inst(torso, HumanMeshGen.get_backpack_trim_mesh(), Vector3.ZERO, _zipper_mat)
+		_inst(torso, HumanMeshGen.get_backpack_straps_mesh(arch), Vector3.ZERO, _strap_mat)
+	elif bag_roll < 0.54:
+		# Sculpted leather/canvas commuter messenger bag + body-hugging curved crossbody strap
 		var hip_s := -1.0 if _rng.randf() < 0.5 else 1.0
-		_box(torso, Vector3(0.07, 0.24, 0.30), Vector3(hip_s * 0.215, -0.30, 0.0), bag_mat)
-		var strap := _box(torso, Vector3(0.012, 0.66, 0.03), Vector3(0.0, 0.0, -0.118), bag_mat)
-		strap.rotation.z = hip_s * deg_to_rad(38.0)
-		var strap_b := _box(torso, Vector3(0.012, 0.66, 0.03), Vector3(0.0, 0.0, 0.118), bag_mat)
-		strap_b.rotation.z = hip_s * deg_to_rad(38.0)
+		_inst(torso, HumanMeshGen.get_messenger_bag_mesh(), Vector3(hip_s * 0.205, -0.29, 0.015), bag_mat)
+		_inst(torso, HumanMeshGen.get_crossbody_strap_mesh(arch, hip_s), Vector3.ZERO, _strap_mat)
 
-	# Articulated Left & Right Arms (Sculpted Upper Arm + Elbow Hinge + Sculpted Forearm + Hand)
-	var sh_x := 0.185 if arch == 2 else 0.205
+	# Articulated Left & Right Arms (Rounded Deltoid Shoulder Cap + Elbow Hinge + Forearm + Sculpted Hand)
+	var hand_m := HumanMeshGen.get_hand_mesh()
+	var sh_x := 0.166 if arch == 2 else 0.182
 	var arm_l := Node3D.new()
-	arm_l.position = Vector3(-sh_x, 0.20, 0.0)
+	arm_l.position = Vector3(-sh_x, 0.175, 0.0)
+	arm_l.rotation.z = deg_to_rad(-3.5)
 	torso.add_child(arm_l)
-	_inst(arm_l, uarm_m, Vector3(0.0, -0.13, 0.0), coat_mat)
+	_inst(arm_l, uarm_m, Vector3(0.0, -0.125, 0.0), coat_mat)
 	var elbow_l := Node3D.new()
-	elbow_l.position = Vector3(0.0, -0.26, 0.0)
-	elbow_l.rotation.x = deg_to_rad(-8.0)
+	elbow_l.position = Vector3(0.0, -0.255, 0.0)
+	elbow_l.rotation.x = deg_to_rad(-9.0)
 	arm_l.add_child(elbow_l)
 	_inst(elbow_l, farm_m, Vector3(0.0, -0.13, 0.0), coat_mat)
-	_inst(elbow_l, _hand_mesh, Vector3(0.0, -0.265, 0.0), skin_mat)
+	_inst(elbow_l, hand_m, Vector3(0.0, -0.275, 0.0), skin_mat)
 
 	var arm_r := Node3D.new()
-	arm_r.position = Vector3(sh_x, 0.20, 0.0)
+	arm_r.position = Vector3(sh_x, 0.175, 0.0)
+	arm_r.rotation.z = deg_to_rad(3.5)
 	torso.add_child(arm_r)
-	_inst(arm_r, uarm_m, Vector3(0.0, -0.13, 0.0), coat_mat)
+	_inst(arm_r, uarm_m, Vector3(0.0, -0.125, 0.0), coat_mat)
 	var elbow_r := Node3D.new()
-	elbow_r.position = Vector3(0.0, -0.26, 0.0)
-	elbow_r.rotation.x = deg_to_rad(-8.0)
+	elbow_r.position = Vector3(0.0, -0.255, 0.0)
+	elbow_r.rotation.x = deg_to_rad(-9.0)
 	arm_r.add_child(elbow_r)
 	_inst(elbow_r, farm_m, Vector3(0.0, -0.13, 0.0), coat_mat)
-	_inst(elbow_r, _hand_mesh, Vector3(0.0, -0.265, 0.0), skin_mat)
+	_inst(elbow_r, hand_m, Vector3(0.0, -0.275, 0.0), skin_mat)
 
-	# Sculpted Neck + Full-Coverage Hair + Detailed 3D Front Face (Ears, Eyebrows, Eyes, Nose, Lips, Optional Glasses)!
-	var neck := _inst(torso, farm_m, Vector3(0.0, 0.295, 0.0), skin_mat)
-	neck.scale = Vector3(1.18, 0.38, 1.18)
+	# Sculpted Anatomical Neck + Layered Hair + Natural Non-Uncanny 3D Face + Optional Slim Glasses
+	_inst(torso, HumanMeshGen.get_neck_mesh(), Vector3(0.0, 0.300, 0.0), skin_mat)
 	var skin_pal_c: Array[Color] = [Color(0.87, 0.71, 0.60), Color(0.78, 0.60, 0.47), Color(0.91, 0.77, 0.67), Color(0.54, 0.38, 0.28)]
 	var hair_pal_c: Array[Color] = [Color(0.11, 0.09, 0.08), Color(0.24, 0.15, 0.10), Color(0.38, 0.28, 0.16), Color(0.17, 0.16, 0.16)]
 	var hair_c_idx := _rng.randi() % hair_pal_c.size()
@@ -734,32 +746,23 @@ func _create_3d_person(world_pos: Vector3) -> Dictionary:
 	head.position = Vector3(0.0, 0.415, -0.005)
 	var acc_roll := _rng.randf()
 	var hat_mat: Material = _acc_mats[_rng.randi() % _acc_mats.size()]
-	if acc_roll < 0.12:
-		# Baseball cap
-		var cap := _inst(head, _hair_dome_mesh, Vector3(0.0, 0.052, 0.004), hat_mat)
-		cap.scale = Vector3(0.88, 0.62, 0.95)
-		_box(head, Vector3(0.13, 0.008, 0.075), Vector3(0.0, 0.052, -0.118), hat_mat).rotation.x = deg_to_rad(-8.0)
-	elif acc_roll < 0.22:
-		# Knit beanie
-		var bn := _inst(head, _hair_dome_mesh, Vector3(0.0, 0.06, 0.006), hat_mat)
-		bn.scale = Vector3(0.9, 0.78, 0.96)
-	elif acc_roll < 0.30:
-		# Over-ear headphones
-		var hp := _box(head, Vector3(0.17, 0.012, 0.024), Vector3(0.0, 0.118, 0.006), _phone_mat)
-		hp.rotation.z = 0.0
-		for es: float in [-1.0, 1.0]:
-			_box(head, Vector3(0.012, 0.11, 0.02), Vector3(es * 0.083, 0.07, 0.006), _phone_mat)
-			_inst(head, _hand_mesh, Vector3(es * 0.084, 0.0, 0.006), _phone_mat).scale = Vector3(0.55, 1.05, 1.05)
-	if _rng.randf() < 0.16:
-		# Scarf wrapped at the neck
-		var sc := _inst(torso, _hair_dome_mesh, Vector3(0.0, 0.29, 0.0), hat_mat)
-		sc.scale = Vector3(0.82, 0.36, 0.78)
-		_box(torso, Vector3(0.06, 0.22, 0.02), Vector3(0.05, 0.16, -0.12), hat_mat)
+	if acc_roll < 0.11:
+		# Sculpted baseball cap with curved visor
+		_inst(head, HumanMeshGen.get_cap_mesh(), Vector3.ZERO, hat_mat)
+	elif acc_roll < 0.20:
+		# Sculpted knit beanie
+		_inst(head, HumanMeshGen.get_beanie_mesh(), Vector3.ZERO, hat_mat)
+	elif acc_roll < 0.28:
+		# Smooth curved over-ear headphones (horseshoe band + oval earcups)
+		_inst(head, HumanMeshGen.get_headphones_mesh(), Vector3.ZERO, _phone_mat)
+	if _rng.randf() < 0.15:
+		# Draped knit scarf conforming to neck & chest
+		_inst(torso, HumanMeshGen.get_scarf_mesh(arch), Vector3.ZERO, hat_mat)
 	if _rng.randf() < 0.24:
 		# Looking at a phone: forearm raised, glowing screen in hand
 		elbow_r.rotation.x = deg_to_rad(78.0)
-		_box(elbow_r, Vector3(0.072, 0.15, 0.011), Vector3(-0.015, -0.30, -0.03), _phone_mat)
-		_box(elbow_r, Vector3(0.062, 0.13, 0.004), Vector3(-0.015, -0.30, -0.037), _screen_mat)
+		_box(elbow_r, Vector3(0.068, 0.142, 0.009), Vector3(-0.015, -0.30, -0.028), _phone_mat)
+		_box(elbow_r, Vector3(0.060, 0.126, 0.004), Vector3(-0.015, -0.30, -0.034), _screen_mat)
 
 	return {
 		"node": root,
@@ -844,7 +847,8 @@ static func _get_platform_facing_portals(tram_state: Dictionary, sview: Dictiona
 		if out_v.dot(plat_dir) <= 0.35:
 			continue
 		# Also ensure the doorway is within the raised platform longitudinal span!
-		if absf((op - st_pos).dot(st_fwd)) > 13.05:
+		var plat_half_allow := float(sview.get("platform_len", 27.0)) * 0.5 - 0.45
+		if absf((op - st_pos).dot(st_fwd)) > plat_half_allow:
 			continue
 		out.append({
 			"outer_pos": op,

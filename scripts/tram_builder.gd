@@ -1151,24 +1151,26 @@ static func _build_seated_passenger(seed_i: int, sx: float, sz: float, side: flo
 	torso.position = Vector3(0.0, 0.26, 0.05)
 	p.add_child(torso)
 	_add_mesh_inst(torso, HumanMeshGen.get_torso_mesh(arch), Vector3.ZERO, Vector3.ZERO, mat_coat)
+	_add_mesh_inst(torso, HumanMeshGen.get_collar_mesh(arch), Vector3.ZERO, Vector3.ZERO, mat_coat)
+	_add_mesh_inst(torso, HumanMeshGen.get_neck_mesh(), Vector3(0.0, 0.295, 0.0), Vector3.ZERO, mat_skin)
 
-	var sh_x := 0.185 if arch == 2 else 0.202
+	var sh_x := 0.166 if arch == 2 else 0.180
 	var arm_l := Node3D.new()
-	arm_l.position = Vector3(-sh_x, 0.19, 0.0)
+	arm_l.position = Vector3(-sh_x, 0.175, 0.0)
 	arm_l.rotation.x = deg_to_rad(-28.0)
 	torso.add_child(arm_l)
 	_add_mesh_inst(arm_l, HumanMeshGen.get_upper_arm_mesh(), Vector3(0.0, -0.12, 0.0), Vector3.ZERO, mat_coat)
 	_add_mesh_inst(arm_l, HumanMeshGen.get_forearm_mesh(), Vector3(0.0, -0.28, -0.05), Vector3(-25.0, 0.0, 0.0), mat_coat)
-	_add_sph(arm_l, 0.034, Vector3(0.0, -0.38, -0.09), mat_skin)
+	_add_mesh_inst(arm_l, HumanMeshGen.get_hand_mesh(), Vector3(0.0, -0.39, -0.09), Vector3.ZERO, mat_skin)
 
 	var has_phone := (seed_i % 3 == 0)
 	var arm_r := Node3D.new()
-	arm_r.position = Vector3(sh_x, 0.19, 0.0)
+	arm_r.position = Vector3(sh_x, 0.175, 0.0)
 	arm_r.rotation.x = deg_to_rad(-44.0 if has_phone else -26.0)
 	torso.add_child(arm_r)
 	_add_mesh_inst(arm_r, HumanMeshGen.get_upper_arm_mesh(), Vector3(0.0, -0.12, 0.0), Vector3.ZERO, mat_coat)
 	_add_mesh_inst(arm_r, HumanMeshGen.get_forearm_mesh(), Vector3(0.0, -0.28, -0.05), Vector3(-25.0, 0.0, 0.0), mat_coat)
-	_add_sph(arm_r, 0.034, Vector3(0.0, -0.38, -0.09), mat_skin)
+	_add_mesh_inst(arm_r, HumanMeshGen.get_hand_mesh(), Vector3(0.0, -0.39, -0.09), Vector3.ZERO, mat_skin)
 	if has_phone:
 		var mat_phone := _emit_mat(Color(0.12, 0.18, 0.24), Color(0.45, 0.78, 0.98), 1.2)
 		_add_box(arm_r, Vector3(0.062, 0.012, 0.105), Vector3(-0.04, -0.39, -0.12), mat_phone)
@@ -1226,6 +1228,8 @@ static func _build_standing_cabin_passenger(seed_i: int, ax: float, az: float) -
 	torso.position = Vector3(0.0, 1.08, 0.0)
 	p.add_child(torso)
 	_add_mesh_inst(torso, HumanMeshGen.get_torso_mesh(arch), Vector3.ZERO, Vector3.ZERO, mat_coat)
+	_add_mesh_inst(torso, HumanMeshGen.get_collar_mesh(arch), Vector3.ZERO, Vector3.ZERO, mat_coat)
+	_add_mesh_inst(torso, HumanMeshGen.get_neck_mesh(), Vector3(0.0, 0.295, 0.0), Vector3.ZERO, mat_skin)
 	# Attach skirt to root `p` (pelvis) instead of swaying `torso` so thighs NEVER poke through during braking/accel!
 	if wears_skirt:
 		_add_mesh_inst(p, HumanMeshGen.get_skirt_mesh(seed_i % 2 == 0), Vector3(0.0, 0.88, 0.0), Vector3.ZERO, mat_coat)
@@ -1233,21 +1237,22 @@ static func _build_standing_cabin_passenger(seed_i: int, ax: float, az: float) -
 	# Raise the arm on the rail side (+X holds right rail +0.44 with arm_r; -X holds left rail -0.44 with arm_l)
 	# so the hand sits DIRECTLY inside the hanging strap handle at y = 2.18, x = +-0.44, z = az!
 	var hold_right := (ax >= 0.0)
+	var sh_x_s := 0.168 if arch == 2 else 0.180
 	var arm_l := Node3D.new()
-	arm_l.position = Vector3(-0.19, 0.19, 0.0)
+	arm_l.position = Vector3(-sh_x_s, 0.175, 0.0)
 	arm_l.rotation.x = deg_to_rad(-174.0 if not hold_right else -14.0)
 	torso.add_child(arm_l)
 	_add_mesh_inst(arm_l, HumanMeshGen.get_upper_arm_mesh(), Vector3(0.0, -0.12, 0.0), Vector3.ZERO, mat_coat)
 	_add_mesh_inst(arm_l, HumanMeshGen.get_forearm_mesh(), Vector3(0.0, -0.32, 0.0), Vector3.ZERO, mat_coat)
-	_add_sph(arm_l, 0.036, Vector3(0.0, -0.42, 0.0), mat_skin)
+	_add_mesh_inst(arm_l, HumanMeshGen.get_hand_mesh(), Vector3(0.0, -0.43, 0.0), Vector3.ZERO, mat_skin)
 
 	var arm_r := Node3D.new()
-	arm_r.position = Vector3(0.19, 0.19, 0.0)
+	arm_r.position = Vector3(sh_x_s, 0.175, 0.0)
 	arm_r.rotation.x = deg_to_rad(-174.0 if hold_right else -14.0)
 	torso.add_child(arm_r)
 	_add_mesh_inst(arm_r, HumanMeshGen.get_upper_arm_mesh(), Vector3(0.0, -0.12, 0.0), Vector3.ZERO, mat_coat)
 	_add_mesh_inst(arm_r, HumanMeshGen.get_forearm_mesh(), Vector3(0.0, -0.32, 0.0), Vector3.ZERO, mat_coat)
-	_add_sph(arm_r, 0.036, Vector3(0.0, -0.42, 0.0), mat_skin)
+	_add_mesh_inst(arm_r, HumanMeshGen.get_hand_mesh(), Vector3(0.0, -0.43, 0.0), Vector3.ZERO, mat_skin)
 
 	var head := HumanMeshGen.build_detailed_head(
 		torso, mat_skin, mat_hair, hair_st,

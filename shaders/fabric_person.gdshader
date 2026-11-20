@@ -22,26 +22,29 @@ void vertex() {
 
 void fragment() {
 	vec3 view_dir = normalize(CAMERA_POSITION_WORLD - v_world);
-	float rim = pow(1.0 - clamp(dot(v_nrm, view_dir), 0.0, 1.0), 3.0);
+	float ndv = clamp(dot(normalize(v_nrm), view_dir), 0.0, 1.0);
+	float rim = pow(1.0 - ndv, 2.8);
 
 	if (is_skin > 0.5) {
-		// Warm natural skin with soft subsurface scattering sheen & subtle micro-pore softness
-		float pore = hash21(floor((v_world.xy + v_world.zy) * 260.0));
-		ALBEDO = base_tint * (0.95 + 0.03 * pore + 0.06 * rim);
-		ROUGHNESS = 0.58;
+		// Warm natural skin with soft peach subsurface wrap and gentle cheek warmth (no texture swimming!)
+		float micro = hash21(floor((v_local.xy + v_local.zy) * 280.0));
+		float cheek_warm = exp(-pow((v_local.y + 0.01) * 22.0, 2.0)) * smoothstep(0.02, 0.06, abs(v_local.x)) * smoothstep(0.0, -0.05, v_local.z);
+		vec3 warm_tint = mix(base_tint, base_tint * vec3(1.06, 0.93, 0.90), cheek_warm * 0.28);
+		ALBEDO = warm_tint * (0.97 + 0.02 * micro + 0.045 * rim);
+		ROUGHNESS = 0.62;
 		METALLIC = 0.0;
-		SPECULAR = 0.26;
-		BACKLIGHT = vec3(0.34, 0.13, 0.09);
+		SPECULAR = 0.22;
+		BACKLIGHT = vec3(0.38, 0.16, 0.11);
 	} else {
-		// Diagonal woven twill cloth micro-grain + garment fold shading + soft velvet/wool rim sheen
-		vec2 fuv = (v_world.xy + v_world.zy) * 165.0;
-		float twill = sin((fuv.x + fuv.y) * 1.6) * 0.5 + 0.5;
+		// Fine woven twill cloth in local coordinates (zero shimmering during walking) + soft garment fold shading
+		vec2 fuv = (v_local.xy + v_local.zy) * 190.0;
+		float twill = sin((fuv.x + fuv.y) * 1.8) * 0.5 + 0.5;
 		float weave = hash21(floor(fuv));
-		float fold = 0.91 + 0.10 * sin(v_local.x * 24.0 + v_local.y * 14.0) + 0.04 * cos(v_local.z * 28.0);
-		float joint_ao = smoothstep(-0.28, 0.18, v_local.y) * 0.12 + 0.88;
-		ALBEDO = base_tint * (0.93 + 0.06 * weave + 0.04 * twill) * fold * joint_ao + base_tint * rim * 0.12;
-		ROUGHNESS = clamp(0.82 + 0.08 * (1.0 - twill), 0.74, 0.95);
+		float fold = 0.94 + 0.055 * sin(v_local.x * 20.0 + v_local.y * 12.0) + 0.025 * cos(v_local.z * 24.0);
+		float joint_ao = smoothstep(-0.30, 0.20, v_local.y) * 0.10 + 0.90;
+		ALBEDO = base_tint * (0.95 + 0.04 * weave + 0.03 * twill) * fold * joint_ao + base_tint * rim * 0.10;
+		ROUGHNESS = clamp(0.84 + 0.06 * (1.0 - twill), 0.78, 0.95);
 		METALLIC = 0.0;
-		SPECULAR = 0.18;
+		SPECULAR = 0.15;
 	}
 }

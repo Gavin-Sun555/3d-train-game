@@ -6,10 +6,17 @@ config_version=5
 
 [application]
 
-config/name="3D Train Mode · 有轨电车建设与模拟驾驶"
-config/description="Standalone 3D streetcar simulation built with Godot 4 Forward+."
+config/name="3D train game"
+config/description="Standalone 3D streetcar & monorail simulation."
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.4")
+boot_splash/bg_color=Color(0.05, 0.08, 0.12, 1)
+boot_splash/show_image=true
+boot_splash/image="res://assets/app_icon.png"
+boot_splash/fullsize=false
+boot_splash/use_filter=true
+config/icon="res://assets/app_icon.png"
+config/macos_native_icon="res://assets/app_icon.icns"
 
 [display]
 

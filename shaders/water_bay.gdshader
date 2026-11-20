@@ -4,9 +4,9 @@ render_mode diffuse_burley, specular_schlick_ggx, cull_disabled;
 // Elliott Bay / Lake Union water: layered moving wave normals, Fresnel sky reflection, sun glint,
 // darker deep-water tint further from shore (approximated by large-scale noise), fades detail with distance.
 
-uniform vec3 shallow_col : source_color = vec3(0.13, 0.27, 0.32);
-uniform vec3 deep_col : source_color = vec3(0.04, 0.12, 0.18);
-uniform vec3 sky_col : source_color = vec3(0.62, 0.72, 0.82);
+uniform vec3 shallow_col : source_color = vec3(0.11, 0.34, 0.42);
+uniform vec3 deep_col : source_color = vec3(0.04, 0.16, 0.26);
+uniform vec3 sky_col : source_color = vec3(0.56, 0.72, 0.86);
 uniform float night_factor : hint_range(0.0, 1.0) = 0.0;
 
 varying vec3 v_world;

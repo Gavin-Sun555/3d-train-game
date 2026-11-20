@@ -39,6 +39,7 @@ var _edge_grid: Dictionary = {} # Vector2i(cx, cz) -> Array[int] (edge_ids)
 var built_tracks: Dictionary = {}      # edge_id (int) -> bed_style (int)
 var built_track_modes: Dictionary = {} # edge_id (int) -> TrackMode (int)
 var crossovers: Dictionary = {}        # edge_id (int) -> CrossoverType (int)
+var crossover_t: Dictionary = {}       # edge_id (int) -> float (normalized position 0..1 along edge)
 var stations: Dictionary = {}          # station_id (int) -> {id, name, edge_id, t, side, pos: Vector3, fwd: Vector3}
 var lines: Dictionary = {}             # line_id (int) -> {id, name, color: Color, model_key, trams_count, sections, station_ids: Array[int]}
 
@@ -64,6 +65,7 @@ func load_from_map_data(map_data: Dictionary, use_starter: bool = true) -> void:
 	built_tracks.clear()
 	built_track_modes.clear()
 	crossovers.clear()
+	crossover_t.clear()
 	stations.clear()
 	lines.clear()
 	next_station_id = 1
@@ -113,6 +115,7 @@ func clear_player_network() -> void:
 	built_tracks.clear()
 	built_track_modes.clear()
 	crossovers.clear()
+	crossover_t.clear()
 	stations.clear()
 	lines.clear()
 	next_station_id = 1
@@ -129,6 +132,7 @@ func export_state() -> Dictionary:
 		}
 		if crossovers.has(eid):
 			item["crossover"] = int(crossovers[eid])
+			item["crossover_t"] = float(crossover_t.get(eid, 0.5))
 		tr_arr.append(item)
 
 	var st_arr: Array = []
@@ -141,6 +145,7 @@ func export_state() -> Dictionary:
 			"t": st["t"],
 			"side": st["side"],
 			"kind": int(st.get("kind", StationKind.SIDE_SINGLE)),
+			"platform_len": float(st.get("platform_len", 27.0)),
 		})
 
 	var ln_arr: Array = []
@@ -181,6 +186,7 @@ func import_state(state: Dictionary) -> void:
 			built_track_modes[eid] = tmode
 			if tmode == TrackMode.DOUBLE and xover > CrossoverType.NONE:
 				crossovers[eid] = xover
+				crossover_t[eid] = clampf(float(t_item.get("crossover_t", 0.5)), 0.05, 0.95)
 
 	for s_item in state.get("stations", []):
 		var eid := int(s_item["edge_id"])
@@ -189,15 +195,21 @@ func import_state(state: Dictionary) -> void:
 		var sid := int(s_item["id"])
 		var t_val := clampf(float(s_item.get("t", 0.5)), 0.15, 0.85)
 		var side := int(s_item.get("side", 1))
+		var plat_len := clampf(float(s_item.get("platform_len", 27.0)), 20.0, 56.0)
+		var skind_chk := StationKind.ISLAND if side == 0 else StationKind.SIDE_SINGLE
+		if TrackBuilder.station_overlaps_crossover(self, eid, t_val, skind_chk, plat_len):
+			crossovers.erase(eid)
+			crossover_t.erase(eid)
 		var skind := int(s_item.get("kind", StationKind.ISLAND if side == 0 else StationKind.SIDE_SINGLE))
 		var sample := sample_edge(eid, t_val)
 		stations[sid] = {
 			"id": sid,
-			"name": str(s_item.get("name", "电车站 %d" % sid)),
+			"name": _strip_auto_station_suffix(str(s_item.get("name", "电车站 %d" % sid))),
 			"edge_id": eid,
 			"t": t_val,
 			"side": side,
 			"kind": skind,
+			"platform_len": plat_len,
 			"pos": sample["pos"],
 			"fwd": sample["fwd"],
 		}
@@ -235,20 +247,28 @@ func set_track_on_edge(edge_id: int, bed_style: int, track_mode: int = TrackMode
 	return true
 
 
-func set_crossover_on_edge(edge_id: int, xover_type: int) -> bool:
+func has_station_on_edge(edge_id: int) -> bool:
+	for sid: int in stations.keys():
+		if int(stations[sid]["edge_id"]) == edge_id:
+			return true
+	return false
+
+
+func set_crossover_on_edge(edge_id: int, xover_type: int, t_val: float = 0.5) -> bool:
 	if not built_tracks.has(edge_id) or not edges.has(edge_id):
 		return false
-	if int(built_track_modes.get(edge_id, TrackMode.SINGLE)) != TrackMode.DOUBLE:
-		return false
-	if float(edges[edge_id]["length"]) < 26.0:
-		return false
-	# Monorail switches are single movable beams: no scissors (X) crossovers on a guideway
-	if xover_type > CrossoverType.NONE and TrackBuilder.is_monorail_style(int(built_tracks.get(edge_id, -1))):
-		xover_type = CrossoverType.SINGLE
 	if xover_type <= CrossoverType.NONE:
 		crossovers.erase(edge_id)
-	else:
-		crossovers[edge_id] = xover_type
+		crossover_t.erase(edge_id)
+		return true
+	var place := TrackBuilder.compute_crossover_placement(self, edge_id, t_val)
+	if not bool(place.get("valid", false)):
+		return false
+	# Monorail switches are single movable beams: no scissors (X) crossovers on a guideway
+	if TrackBuilder.is_monorail_style(int(built_tracks.get(edge_id, -1))):
+		xover_type = CrossoverType.SINGLE
+	crossovers[edge_id] = xover_type
+	crossover_t[edge_id] = float(place["t_clamped"])
 	return true
 
 
@@ -256,6 +276,7 @@ func remove_track_on_edge(edge_id: int) -> void:
 	built_tracks.erase(edge_id)
 	built_track_modes.erase(edge_id)
 	crossovers.erase(edge_id)
+	crossover_t.erase(edge_id)
 	# Also remove any station sitting on this demolished edge
 	var to_remove: Array[int] = []
 	for sid: int in stations.keys():
@@ -307,21 +328,47 @@ func rename_station(sid: int, new_name: String) -> bool:
 	return true
 
 
-func add_station_on_edge(edge_id: int, t_val: float, side: int = 1, custom_name: String = "", kind: int = StationKind.SIDE_SINGLE) -> int:
+static func _strip_auto_station_suffix(raw_name: String) -> String:
+	var out := raw_name.strip_edges()
+	for suf: String in [
+		"（中央岛式）", "(中央岛式)",
+		"（马路东侧）", "(马路东侧)",
+		"（马路西侧）", "(马路西侧)",
+		"（马路南侧）", "(马路南侧)",
+		"（马路北侧）", "(马路北侧)",
+	]:
+		if out.ends_with(suf):
+			out = out.substr(0, out.length() - suf.length()).strip_edges()
+	return out
+
+
+func add_station_on_edge(
+	edge_id: int,
+	t_val: float,
+	side: int = 1,
+	custom_name: String = "",
+	kind: int = StationKind.SIDE_SINGLE,
+	platform_len: float = 27.0
+) -> int:
 	if not built_tracks.has(edge_id) or not edges.has(edge_id):
 		return -1
-	var t_clamped := clampf(t_val, 0.18, 0.82)
-	var sample := sample_edge(edge_id, t_clamped)
+	var plat_len := clampf(platform_len, 20.0, 56.0)
+	var t_clamped := clampf(t_val, 0.15, 0.85)
 	var is_dbl := (int(built_track_modes.get(edge_id, TrackMode.SINGLE)) == TrackMode.DOUBLE)
 	var eff_kind := kind if is_dbl else StationKind.SIDE_SINGLE
+	# Never allow building a station overlapping an existing crossover/switch!
+	if TrackBuilder.station_overlaps_crossover(self, edge_id, t_clamped, eff_kind, plat_len):
+		return -1
+	var sample := sample_edge(edge_id, t_clamped)
 	var eff_side := 0 if eff_kind == StationKind.ISLAND else (1 if side >= 0 else -1)
 
-	# Prevent overlapping stations within 26m (on Double Track side platforms, allow building on BOTH sides!)
+	# Prevent overlapping stations (on Double Track side platforms, allow building on BOTH sides!)
 	for sid: int in stations.keys():
 		var st: Dictionary = stations[sid]
 		if eff_kind != StationKind.ISLAND and is_dbl and int(st["edge_id"]) == edge_id and int(st["side"]) != 0 and int(st["side"]) != eff_side:
 			continue
-		if (st["pos"] as Vector3).distance_to(sample["pos"]) < 26.0:
+		var min_sep := (plat_len + float(st.get("platform_len", 27.0))) * 0.5 - 1.0
+		if (st["pos"] as Vector3).distance_to(sample["pos"]) < min_sep:
 			return sid
 
 	var sid := next_station_id
@@ -336,17 +383,6 @@ func add_station_on_edge(edge_id: int, t_val: float, side: int = 1, custom_name:
 			st_name = j_name + " 站"
 		else:
 			st_name = "%s #%d站" % [str(ed["name"]), sid]
-		if eff_kind == StationKind.ISLAND:
-			st_name += "（中央岛式）"
-		elif is_dbl:
-			var fwd3 := (sample["fwd"] as Vector3).normalized()
-			var right3 := fwd3.cross(Vector3.UP).normalized() * float(eff_side)
-			var dir_zh := ""
-			if absf(right3.x) >= absf(right3.z):
-				dir_zh = "马路东侧" if right3.x >= 0.0 else "马路西侧"
-			else:
-				dir_zh = "马路南侧" if right3.z >= 0.0 else "马路北侧"
-			st_name += "（%s）" % dir_zh
 
 	stations[sid] = {
 		"id": sid,
@@ -355,6 +391,7 @@ func add_station_on_edge(edge_id: int, t_val: float, side: int = 1, custom_name:
 		"t": t_clamped,
 		"side": eff_side,
 		"kind": eff_kind,
+		"platform_len": plat_len,
 		"pos": sample["pos"],
 		"fwd": sample["fwd"],
 	}
@@ -479,7 +516,7 @@ func get_turnout_world_positions() -> Array[Vector3]:
 			out.append(Vector3(p2.x, 0.0, p2.y))
 	for eid: int in crossovers.keys():
 		if int(crossovers[eid]) > CrossoverType.NONE and edges.has(eid):
-			out.append(sample_edge(eid, 0.5)["pos"] as Vector3)
+			out.append(sample_edge(eid, float(crossover_t.get(eid, 0.5)))["pos"] as Vector3)
 	return out
 
 

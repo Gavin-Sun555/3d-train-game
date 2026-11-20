@@ -41,7 +41,7 @@ func rebuild_fleet(
 		line_variants[lid] = _compile_line_variants(graph, ln, compiled)
 
 		var spec := _find_model_spec(catalogue, str(ln.get("model_key", "siemens-s700")))
-		var sec_cnt := clampi(int(ln.get("sections", int(spec.get("default_sections", 2)))), 1, 2)
+		var sec_cnt := clampi(int(ln.get("sections", int(spec.get("default_sections", 2)))), 1, 4)
 		var fleet_n := clampi(int(ln.get("trams_count", 2)), 1, 8)
 		var route_len := float(compiled["length"])
 		var is_loop := bool(compiled["is_loop"])
@@ -123,6 +123,9 @@ func rebuild_fleet(
 				"terminal_zones": compiled.get("terminal_zones", []),
 				"term_res": {}, # station_id -> {platform, phase: "in" | "dwell" | "out"}
 				"term_hold_s": -1.0,
+				"term_stage": "", # "" | "alight_only" | "flip_wait" | "board_only"
+				"term_sid": -1,
+				"term_flip_timer": 0.0,
 			}
 			trams.append(tr_dict)
 			_position_tram_3d(tr_dict)
@@ -143,6 +146,8 @@ func export_run_state() -> Dictionary:
 			"notch": int(tr["notch"]),
 			"doors_target_open": bool(tr["doors_target_open"]),
 			"door_ratio": float(tr["door_ratio"]),
+			"term_stage": str(tr.get("term_stage", "")),
+			"term_sid": int(tr.get("term_sid", -1)),
 			"pax_dests": (tr["pax_dests"] as Array).duplicate(),
 		})
 	return {
@@ -175,6 +180,9 @@ func import_run_state(run_state: Dictionary, graph: NetworkGraph) -> void:
 		tr["notch"] = clampi(int(st.get("notch", NOTCH_NEUTRAL)), 0, NOTCH_LABELS.size() - 1)
 		tr["doors_target_open"] = bool(st.get("doors_target_open", false))
 		tr["door_ratio"] = clampf(float(st.get("door_ratio", 0.0)), 0.0, 1.0)
+		tr["term_stage"] = str(st.get("term_stage", ""))
+		tr["term_sid"] = int(st.get("term_sid", -1))
+		tr["term_flip_timer"] = 0.0
 		var dests: Array = st.get("pax_dests", [])
 		tr["pax_dests"] = dests.duplicate()
 		_position_tram_3d(tr)
@@ -450,12 +458,12 @@ func get_dock_info_for_tram(tr: Dictionary, graph: NetworkGraph) -> Dictionary:
 		"st_pos": st_pos,
 		"st_fwd": st_fwd,
 		"st_side": st_side,
-		"plat_half_len": 13.05,
+		"plat_half_len": float(st.get("platform_len", 27.0)) * 0.5 - 0.45,
 	}
 
 
 # Driver's cab change ("换端"): walk to the other cab and drive back the way you came.
-# Returns "ok" on success, otherwise a reason code: "moving", "doors", "not_terminal", "no_tram".
+# Returns "ok" on success, otherwise a reason code: "moving", "doors", "pax_onboard", "not_terminal", "no_tram".
 func manual_reverse_dir() -> String:
 	var tr := get_active_tram()
 	if tr.is_empty():
@@ -464,18 +472,41 @@ func manual_reverse_dir() -> String:
 		return "moving"
 	if float(tr["door_ratio"]) >= 0.05 or bool(tr.get("doors_target_open", false)):
 		return "doors"
+	var near := _find_station_at_current_pos(tr)
+	var near_sid := int(near["station_id"])
+	var at_turnback := _is_turnback_stop(tr, int(near["stop_idx"]))
+	if at_turnback and not (tr["pax_dests"] as Array).is_empty():
+		return "pax_onboard"
 	if bool(tr["is_loop"]):
 		# Loop lines are compiled with terminal turnbacks: the cab can only be changed at a terminal
 		# (anywhere on the platform / tail track before the turnback point).
-		if _try_turnback_flip(tr, 60.0):
+		if _try_turnback_flip(tr, 60.0, near_sid >= 0):
 			manual_drive = true
 			tr["notch"] = NOTCH_NEUTRAL
+			if near_sid >= 0:
+				tr["term_stage"] = "board_only"
+				tr["term_sid"] = near_sid
 			return "ok"
 		return "not_terminal"
 	manual_drive = true
 	tr["notch"] = NOTCH_NEUTRAL
 	_reverse_tram_switch_cab(tr)
+	if near_sid >= 0 and at_turnback:
+		tr["term_stage"] = "board_only"
+		tr["term_sid"] = near_sid
 	return "ok"
+
+
+# True when stop `stop_idx` is a reversing terminus (either a double-track/monorail turnback cusp
+# or the forward end station of a single-track shuttle). Pure circular loops return false.
+func _is_turnback_stop(tr: Dictionary, stop_idx: int) -> bool:
+	var stops: Array = tr.get("stops", [])
+	if stop_idx < 0 or stop_idx >= stops.size():
+		return false
+	if bool(tr["is_loop"]):
+		return bool((stops[stop_idx] as Dictionary).get("turnback", false))
+	var dir := float(tr["dir"])
+	return (dir > 0.0 and stop_idx == stops.size() - 1) or (dir < 0.0 and stop_idx == 0)
 
 
 # Distance (m) from the active tram's nose to the next terminal turnback point ahead, or -1 if none near.
@@ -496,7 +527,7 @@ func turnback_distance_ahead(tr: Dictionary, max_d: float = 400.0) -> float:
 
 # If a terminal turnback point lies just ahead of the lead bogie, change cab in place: the route's return leg
 # retraces the arrival leg, so mirroring s about the turnback point keeps every bogie exactly where it stands.
-func _try_turnback_flip(tr: Dictionary, reach: float = 30.0) -> bool:
+func _try_turnback_flip(tr: Dictionary, reach: float = 30.0, keep_dwell: bool = false) -> bool:
 	var rlen := float(tr["route_len"])
 	var dir := float(tr["dir"])
 	var s_cur := float(tr["s"])
@@ -510,7 +541,7 @@ func _try_turnback_flip(tr: Dictionary, reach: float = 30.0) -> bool:
 			tr["cab_flipped"] = not bool(tr.get("cab_flipped", false))
 			tr["s"] = fposmod(rev_s + dir * (d_ahead + c_len), rlen)
 			var res: Dictionary = tr["term_res"]
-			res[int(z["station_id"])] = {"platform": int(z["platform"]), "phase": "out"}
+			res[int(z["station_id"])] = {"platform": int(z["platform"]), "phase": "dwell" if keep_dwell else "out"}
 			_position_tram_3d(tr)
 			return true
 	return false
@@ -725,7 +756,12 @@ func get_upcoming_station_ids(tr: Dictionary, current_stop_idx: int) -> Array[in
 	if is_loop:
 		for step in range(1, stops.size()):
 			var idx := posmod(current_stop_idx + step * int(signf(dir)), stops.size())
-			out.append(int(stops[idx]["station_id"]))
+			var st_d: Dictionary = stops[idx]
+			out.append(int(st_d["station_id"]))
+			# On bidirectional turnback routes (double-track tram & monorail), passengers must alight
+			# by the reversing terminus — never assign destinations across a turnback!
+			if bool(st_d.get("turnback", false)):
+				break
 	else:
 		if dir > 0.0:
 			for idx in range(current_stop_idx + 1, stops.size()):
@@ -756,8 +792,22 @@ func _step_ai_driver(
 	var spd := float(tr["speed_mps"])
 
 	var depart_pending := bool(tr.get("ai_depart_pending", false))
-	if target_open or door_r > 0.02 or depart_pending:
+	var term_stage := str(tr.get("term_stage", ""))
+	if target_open or door_r > 0.02 or depart_pending or term_stage == "flip_wait":
 		tr["notch"] = 3
+		if term_stage == "flip_wait":
+			# Brief realistic cab-change pause with doors closed after reversing ends, then open doors for return boarding!
+			var ft := float(tr.get("term_flip_timer", 0.0)) - dt
+			tr["term_flip_timer"] = ft
+			if ft <= 0.0:
+				tr["term_stage"] = "board_only"
+				tr["doors_target_open"] = true
+				tr["dwell_timer"] = 4.2
+				tr["dwell_elapsed"] = 0.0
+				if play_audio:
+					sound.play_door_chime()
+			return
+
 		tr["dwell_timer"] = float(tr["dwell_timer"]) - dt
 		tr["dwell_elapsed"] = float(tr.get("dwell_elapsed", 0.0)) + dt
 		var docked_now := _find_station_at_current_pos(tr)
@@ -765,75 +815,134 @@ func _step_ai_driver(
 		var has_room := ((tr["pax_dests"] as Array).size() + int(tr.get("pending_boarders", 0))) < int(tr["capacity"])
 		var more_waiting := (docked_sid >= 0) and has_room and pax_sim.has_waiting_passengers(docked_sid)
 		var walkers_still_boarding := pax_sim.has_walkers_boarding_tram(tr)
-		var can_close := (float(tr["dwell_timer"]) <= 0.0) and ((not more_waiting and not walkers_still_boarding) or float(tr["dwell_elapsed"]) >= 16.0)
+
+		var can_close := false
+		if term_stage == "alight_only":
+			# Phase 1 at reversing terminus: MUST evacuate 100% of onboard passengers (只下不上) before cab change!
+			var onboard_left := (tr["pax_dests"] as Array).size()
+			var doors_blocked := (door_r > 0.55 and int(tr.get("open_doorways", 0)) == 0)
+			can_close = (float(tr["dwell_timer"]) <= 0.0) and (onboard_left == 0 or doors_blocked or float(tr["dwell_elapsed"]) >= 50.0)
+		else:
+			can_close = (float(tr["dwell_timer"]) <= 0.0) and ((not more_waiting and not walkers_still_boarding) or float(tr["dwell_elapsed"]) >= 16.0)
+
 		if can_close and target_open:
 			tr["doors_target_open"] = false
-			tr["ai_depart_pending"] = true # Depart once doors are shut (frame-rate independent)
+			tr["ai_depart_pending"] = true # Act once doors are shut (frame-rate independent)
 			if play_audio:
 				sound.play_door_chime()
 		elif not target_open and door_r <= 0.03:
 			var docked := _find_station_at_current_pos(tr)
 			var stops: Array = tr["stops"]
 			var d_idx := int(docked["stop_idx"])
-			if bool(tr["is_loop"]) and d_idx >= 0 and bool((stops[d_idx] as Dictionary).get("turnback", false)) \
-					and _terminal_departure_blocked(tr, int((stops[d_idx] as Dictionary)["station_id"])):
+			var d_sid := int(docked["station_id"])
+
+			# End of Phase 1 ("alight_only"): doors shut with empty train -> change cab, pause briefly, then open for Phase 2 ("board_only")!
+			if term_stage == "alight_only":
+				var t_sid := int(tr.get("term_sid", d_sid))
+				if t_sid < 0:
+					t_sid = d_sid
+				var flipped := false
+				if not bool(tr["is_loop"]):
+					_reverse_tram_switch_cab(tr)
+					flipped = true
+				else:
+					flipped = _try_turnback_flip(tr, 40.0, true)
+				tr["ai_depart_pending"] = false
+				if flipped:
+					tr["term_sid"] = t_sid
+					tr["term_stage"] = "flip_wait"
+					tr["term_flip_timer"] = 0.85
+					return
+				# Fallback if not actually near a turnback cusp: continue departure normally
+				tr["term_stage"] = ""
+				tr["term_sid"] = -1
+
+			var dep_sid := int(tr.get("term_sid", d_sid))
+			if dep_sid < 0:
+				dep_sid = d_sid
+			if bool(tr["is_loop"]) and dep_sid >= 0 and _terminal_departure_blocked(tr, dep_sid):
 				tr["notch"] = 3 # Hold at the platform: a tram is crossing over into the other platform track
 				return
 			tr["ai_depart_pending"] = false
-			var dir_now := float(tr["dir"])
-			var s_cur := float(tr["s"])
-			var rlen_cur := float(tr["route_len"])
-			if not bool(tr["is_loop"]):
-				var near_end := (dir_now > 0.0 and s_cur >= rlen_cur - 6.0) or (dir_now < 0.0 and s_cur <= 6.0)
-				var at_term_stop := (d_idx >= 0 and ((dir_now > 0.0 and d_idx == stops.size() - 1) or (dir_now < 0.0 and d_idx == 0)))
-				if near_end or at_term_stop:
-					_reverse_tram_switch_cab(tr)
+			if term_stage == "board_only":
+				# End of Phase 2 ("board_only"): mark terminal reservation as departing ("out") and leave!
+				var res_d: Dictionary = tr["term_res"]
+				if dep_sid >= 0 and res_d.has(dep_sid):
+					(res_d[dep_sid] as Dictionary)["phase"] = "out"
+				tr["term_stage"] = ""
+				tr["term_sid"] = -1
 			else:
-				# Terminal turnback: change driving cab as doors close and depart back along the same
-				# track; the route then crosses over to the right-hand track at the crossover.
-				if d_idx >= 0 and bool((stops[d_idx] as Dictionary).get("turnback", false)):
-					_try_turnback_flip(tr)
+				# Non-turnback or edge-end fallback (e.g. stopped past last stop on open line)
+				var dir_now := float(tr["dir"])
+				var s_cur := float(tr["s"])
+				var rlen_cur := float(tr["route_len"])
+				if not bool(tr["is_loop"]):
+					var near_end := (dir_now > 0.0 and s_cur >= rlen_cur - 6.0) or (dir_now < 0.0 and s_cur <= 6.0)
+					if near_end:
+						_reverse_tram_switch_cab(tr)
 			if play_audio:
 				sound.ring_bell()
 			tr["depart_cooldown"] = 8.5
-			tr["notch"] = 8
+			# Release holding brake cleanly to P1 on departure, then step up smoothly P1 -> P2 -> P3
+			tr["notch"] = NOTCH_NEUTRAL + 1
+			tr["ai_notch_timer"] = 0.0
+			tr["ai_last_step_dir"] = 1
+			tr["ai_cruising_coast"] = false
+			tr["ai_crawl_active"] = false
 		return
 
-	# 0. Terminal interlocking: wait before the crossover until a platform track is free;
-	#    monorail: stop at a red switch signal until the switch is set and locked for this train
+	var spec: Dictionary = tr["spec"]
+	var max_decel := maxf(0.6, float(spec.get("decel", 1.35)))
+	var drag_est := 0.045 + 0.0012 * spd * spd
+	var cur_notch := int(tr["notch"])
+
+	# Unified forward-constraint evaluation (never falls through from braking to cruise acceleration!)
+	var must_hold_stop := false
+	var hard_stop_ahead := false
+	var approaching_station := false
+	var req_decel := 0.0
+	var v_env := 99.0
+	var brake_urgency := 0 # 0 = smooth, 1 = firm safety brake, 2 = emergency immediate
+
+	# 0. Terminal interlocking & monorail switch signal
 	var term_hold_d := minf(_terminal_hold_distance(tr), _switch_hold_distance(tr))
 	if term_hold_d < 1e8:
-		if term_hold_d <= 1.2:
-			tr["notch"] = 1
-			if spd < 0.55:
-				tr["speed_mps"] = 0.0
-			return
-		elif spd > maxf(0.8, sqrt(2.0 * 0.92 * maxf(0.4, term_hold_d - 1.2))):
-			tr["notch"] = 1 if term_hold_d < 14.0 else 2
-			return
+		if term_hold_d <= 1.4:
+			must_hold_stop = true
+		else:
+			var d_th := maxf(0.4, term_hold_d - 1.2)
+			v_env = minf(v_env, sqrt(2.0 * max_decel * 0.62 * d_th))
+			if term_hold_d < 70.0:
+				var a_th := (spd * spd) / (2.0 * d_th)
+				if a_th > req_decel:
+					req_decel = a_th
+				if a_th > max_decel * 0.45:
+					brake_urgency = maxi(brake_urgency, 1)
+				if term_hold_d < 45.0:
+					hard_stop_ahead = true
 
-	# 1. Defensive braking for a tram occupying my path ahead: brake on a curve that stops ~9m behind it
+	# 1. Tram ahead on path: brake smoothly to stop ~9m behind it
 	var gap_ahead := _distance_to_tram_ahead(tr, my_idx)
 	if gap_ahead < 900.0:
-		var gap_decel := float((tr["spec"] as Dictionary).get("decel", 1.3)) * 0.62
 		var gap_room := gap_ahead - 9.0
-		var safe_v := sqrt(2.0 * gap_decel * maxf(0.0, gap_room))
-		if gap_room <= 0.6:
-			tr["notch"] = 1
-			if spd < 0.55:
-				tr["speed_mps"] = 0.0
-			return
-		elif spd > safe_v + 2.5:
-			tr["notch"] = 0 if gap_room < 12.0 else 1
-			return
-		elif spd > safe_v:
-			tr["notch"] = 2
-			return
-		elif spd > safe_v - 0.8:
-			tr["notch"] = NOTCH_NEUTRAL
-			return
+		if gap_room <= 1.0:
+			must_hold_stop = true
+		else:
+			var d_gap := maxf(0.5, gap_room)
+			var safe_v := sqrt(2.0 * max_decel * 0.56 * d_gap)
+			v_env = minf(v_env, safe_v)
+			if gap_room < 12.0 and spd > safe_v + 2.4:
+				_apply_ai_notch_command(tr, 0, dt, 2) # Immediate EB if critically closing on tram ahead
+				return
+			var a_gap := (spd * spd) / (2.0 * d_gap)
+			if gap_room < 85.0 and a_gap > req_decel:
+				req_decel = a_gap
+			if a_gap > max_decel * 0.48:
+				brake_urgency = maxi(brake_urgency, 1)
+			if gap_room < 42.0:
+				hard_stop_ahead = true
 
-	# 2. Obey Dedicated Tram Signal ('━' Stop / '●' Yellow) cleanly BEHIND stop line + Defensive Intersection Slowdown!
+	# 2. Dedicated Tram Signal ('━' Stop / '●' Yellow) + Road Hazard Emergency Avoidance
 	var intersection_cap_mps := 99.0
 	if traffic_sim != null:
 		var sig_info := traffic_sim.get_upcoming_tram_signal(tr, graph)
@@ -841,35 +950,57 @@ func _step_ai_driver(
 			var sig_d := float(sig_info["dist"])
 			var stop_line := float(sig_info.get("stop_line", 11.2))
 			if str(sig_info["aspect"]) != "green":
-				# Brake early from 46m out so AI NEVER runs a yellow/red light!
-				if sig_d >= stop_line - 1.4 and sig_d <= 46.0:
+				if sig_d >= stop_line - 1.4 and sig_d <= 62.0:
 					var d_to_stop_line := sig_d - stop_line
-					if d_to_stop_line <= 2.2:
-						tr["notch"] = 1 # Hold firmly behind stop line
-						if spd < 0.55:
-							tr["speed_mps"] = 0.0
-						return
-					elif spd > maxf(0.8, sqrt(2.0 * 0.92 * maxf(0.4, d_to_stop_line - 1.5))):
-						tr["notch"] = 1 if d_to_stop_line < 14.0 else 2
-						return
-			elif sig_d > stop_line and sig_d <= 36.0:
-				# Defensive intersection approach slowdown (<= 26 km/h) so light changes never catch AI overspeeding!
+					if d_to_stop_line <= 2.3:
+						must_hold_stop = true
+					else:
+						var d_sig := maxf(0.5, d_to_stop_line - 1.5)
+						v_env = minf(v_env, sqrt(2.0 * max_decel * 0.64 * d_sig))
+						var a_sig := (spd * spd) / (2.0 * d_sig)
+						if a_sig > req_decel:
+							req_decel = a_sig
+						if a_sig > max_decel * 0.45 or d_to_stop_line < 16.0:
+							brake_urgency = maxi(brake_urgency, 1)
+						if d_to_stop_line < 42.0:
+							hard_stop_ahead = true
+			elif sig_d > stop_line and sig_d <= 44.0:
+				# Smooth defensive intersection approach cap (26 km/h)
 				intersection_cap_mps = 26.0 / 3.6
+			elif sig_d > 44.0 and sig_d <= 72.0:
+				# Gently ramp down envelope before the 44m intersection zone so we coast instead of brake-chattering
+				var d_int := maxf(1.0, sig_d - 42.0)
+				var v_int := 26.0 / 3.6
+				v_env = minf(v_env, sqrt(v_int * v_int + 2.0 * max_decel * 0.35 * d_int))
 
 		var haz := traffic_sim.find_hazard_along_tram_curve(tr, 48.0)
 		if bool(haz["has_hazard"]):
 			var hd := float(haz["dist"])
 			var eb_dist := maxf(24.0, (spd * spd) / 4.8 + 8.0)
 			if hd < eb_dist:
-				tr["notch"] = 0 # Full Electromagnetic Track-Brake EB!
+				tr["ai_eb_hold"] = 0.75
+				_apply_ai_notch_command(tr, 0, dt, 2) # Full Electromagnetic Track-Brake EB!
 				if hd < 9.5:
 					tr["speed_mps"] = move_toward(spd, 0.0, 14.0 * dt)
 				elif spd < 0.45:
 					tr["speed_mps"] = 0.0
 				return
-			elif hd < 46.0 and spd > maxf(0.8, sqrt(2.0 * 1.45 * maxf(0.5, hd - 11.0))):
-				tr["notch"] = 1 # Firm B4 braking well ahead of obstacle
-				return
+			elif hd < 46.0:
+				var d_hz := maxf(0.5, hd - 11.0)
+				v_env = minf(v_env, sqrt(2.0 * 1.15 * d_hz))
+				var a_hz := (spd * spd) / (2.0 * d_hz)
+				if a_hz > req_decel:
+					req_decel = a_hz
+				brake_urgency = maxi(brake_urgency, 1)
+				hard_stop_ahead = true
+
+	# Hold EB briefly after an emergency hazard trigger so flickering traffic never chatters EB <-> B1
+	var eb_hold := float(tr.get("ai_eb_hold", 0.0))
+	if eb_hold > 0.0:
+		tr["ai_eb_hold"] = maxf(0.0, eb_hold - dt)
+		if cur_notch == 0 and spd > 0.25:
+			tr["ai_notch_timer"] = 0.0
+			return
 
 	var stops_list: Array = tr.get("stops", [])
 	if stops_list.is_empty():
@@ -896,53 +1027,219 @@ func _step_ai_driver(
 
 	var at_track_end := (not is_loop) and ((dir > 0.0 and s_now >= rlen - 2.2) or (dir < 0.0 and s_now <= 2.2))
 
-	var spec: Dictionary = tr["spec"]
-	var decel := float(spec.get("decel", 1.3)) * 0.78
-	var stop_dist := (spd * spd) / maxf(0.4, 2.0 * decel)
-
 	if float(tr["depart_cooldown"]) <= 0.0 and ((dist_ahead <= 3.8 and spd < 0.55) or (at_track_end and spd < 0.35)):
 		tr["speed_mps"] = 0.0
-		tr["notch"] = 3
+		tr["notch"] = 3 # Steady B2 platform holding brake
+		tr["ai_notch_timer"] = 0.0
+		tr["ai_cruising_coast"] = true
+		tr["ai_crawl_active"] = false
+		var arrived_st := _find_station_at_current_pos(tr)
+		var arr_idx := int(arrived_st["stop_idx"])
+		var arr_sid := int(arrived_st["station_id"])
+		if _is_turnback_stop(tr, arr_idx):
+			tr["term_stage"] = "alight_only"
+			tr["term_sid"] = arr_sid
+			tr["dwell_timer"] = 1.8 if (tr["pax_dests"] as Array).is_empty() else 2.4
+		else:
+			tr["term_stage"] = ""
+			tr["term_sid"] = -1
+			tr["dwell_timer"] = 4.6
 		tr["doors_target_open"] = true
-		tr["dwell_timer"] = 4.6
 		tr["dwell_elapsed"] = 0.0
 		if play_audio:
 			sound.play_door_chime()
 		return
 
-	# 3. AI strictly & proactively obeys current & upcoming Curve/Turnout Speed Limits (never overspeeding 20 km/h bends!)
-	var lim_info := get_speed_limit_status(tr)
-	var allowed_mps := minf((float(lim_info["limit_kmh"]) - 3.0) / 3.6, intersection_cap_mps)
-	var next_lim_mps := (float(lim_info["next_limit_kmh"]) - 3.0) / 3.6
-	var next_lim_dist := float(lim_info["next_dist_m"])
-	if next_lim_dist < 105.0 and spd > next_lim_mps:
-		var req_brake_d := (spd * spd - next_lim_mps * next_lim_mps) / maxf(0.5, 2.0 * decel * 0.72)
-		if next_lim_dist <= req_brake_d + 14.0:
-			allowed_mps = minf(allowed_mps, next_lim_mps)
+	# Hard hold at red signal / terminal interlocking / tram ahead
+	if must_hold_stop:
+		tr["ai_cruising_coast"] = true
+		tr["ai_crawl_active"] = false
+		if spd < 0.55:
+			tr["speed_mps"] = 0.0
+			_apply_ai_notch_command(tr, 3, dt, 0) # Calm B2 holding brake once stopped
+		else:
+			_apply_ai_notch_command(tr, 1 if spd > 1.8 else 2, dt, 1)
+		return
 
-	if float(tr["depart_cooldown"]) <= 0.0 and dist_ahead <= stop_dist + 7.0:
-		if dist_ahead <= 2.2:
-			tr["notch"] = 3
-		elif spd > maxf(1.3, sqrt(2.0 * decel * maxf(0.5, dist_ahead - 1.2))):
-			tr["notch"] = 2
-		elif spd < 1.05:
-			tr["notch"] = 6
+	# 3. Proactive Curve/Turnout & Intersection Speed Limits
+	var lim_info := get_speed_limit_status(tr)
+	var allowed_mps := minf((float(lim_info["limit_kmh"]) - 2.8) / 3.6, intersection_cap_mps)
+	var next_lim_mps := (float(lim_info["next_limit_kmh"]) - 2.8) / 3.6
+	var next_lim_dist := float(lim_info["next_dist_m"])
+	var coast_for_upcoming_limit := false
+	if next_lim_dist < 120.0 and next_lim_mps < allowed_mps:
+		var d_lim := maxf(2.0, next_lim_dist - 10.0)
+		var v_lim_env := sqrt(next_lim_mps * next_lim_mps + 2.0 * max_decel * 0.48 * d_lim)
+		v_env = minf(v_env, v_lim_env)
+		if spd > next_lim_mps + 0.2:
+			var a_lim := (spd * spd - next_lim_mps * next_lim_mps) / (2.0 * d_lim)
+			if a_lim > req_decel:
+				req_decel = a_lim
+			if a_lim > max_decel * 0.50:
+				brake_urgency = maxi(brake_urgency, 1)
+		if next_lim_dist < 42.0 and spd >= next_lim_mps - 0.6:
+			coast_for_upcoming_limit = true
+
+	if spd > allowed_mps + 0.35:
+		var over_v := spd - allowed_mps
+		var a_over := clampf(over_v * 0.55, max_decel * 0.28, max_decel)
+		if a_over > req_decel:
+			req_decel = a_over
+		if over_v > 0.7:
+			brake_urgency = maxi(brake_urgency, 1)
+
+	# 4. Station Approach Braking Curve (smooth service braking + gentle final ease-off)
+	var station_final_stop := false
+	if float(tr["depart_cooldown"]) <= 0.0 and dist_ahead < 95.0:
+		var d_st := maxf(0.6, dist_ahead - 1.0)
+		var v_st_env := sqrt(2.0 * max_decel * 0.48 * d_st)
+		v_env = minf(v_env, v_st_env)
+		var a_st := (spd * spd) / (2.0 * d_st)
+		if dist_ahead <= 2.4:
+			station_final_stop = true
+			approaching_station = true
+		elif a_st > max_decel * 0.17 or dist_ahead < (spd * spd) / maxf(0.4, 2.0 * max_decel * 0.46) + 9.0:
+			approaching_station = true
+			if a_st > req_decel:
+				req_decel = a_st
+			if a_st > max_decel * 0.65:
+				brake_urgency = maxi(brake_urgency, 1)
+
+	# 5. Select Steady Desired Notch with Non-Overlapping Hysteresis (Real Tram Power -> Coast -> Step-Brake Behavior)
+	var desired_notch := NOTCH_NEUTRAL
+	var cmd_urgency := brake_urgency
+
+	if station_final_stop:
+		tr["ai_cruising_coast"] = true
+		tr["ai_crawl_active"] = false
+		desired_notch = 2 if spd > 2.2 else 3 # Smooth B2 stop right onto the platform mark
+		cmd_urgency = maxi(cmd_urgency, 1 if spd > 2.2 else 0)
+	elif req_decel > max_decel * 0.22 or (cur_notch < NOTCH_NEUTRAL and req_decel > max_decel * 0.05):
+		# Active proportional service braking with strict non-overlapping release thresholds
+		# so easing off a brake notch NEVER immediately bounces back into the stronger notch!
+		tr["ai_cruising_coast"] = true
+		tr["ai_crawl_active"] = false
+		var net_req := maxf(0.0, req_decel - drag_est * 0.65)
+		var ratio := net_req / max_decel
+		var ideal_b := 4 # B1
+		if ratio >= 0.88:
+			ideal_b = 1 # B4
+		elif ratio >= 0.62:
+			ideal_b = 2 # B3
+		elif ratio >= 0.36:
+			ideal_b = 3 # B2
 		else:
-			tr["notch"] = NOTCH_NEUTRAL
+			ideal_b = 4 # B1
+
+		if cur_notch >= 1 and cur_notch <= 4:
+			# Current brake notch: only strengthen if demand exceeds this notch's capacity;
+			# only release if demand has dropped well below the WEAKER notch's capacity!
+			var cur_eff := float(NOTCH_NEUTRAL - cur_notch) * 0.25 * max_decel + drag_est * 0.65
+			var release_thresh := 0.05 * max_decel
+			if cur_notch == 1:
+				release_thresh = 0.64 * max_decel # B4 -> B3 only once B3 can easily handle it
+			elif cur_notch == 2:
+				release_thresh = 0.39 * max_decel # B3 -> B2 only once B2 can easily handle it
+			elif cur_notch == 3:
+				release_thresh = 0.16 * max_decel # B2 -> B1 only once B1 can easily handle it
+			if req_decel > cur_eff + max_decel * 0.12:
+				desired_notch = mini(cur_notch - 1, ideal_b)
+			elif req_decel < release_thresh and not (approaching_station and dist_ahead < 10.0):
+				desired_notch = cur_notch + 1
+				cmd_urgency = 0 # Brake release is always calm
+			else:
+				desired_notch = cur_notch
+		else:
+			desired_notch = ideal_b
 	else:
-		var cruise_mps := minf(minf(float(spec.get("max_speed_kmh", 70)) * 0.68, 48.0) / 3.6, allowed_mps)
-		if spd > allowed_mps + 2.2:
-			tr["notch"] = 1 # Firm B4 braking if well above upcoming curve/intersection limit
-		elif spd > allowed_mps + 0.5:
-			tr["notch"] = 2 # Smooth B3 braking for curve/turnout limit
-		elif spd > cruise_mps + 0.5:
-			tr["notch"] = 4
-		elif spd < cruise_mps - 1.4:
-			tr["notch"] = 8
-		elif spd < cruise_mps - 0.2:
-			tr["notch"] = 6
+		# Not actively braking -> check short-station crawl vs. Power-and-Coast cruising
+		var base_cruise := minf(float(spec.get("max_speed_kmh", 70)) * 0.68, 48.0) / 3.6
+		var target_mps := minf(base_cruise, minf(allowed_mps, v_env))
+
+		if (approaching_station or (float(tr["depart_cooldown"]) <= 0.0 and dist_ahead < 22.0)) and not hard_stop_ahead:
+			# Stopped slightly short of the platform mark: gentle single P1 crawl with hysteresis latch
+			var crawling := bool(tr.get("ai_crawl_active", false))
+			if not crawling and spd < 0.85 and dist_ahead > 3.6:
+				crawling = true
+			elif crawling and (spd >= 1.85 or dist_ahead <= 3.1):
+				crawling = false
+			tr["ai_crawl_active"] = crawling
+			desired_notch = (NOTCH_NEUTRAL + 1) if crawling else NOTCH_NEUTRAL
 		else:
-			tr["notch"] = NOTCH_NEUTRAL
+			tr["ai_crawl_active"] = false
+			var coasting := bool(tr.get("ai_cruising_coast", false))
+			# Wide ~5.0 km/h coasting deadband: accelerate to cruise speed, then coast calmly in N!
+			if hard_stop_ahead or coast_for_upcoming_limit or spd >= target_mps - 0.15 or target_mps < 1.2:
+				coasting = true
+			elif spd < target_mps - 1.40:
+				coasting = false
+			tr["ai_cruising_coast"] = coasting
+
+			if coasting:
+				desired_notch = NOTCH_NEUTRAL
+			else:
+				var dv := target_mps - spd
+				if cur_notch >= 6 and cur_notch <= 8:
+					# Power-notch hysteresis so P3 -> P2 -> P1 steps down smoothly as speed approaches cruise
+					if cur_notch == 8:
+						desired_notch = 8 if dv > 2.2 else 7
+					elif cur_notch == 7:
+						if dv > 3.5:
+							desired_notch = 8
+						elif dv < 0.9:
+							desired_notch = 6
+						else:
+							desired_notch = 7
+					else:
+						desired_notch = 7 if dv > 1.9 else 6
+				else:
+					if dv > 3.0:
+						desired_notch = 8 # P3 (stepped up via P1 -> P2 -> P3 by rate limiter)
+					elif dv > 1.3:
+						desired_notch = 7 # P2
+					else:
+						desired_notch = 6 # P1
+
+	_apply_ai_notch_command(tr, desired_notch, dt, cmd_urgency)
+
+
+func _apply_ai_notch_command(tr: Dictionary, desired_notch: int, dt: float, urgency: int) -> void:
+	var cur := int(tr["notch"])
+	var timer := float(tr.get("ai_notch_timer", 1.0)) + dt
+	tr["ai_notch_timer"] = timer
+	var clamped_target := clampi(desired_notch, 0, NOTCH_LABELS.size() - 1)
+	if clamped_target == cur:
+		return
+
+	var step_dir := 1 if clamped_target > cur else -1
+	# Emergency Brake (EB) only: apply immediately without rate limit
+	if urgency >= 2:
+		tr["notch"] = clamped_target
+		tr["ai_notch_timer"] = 0.0
+		tr["ai_last_step_dir"] = step_dir
+		return
+
+	var last_dir := int(tr.get("ai_last_step_dir", 0))
+	var is_reversal := (last_dir != 0 and step_dir != last_dir)
+	var min_wait := 0.55 # Calm, realistic ~0.55s per notch step during normal driving
+	if urgency == 1 and step_dir < 0:
+		# Active safety braking: crisp 0.35s per notch step (or 0.65s if just reversed)
+		min_wait = 0.65 if is_reversal else 0.35
+	elif is_reversal:
+		# Prevent back-and-forth chatter: require a full 1.10s human dwell before reversing lever direction
+		min_wait = 1.10
+
+	if timer < min_wait:
+		return
+
+	var next_n := cur + step_dir
+	# Like a real master controller detent, cutting Power off to Coast/Brake pulls cleanly to Neutral (N) in one motion
+	if cur > NOTCH_NEUTRAL and clamped_target <= NOTCH_NEUTRAL:
+		next_n = NOTCH_NEUTRAL
+
+	tr["notch"] = clampi(next_n, 0, NOTCH_LABELS.size() - 1)
+	tr["ai_notch_timer"] = 0.0
+	tr["ai_last_step_dir"] = step_dir
 
 
 # Clear distance to the nearest tram that physically occupies MY path ahead (walks my own route curve and looks
@@ -1012,13 +1309,33 @@ func _step_tram_physics_and_doors(
 		tr["open_doorways"] = 0
 
 	if door_r > 0.55 and float(tr["speed_mps"]) < 0.30 and int(tr.get("open_doorways", 0)) > 0:
-		if int(dock_info["station_id"]) >= 0:
-			var upcoming := get_upcoming_station_ids(tr, int(dock_info["stop_idx"]))
-			if upcoming.is_empty() and not bool(tr["is_loop"]):
-				var rev_copy := tr.duplicate()
-				rev_copy["dir"] = -float(tr["dir"])
-				upcoming = get_upcoming_station_ids(rev_copy, int(dock_info["stop_idx"]))
-			pax_sim.exchange_passengers_at_station(tr, int(dock_info["station_id"]), upcoming, dt)
+		var dock_sid := int(dock_info["station_id"])
+		var dock_idx := int(dock_info["stop_idx"])
+		if dock_sid >= 0:
+			var stage_now := str(tr.get("term_stage", ""))
+			# In manual mode, opening doors at a reversing terminus before cab change enters Phase 1 ("alight_only")
+			if stage_now == "" and _is_turnback_stop(tr, dock_idx):
+				stage_now = "alight_only"
+				tr["term_stage"] = "alight_only"
+				tr["term_sid"] = dock_sid
+			if stage_now == "alight_only":
+				# Phase 1: ONLY alight (evacuate 100% of passengers), NO boarding before cab change!
+				pax_sim.exchange_passengers_at_station(tr, dock_sid, [], dt, true, false, true)
+			elif stage_now == "board_only":
+				# Phase 2 (after cab change): ONLY board new passengers for the return trip!
+				var upcoming_b := get_upcoming_station_ids(tr, dock_idx)
+				pax_sim.exchange_passengers_at_station(tr, dock_sid, upcoming_b, dt, false, true, false)
+			else:
+				var upcoming := get_upcoming_station_ids(tr, dock_idx)
+				pax_sim.exchange_passengers_at_station(tr, dock_sid, upcoming, dt, true, true, false)
+	elif float(tr["speed_mps"]) > 0.25 and str(tr.get("term_stage", "")) != "":
+		# Manual driver pulled out of the terminal: transition reservation to "out" and clear terminal stage
+		var prev_tsid := int(tr.get("term_sid", -1))
+		var res_m: Dictionary = tr["term_res"]
+		if prev_tsid >= 0 and res_m.has(prev_tsid):
+			(res_m[prev_tsid] as Dictionary)["phase"] = "out"
+		tr["term_stage"] = ""
+		tr["term_sid"] = -1
 
 	var spec: Dictionary = tr["spec"]
 	var max_spd_mps := float(spec.get("max_speed_kmh", 70)) / 3.6
@@ -1241,6 +1558,14 @@ func _find_station_at_current_pos(tr: Dictionary) -> Dictionary:
 	var stops: Array = tr.get("stops", [])
 	if stops.is_empty():
 		return {"station_id": -1, "stop_idx": -1}
+
+	# During post-flip terminal boarding ("board_only" / "flip_wait"), keep locked to the exact terminal stop
+	var t_stage := str(tr.get("term_stage", ""))
+	var t_sid := int(tr.get("term_sid", -1))
+	if (t_stage == "board_only" or t_stage == "flip_wait") and t_sid >= 0:
+		for i in range(stops.size()):
+			if int(stops[i]["station_id"]) == t_sid:
+				return {"station_id": t_sid, "stop_idx": i}
 
 	var s_now := float(tr["s"])
 	var dir := float(tr["dir"])
@@ -1560,6 +1885,9 @@ func _sw_ready(tr: Dictionary) -> bool:
 	if bool(tr.get("derailed", false)) or bool(tr.get("crashed", false)):
 		return false
 	if bool(tr["doors_target_open"]) or float(tr["door_ratio"]) > 0.02 or bool(tr.get("ai_depart_pending", false)):
+		return false
+	var t_st := str(tr.get("term_stage", ""))
+	if t_st == "alight_only" or t_st == "flip_wait" or t_st == "board_only":
 		return false
 	return _terminal_hold_distance(tr) >= 1e8
 
