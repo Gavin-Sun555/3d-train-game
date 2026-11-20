@@ -413,10 +413,14 @@ func _spawn_one_random_passenger(graph: NetworkGraph, instant_place: bool) -> vo
 		var slot_pos: Vector3 = slots[slot_idx]
 		var start_pos: Vector3 = slot_pos if instant_place else (sview["ramp_entry"] as Vector3)
 		agent_dict = _create_3d_person(start_pos)
+		agent_dict["station_id"] = orig_sid
 		agent_dict["target"] = slot_pos
 		agent_dict["face_pos"] = sview["pos"] as Vector3
 		agent_dict["mode"] = "wait" if instant_place else "walk_to_slot"
 		agent_dict["on_platform"] = instant_place
+		if not instant_place and sview.has("platform_entry"):
+			# Up the stairs / ramp first; on the platform deck it can board a waiting train right away
+			agent_dict["entry_pt"] = sview["platform_entry"]
 		if not instant_place:
 			_active_walkers.append(agent_dict)
 		else:
@@ -550,13 +554,20 @@ func _update_walkers(dt: float) -> void:
 					wps_live[0] = (pref["aisle_node"] as Node3D).global_position
 					ag["target"] = wps_live[0]
 
-		var target: Vector3 = ag["target"]
+		var via_entry := mode == "walk_to_slot" and ag.has("entry_pt")
+		var target: Vector3 = ag["entry_pt"] if via_entry else ag["target"]
 		var spd := float(ag.get("speed", 1.85))
 		var cur := node.global_position
 		var diff := target - cur
 		var dist := diff.length()
 
-		if dist <= 0.14:
+		if dist <= 0.14 and via_entry:
+			# Reached the platform deck: walk on to its waiting spot, already able to board
+			node.global_position = target
+			ag.erase("entry_pt")
+			ag["on_platform"] = true
+			_refresh_station_label(int(ag.get("station_id", -1)))
+		elif dist <= 0.14:
 			node.global_position = target
 			if mode == "board_enter":
 				var wps: Array = ag.get("waypoints", [])
@@ -945,7 +956,13 @@ func _refresh_station_label(station_id: int) -> void:
 	var lbl: Label3D = _station_views[station_id].get("wait_label")
 	if is_instance_valid(lbl):
 		var cnt: int = (station_queues.get(station_id, []) as Array).size()
-		lbl.text = "候车 %d 人" % cnt if cnt > 0 else "暂无候车"
+		var on_plat := get_boardable_count(station_id)
+		if cnt <= 0:
+			lbl.text = "暂无候车"
+		elif on_plat < cnt:
+			lbl.text = "候车 %d 人（另 %d 人进站中）" % [on_plat, cnt - on_plat]
+		else:
+			lbl.text = "候车 %d 人" % cnt
 
 
 static func _box(parent: Node3D, sz: Vector3, pos: Vector3, mat: Material) -> MeshInstance3D:

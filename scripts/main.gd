@@ -4697,7 +4697,7 @@ func _update_run_hud() -> void:
 		else:
 			var sd := float(ap["signed_dist"])
 			var nm := str(ap["name"])
-			var wait_n := _pax_sim.get_waiting_count(int(ap["station_id"]))
+			var wait_n := _pax_sim.get_boardable_count(int(ap["station_id"]))
 			if sd < -0.5:
 				_lbl_station_next.text = "⚠ 已越过 %s 停车位置 %.1f m · 只有对准站台的车门能打开" % [nm, sd]
 			elif sd <= 0.5:

@@ -301,6 +301,8 @@ static func build_detailed_station(
 	if elevated:
 		ramp_world = tf * Vector3(stair_x, 0.2, plat_len * 0.5 + stair_run + 1.0)
 	var board_edge_center := tf * Vector3(0.0 if is_island else (inner_edge_x + side * 0.28), plat_h, 0.0)
+	# Top of the stairs / ramp: where arriving passengers step onto the platform deck
+	var plat_entry := tf * Vector3(stair_x if elevated else plat_cx, plat_h, plat_len * 0.5 - 0.6)
 
 	return {
 		"station_id": sid,
@@ -313,6 +315,7 @@ static func build_detailed_station(
 		"platform_len": plat_len,
 		"waiting_slots": waiting_slots,
 		"ramp_entry": ramp_world,
+		"platform_entry": plat_entry,
 		"board_edge": board_edge_center,
 		"wait_label": wait_lbl,
 		"name_label": lbl,
