@@ -62,11 +62,24 @@ func rebuild_fleet(
 
 			var init_s := 20.0
 			var init_dir := 1.0
+			var sec_l := float(tinfo.get("section_len", 9.2))
+			var c_len_spawn := float(sec_cnt - 1) * (sec_l + 0.62) + sec_l * 0.68
 			if is_loop:
 				init_s = fposmod(float(ti) * (route_len / float(fleet_n)) + 16.0, route_len)
+				# A train starting at a terminal stands exactly where a train that stopped perfectly and changed cab
+				# would be: ready to load and depart (stop readout 0 m, not up against the buffer stop)
+				for st_t: Dictionary in stops:
+					if not bool(st_t.get("turnback", false)):
+						continue
+					var dep_s := _departure_spawn_s(st_t, c_len_spawn, route_len)
+					var cusp_t := float(st_t.get("cusp", st_t["offset"]))
+					var span_t := fposmod(dep_s - cusp_t, route_len) + 45.0
+					if (ti == 0 and st_t == stops[0]) or fposmod(init_s - cusp_t, route_len) < span_t:
+						init_s = dep_s
+						break
 			else:
 				if fleet_n == 1:
-					init_s = clampf(float(stops[0]["offset"]) + 6.0, 2.0, route_len - 2.0)
+					init_s = clampf(float(stops[0]["offset"]) + minf(c_len_spawn * 0.38, 9.5), 2.0, route_len - 2.0)
 				else:
 					var frac := float(ti) / float(maxi(1, fleet_n - 1))
 					var safe_pad := minf(26.0, route_len * 0.14)
@@ -149,6 +162,15 @@ func rebuild_fleet(
 			_position_tram_3d(tr_dict)
 
 	apply_night_lights(night_factor)
+
+
+# Head position of a train standing perfectly at terminal `stop` after its cab change (mirror of the arrival stop)
+static func _departure_spawn_s(stop: Dictionary, c_len: float, rlen: float) -> float:
+	var cusp := float(stop.get("cusp", stop["offset"]))
+	var back := fposmod(cusp - float(stop["offset"]), rlen)
+	if back > rlen * 0.5:
+		back = 0.0
+	return fposmod(cusp + back + TURNBACK_STOP_MARGIN + c_len, rlen)
 
 
 static func _spawn_footprint(c: Curve3D, s: float, dir: float, foot: float, rlen: float, is_loop: bool) -> PackedVector3Array:
@@ -733,6 +755,17 @@ func stop_approach_info(tr: Dictionary) -> Dictionary:
 	var dir := float(tr["dir"])
 	var rlen := float(tr["route_len"])
 	var is_loop := bool(tr["is_loop"])
+	# Standing on the departure side of a terminal (after the cab change, or at the start of a run): measure
+	# against the mirrored stopping position, so a perfectly placed train reads 0 m
+	if is_loop and float(tr["speed_mps"]) < 0.3:
+		for i0 in range(stops.size()):
+			var st0: Dictionary = stops[i0]
+			if not bool(st0.get("turnback", false)) or not _on_terminal_departure_side(tr, int(st0["station_id"])):
+				continue
+			var dep_s := _departure_spawn_s(st0, _consist_length(tr), rlen)
+			var dd := fposmod((s_now - dep_s) * dir + rlen * 0.5, rlen) - rlen * 0.5
+			if absf(dd) < 40.0:
+				return {"station_id": int(st0["station_id"]), "name": str(st0["name"]), "signed_dist": dd, "stop_idx": i0}
 	var best_i := -1
 	var best_d := 1e9
 	for i in range(stops.size()):
