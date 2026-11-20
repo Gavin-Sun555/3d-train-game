@@ -208,6 +208,7 @@ func export_run_state() -> Dictionary:
 			"term_stage": str(tr.get("term_stage", "")),
 			"term_sid": int(tr.get("term_sid", -1)),
 			"pax_dests": (tr["pax_dests"] as Array).duplicate(),
+			"reverser": float(tr.get("reverser", 1.0)),
 		})
 	return {
 		"active_tram_idx": active_tram_idx,
@@ -242,6 +243,7 @@ func import_run_state(run_state: Dictionary, graph: NetworkGraph) -> void:
 		tr["term_stage"] = str(st.get("term_stage", ""))
 		tr["term_sid"] = int(st.get("term_sid", -1))
 		tr["term_flip_timer"] = 0.0
+		tr["reverser"] = -1.0 if float(st.get("reverser", 1.0)) < 0.0 else 1.0
 		var dests: Array = st.get("pax_dests", [])
 		tr["pax_dests"] = dests.duplicate()
 		_position_tram_3d(tr)
@@ -346,6 +348,7 @@ func step_all_trams(
 		var is_player_manual := (i == active_tram_idx and manual_drive)
 
 		if not is_player_manual:
+			tr["reverser"] = 1.0
 			_step_ai_driver(tr, i, dt, graph, pax_sim, traffic_sim, sound, i == active_tram_idx)
 
 		var derail_ev := _step_tram_physics_and_doors(tr, i, dt, graph, pax_sim, sound, i == active_tram_idx, is_player_manual)
@@ -460,6 +463,22 @@ func manual_step_notch(delta_notch: int, sound: SoundSynth) -> void:
 			sound.play_door_chime()
 			return
 	tr["notch"] = clampi(int(tr["notch"]) + delta_notch, 0, NOTCH_LABELS.size() - 1)
+
+
+# Reverser (方向手柄): forward / R. Only changed at a standstill; reverse runs the train backwards along its
+# route (rear cab end leading) at shunting speed. AI driving always runs forward.
+const REVERSE_MAX_KMH := 15.0
+
+func manual_toggle_reverser() -> String:
+	var tr := get_active_tram()
+	if tr.is_empty():
+		return "no_tram"
+	if float(tr["speed_mps"]) >= 0.15:
+		return "moving"
+	manual_drive = true
+	tr["reverser"] = -1.0 if float(tr.get("reverser", 1.0)) > 0.0 else 1.0
+	tr["notch"] = NOTCH_NEUTRAL
+	return "reverse" if float(tr["reverser"]) < 0.0 else "forward"
 
 
 func manual_set_notch(n_idx: int) -> void:
@@ -1448,6 +1467,9 @@ func _step_tram_physics_and_doors(
 
 	var spec: Dictionary = tr["spec"]
 	var max_spd_mps := float(spec.get("max_speed_kmh", 70)) / 3.6
+	var rev := float(tr.get("reverser", 1.0))
+	if rev < 0.0:
+		max_spd_mps = REVERSE_MAX_KMH / 3.6
 	var max_accel := float(spec.get("accel", 1.25))
 	var max_decel := float(spec.get("decel", 1.35))
 
@@ -1482,7 +1504,8 @@ func _step_tram_physics_and_doors(
 
 	var dir := float(tr["dir"])
 	var rlen := float(tr["route_len"])
-	var ds := spd * dir * dt
+	var mv := dir * rev # actual travel direction along s (reverse gear: backwards)
+	var ds := spd * mv * dt
 	var s_prev := float(tr["s"])
 	var s_new := s_prev + ds
 	var lid_dist := int(tr["line_id"])
@@ -1493,11 +1516,13 @@ func _step_tram_physics_and_doors(
 		# Buffer stop at the end of a terminal tail track: the route only continues past the turnback
 		# point after a cab change, so a tram (manually driven or not) can never run through it.
 		if ds != 0.0:
+			# Reversing, the rear end leads: it is what reaches the turnback point / buffer
+			var lead_off := 0.0 if rev > 0.0 else -dir * _consist_length(tr)
 			for z: Dictionary in tr.get("terminal_zones", []):
 				var cusp := float(z["cusp_s"])
-				var d_prev := fposmod((cusp - s_prev) * dir, rlen)
+				var d_prev := fposmod((cusp - (s_prev + lead_off)) * mv, rlen)
 				if d_prev > 0.5 and d_prev < 40.0 and absf(ds) >= d_prev - 0.5:
-					s_new = fposmod(cusp - dir * 0.5, rlen)
+					s_new = fposmod(cusp - mv * 0.5 - lead_off, rlen)
 					var hit_kmh := spd * 3.6
 					spd = 0.0
 					if bool(z.get("buffer", false)) and hit_kmh > BUFFER_SAFE_KMH:
@@ -1582,7 +1607,7 @@ func _step_tram_physics_and_doors(
 			needle.rotation.z = lerpf(needle.rotation.z, target_ang, minf(1.0, dt * 14.0))
 		var btn_rev: Node3D = cab_ctrls.get("btn_rev")
 		if is_instance_valid(btn_rev):
-			btn_rev.rotation.y = lerpf(btn_rev.rotation.y, deg_to_rad(32.0 if dir > 0.0 else -32.0), minf(1.0, dt * 12.0))
+			btn_rev.rotation.y = lerpf(btn_rev.rotation.y, deg_to_rad(32.0 if rev > 0.0 else -32.0), minf(1.0, dt * 12.0))
 		var d_mat: StandardMaterial3D = cab_ctrls.get("door_btn_mat")
 		if d_mat != null:
 			d_mat.emission_energy_multiplier = 2.0 if door_r > 0.1 else 0.75

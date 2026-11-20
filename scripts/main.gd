@@ -249,6 +249,7 @@ var _lbl_speed_limit: Label
 var _lbl_notch: Label
 var _lbl_drv_status: Label
 var _btn_doors: Button
+var _btn_reverser: Button
 var _btn_drive_mode: Button
 var _notch_bars: Array[ColorRect] = []
 
@@ -1716,6 +1717,8 @@ func _unhandled_input(event: InputEvent) -> void:
 					_transit_sim.manual_set_notch(0)
 				KEY_R:
 					_do_cab_change()
+				KEY_X:
+					_do_toggle_reverser()
 				KEY_G:
 					_do_throw_switch()
 				KEY_H:
@@ -1744,6 +1747,19 @@ func _do_throw_switch() -> void:
 			_show_toast("⚠ 列车正在道岔上，道岔已锁闭不能扳动")
 		_:
 			_show_toast("前方 260 m 内没有道岔")
+
+
+# Reverser: forward <-> R (reverse gear). Not needed for normal service, just for shunting about.
+func _do_toggle_reverser() -> void:
+	match _transit_sim.manual_toggle_reverser():
+		"reverse":
+			_sound.play_notch_click()
+			_show_toast("⏪ 已挂倒档 R：牵引时列车向后行驶（限速 %d km/h）；停车后再按 X 回到前进档" % int(TransitSim.REVERSE_MAX_KMH))
+		"forward":
+			_sound.play_notch_click()
+			_show_toast("⏩ 已回到前进档")
+		"moving":
+			_show_toast("⚠ 请先停车再切换前进 / 倒档")
 
 
 # Manual cab change: the driver walks to the other cab; at a terminal the tram then departs back the way it came
@@ -3287,7 +3303,7 @@ func _build_ui() -> void:
 	cam_hbox.add_child(_make_btn("5 鸟瞰全局", func(): _set_cam_mode(CamMode.BIRD)))
 
 	var cam_hint := Label.new()
-	cam_hint.text = "↑↓←→ 方向键移动/旋转视角 · W/S 牵引与制动 · O 开关车门 · G 手动扳道岔(特殊情况)"
+	cam_hint.text = "↑↓←→ 方向键移动/旋转视角 · W/S 牵引与制动 · X 倒档 · O 开关车门 · G 手动扳道岔(特殊情况)"
 	cam_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	cam_hint.add_theme_font_size_override("font_size", 12)
 	cam_hint.add_theme_color_override("font_color", Color(0.75, 0.82, 0.88))
@@ -3350,6 +3366,8 @@ func _build_ui() -> void:
 	_btn_drive_mode = _make_btn("切换手动驾驶 (Q)", func(): _transit_sim.manual_drive = not _transit_sim.manual_drive)
 	act_row.add_child(_btn_drive_mode)
 	act_row.add_child(_make_btn("换端折返 (R)", func(): _do_cab_change()))
+	_btn_reverser = _make_btn("倒档 R (X)", func(): _do_toggle_reverser())
+	act_row.add_child(_btn_reverser)
 	act_row.add_child(_make_btn("手动扳道岔 (G)", func(): _do_throw_switch()))
 
 	# 5. HOME SCREEN OVERLAY (Map Selection + Progress Summary + Actions)
@@ -4800,10 +4818,15 @@ func _update_run_hud() -> void:
 		n_col = Color(1.0, 0.28, 0.28)
 	elif n_idx < TransitSim.NOTCH_NEUTRAL:
 		n_col = Color(0.96, 0.72, 0.26)
-	_lbl_notch.text = "档位 " + TransitSim.NOTCH_LABELS[n_idx]
+	var reversing := float(tr.get("reverser", 1.0)) < 0.0
+	_lbl_notch.text = ("档位 R · " if reversing else "档位 ") + TransitSim.NOTCH_LABELS[n_idx]
+	if reversing:
+		n_col = Color(0.98, 0.56, 0.30)
 	_lbl_notch.add_theme_color_override("font_color", n_col)
 
 	var dir_txt := "前进" if float(tr["dir"]) > 0.0 else "折返向"
+	if reversing:
+		dir_txt = "⏪ 倒车 R（向后）"
 	var door_txt := "车门锁闭"
 	if float(tr["door_ratio"]) > 0.1:
 		var od := int(tr.get("open_doorways", 0))
@@ -4822,6 +4845,9 @@ func _update_run_hud() -> void:
 			_notch_bars[i].color = Color(0.18, 0.32, 0.24, 0.65)
 
 	_btn_doors.text = "关闭车门 (O)" if bool(tr["doors_target_open"]) else "打开车门 (O)"
+	if _btn_reverser != null:
+		_btn_reverser.text = "回前进档 (X)" if reversing else "倒档 R (X)"
+		_highlight_active_btn(_btn_reverser, reversing)
 	_btn_drive_mode.text = "切回 AI 托管 (Q)" if _transit_sim.manual_drive else "接管手动驾驶 (Q)"
 
 

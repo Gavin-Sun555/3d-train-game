@@ -401,8 +401,6 @@ func _spawn_one_random_passenger(graph: NetworkGraph, instant_place: bool) -> vo
 		dest_sid = unique_sids[(unique_sids.find(orig_sid) + 1) % unique_sids.size()]
 
 	var q: Array = station_queues.get(orig_sid, [])
-	if q.size() >= 45:
-		return
 
 	var sview: Dictionary = _station_views[orig_sid]
 	var slots: Array = sview["waiting_slots"]
