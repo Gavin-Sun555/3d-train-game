@@ -548,6 +548,7 @@ func _try_turnback_flip(tr: Dictionary, reach: float = 30.0, keep_dwell: bool = 
 
 
 func _reverse_tram_switch_cab(tr: Dictionary) -> void:
+	tr["sw_pending"] = {}
 	var old_dir := float(tr["dir"])
 	var rlen := float(tr["route_len"])
 	var is_loop := bool(tr["is_loop"])
@@ -1154,6 +1155,8 @@ func _step_ai_driver(
 	else:
 		# Not actively braking -> check short-station crawl vs. Power-and-Coast cruising
 		var base_cruise := minf(float(spec.get("max_speed_kmh", 70)) * 0.68, 48.0) / 3.6
+		if bool(tr.get("elevated", false)):
+			base_cruise = float(spec.get("max_speed_kmh", 70)) * 0.9 / 3.6 # grade-separated: no street traffic to mind
 		var target_mps := minf(base_cruise, minf(allowed_mps, v_env))
 
 		if (approaching_station or (float(tr["depart_cooldown"]) <= 0.0 and dist_ahead < 22.0)) and not hard_stop_ahead:
@@ -1731,6 +1734,7 @@ func _compile_line_variants(graph: NetworkGraph, ln: Dictionary, base: Dictionar
 
 
 func _apply_route_variant(tr: Dictionary, compiled: Dictionary, key: String) -> void:
+	tr["sw_pending"] = {}
 	tr["curve"] = compiled["curve"]
 	tr["route_len"] = float(compiled["length"])
 	tr["stops"] = compiled["stops"]
@@ -1970,6 +1974,7 @@ func _update_monorail_switches(graph: NetworkGraph) -> void:
 		if not bool(tr.get("elevated", false)):
 			continue
 		var lst := _scan_switches(tr, switches)
+		var prev_next: Dictionary = tr.get("sw_next", {})
 		tr["sw_next"] = {}
 		var per := {}
 		for c: Dictionary in lst:
@@ -1979,45 +1984,70 @@ func _update_monorail_switches(graph: NetworkGraph) -> void:
 			if float(c["d_entry"]) > 0.0 and float(c["need"]) >= 0.0:
 				tr["sw_next"] = c
 				break
-	for sw in switches:
-		if not is_instance_valid(sw):
+		# The scan works in 1 m steps, so it may move on to the next switch a moment before the head actually
+		# enters this one: keep it pending until the entry check (_check_switch_entry) has seen the head pass.
+		var new_next: Dictionary = tr["sw_next"]
+		if not prev_next.is_empty() and (new_next.is_empty() or new_next["sw"] != prev_next["sw"]):
+			tr["sw_pending"] = prev_next
+	# A crossover's switches (two in series for a two-way crossover) are owned as one unit, so a train never
+	# has to stop between them and two trains can never deadlock on them.
+	var done := {}
+	for sw0 in switches:
+		if not is_instance_valid(sw0) or done.has(sw0):
 			continue
-		var cur := int(sw.owner_idx)
-		if cur >= trams.size():
-			cur = -1
-		if cur >= 0:
-			var ci: Dictionary = (infos.get(cur, {}) as Dictionary).get(sw, {})
-			var cur_manual := cur == active_tram_idx and manual_drive
-			if ci.is_empty():
-				cur = -1 # tail has cleared the span
-			elif float(ci["d_entry"]) > 0.5 and not cur_manual and not _sw_ready(trams[cur]):
-				cur = -1 # not entered yet and now dwelling / held: let others through meanwhile
-			elif float(ci["need"]) >= 0.0 and float(ci["d_entry"]) > 0.0:
-				sw.owner_need = float(ci["need"])
-				sw.owner_entry = int(ci["entry"])
-		if cur < 0:
-			var best_key := 1e9
-			for ti: int in infos.keys():
-				var c: Dictionary = (infos[ti] as Dictionary).get(sw, {})
+		var grp: Array = []
+		for g in (sw0.group if not (sw0.group as Array).is_empty() else [sw0]):
+			if is_instance_valid(g):
+				grp.append(g)
+				done[g] = true
+		# Group view of each train: nearest entry over the group's switches (present while any part is ahead/under it)
+		var g_de := {}
+		for ti: int in infos.keys():
+			var best := 1e9
+			var found := false
+			for g in grp:
+				var c: Dictionary = (infos[ti] as Dictionary).get(g, {})
 				if c.is_empty() or float(c["need"]) < 0.0:
 					continue
-				var de := float(c["d_entry"])
+				found = true
+				best = minf(best, float(c["d_entry"]))
+			if found:
+				g_de[ti] = best
+		var cur := -1
+		for g in grp:
+			if int(g.owner_idx) >= 0 and int(g.owner_idx) < trams.size():
+				cur = int(g.owner_idx)
+				break
+		if cur >= 0:
+			var cur_manual := cur == active_tram_idx and manual_drive
+			if not g_de.has(cur):
+				cur = -1 # tail has cleared the whole crossover
+			elif float(g_de[cur]) > 0.5 and not cur_manual and not _sw_ready(trams[cur]):
+				cur = -1 # not entered yet and now dwelling / held: let others through meanwhile
+		if cur < 0:
+			var best_key := 1e9
+			for ti: int in g_de.keys():
+				var de := float(g_de[ti])
 				if de > 0.0 and not _sw_ready(trams[ti]):
 					continue
 				var key := de - (1000.0 if de <= SW_SIGNAL_BACK else 0.0) # committed trains first
 				if key < best_key:
 					best_key = key
 					cur = ti
+		for sw in grp:
 			if cur >= 0:
-				var c2: Dictionary = (infos[cur] as Dictionary)[sw]
-				sw.owner_need = float(c2["need"])
-				sw.owner_entry = int(c2["entry"])
-		if cur != int(sw.owner_idx) or cur < 0 or not (cur == active_tram_idx and manual_drive):
-			sw.manual_override = false # override only lasts while that manual train holds the switch
-		sw.owner_idx = cur
-		if cur >= 0 and not sw.manual_override:
-			sw.target = sw.owner_need
-		sw.update_signals()
+				var c2: Dictionary = (infos[cur] as Dictionary).get(sw, {})
+				if c2.is_empty() or float(c2["need"]) < 0.0:
+					sw.owner_entry = -1 # this part is already behind the train
+				elif float(c2["d_entry"]) > 0.0 or cur != int(sw.owner_idx):
+					sw.owner_need = float(c2["need"])
+					sw.owner_entry = int(c2["entry"])
+			if cur != int(sw.owner_idx) or cur < 0 or not (cur == active_tram_idx and manual_drive):
+				sw.manual_override = false # override only lasts while that manual train holds the switch
+			sw.owner_idx = cur
+			if cur >= 0 and not sw.manual_override and int(sw.owner_entry) >= 0:
+				sw.target = sw.owner_need
+			sw.update_signals()
 	# Stop points for trains whose next switch is not (yet) set and cleared for them
 	for ti: int in infos.keys():
 		var tr: Dictionary = trams[ti]
@@ -2097,7 +2127,15 @@ func manual_throw_switch(graph: NetworkGraph) -> String:
 
 # Player-driven train entering a switch span that is not set and cleared for it -> derailment
 func _check_switch_entry(tr: Dictionary, tram_idx: int) -> Dictionary:
-	var nx: Dictionary = tr.get("sw_next", {})
+	for key: String in ["sw_pending", "sw_next"]:
+		var ev := _check_switch_entry_one(tr, tram_idx, key)
+		if not ev.is_empty():
+			return ev
+	return {}
+
+
+func _check_switch_entry_one(tr: Dictionary, tram_idx: int, key: String) -> Dictionary:
+	var nx: Dictionary = tr.get(key, {})
 	if nx.is_empty() or not is_instance_valid(nx["sw"]):
 		return {}
 	var de := (float(nx["s_entry"]) - float(tr["s"])) * float(tr["dir"])
@@ -2105,11 +2143,21 @@ func _check_switch_entry(tr: Dictionary, tram_idx: int) -> Dictionary:
 		de = fposmod(de, float(tr["route_len"]))
 		if de > float(tr["route_len"]) * 0.5:
 			de -= float(tr["route_len"])
+	if de < -6.0 and key == "sw_pending":
+		tr[key] = {} # passed long ago (or the route changed): nothing left to check
+		return {}
 	if de > 0.0 or de < -6.0:
 		return {}
 	var sw = nx["sw"]
 	var need := float(nx["need"])
-	tr["sw_next"] = {}
+	tr[key] = {}
+	# Physically at that switch's entry (guards against a stale entry after a reversal / route change)
+	var ent := int(nx["entry"])
+	if ent >= 0 and ent < (sw.entries as Array).size():
+		var head := (tr["curve"] as Curve3D).sample_baked(float(tr["s"]), false)
+		var ep: Vector3 = sw.entries[ent]
+		if Vector2(head.x - ep.x, head.z - ep.z).length() > 8.0:
+			return {}
 	if absf(float(sw.throw) - need) < 0.02:
 		return {}
 	tr["derailed"] = true

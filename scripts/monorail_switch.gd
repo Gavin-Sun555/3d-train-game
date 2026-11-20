@@ -1,7 +1,8 @@
 extends Node3D
 # Monorail crossover made of two moving half-beams (the way straddle-monorail crossovers work):
-#   * half A belongs to guideway -1, pivots at the low-s end of the span;
-#   * half B belongs to guideway +1, pivots at the high-s end.
+#   * half A belongs to guideway -hand, pivots at the low-s end of the span;
+#   * half B belongs to guideway +hand, pivots at the high-s end.
+# A two-way crossover is two of these in series with opposite `hand`.
 # Straight (throw 0): both halves lie in their own guideway, which then runs through unbroken.
 # Diverging (throw 1): both swing towards the middle and their free ends meet on the centreline,
 # forming one continuous S-beam from guideway -1 to guideway +1 (both through routes are then broken).
@@ -19,6 +20,8 @@ var bot := 5.6
 var half_w := 0.45
 var throw := 0.0
 var target := 0.0
+var hand := 1.0 # +1: crossing beam runs lane -1 (low s) -> lane +1 (high s); -1: the mirror image
+var group: Array = [] # all switches of this crossover (two-way crossover = two switches), interlocked as a unit
 
 # Route probes (world space)
 var straight_a := Vector3.ZERO # guideway -1 at mid-span (free end of half A)
@@ -80,12 +83,12 @@ func _frame_pt(i: int, lat: float) -> Vector3:
 func _diverge_lat(i: int) -> float:
 	var u := float(i) / float(SEGMENTS)
 	var herm := 3.0 * u * u - 2.0 * u * u * u
-	return -seps[i] + 2.0 * seps[i] * herm
+	return hand * (-seps[i] + 2.0 * seps[i] * herm)
 
 
 # Lateral offset of point i of the half-beam `half` (0 = A on -1, 1 = B on +1) at throw k
 func _lat(i: int, half: int, k: float) -> float:
-	var base := -seps[i] if half == 0 else seps[i]
+	var base := (-seps[i] if half == 0 else seps[i]) * hand
 	return base + k * (_diverge_lat(i) - base)
 
 
@@ -181,9 +184,20 @@ func signal_green(entry: int) -> bool:
 	return entry >= 0 and entry < _sig_state.size() and _sig_state[entry] == SIG_GREEN
 
 
+# Every other switch of the crossover still ahead of the same train is set too (a train never stops between them)
+func _group_set() -> bool:
+	for g in group:
+		if g == self or not is_instance_valid(g):
+			continue
+		if int(g.owner_idx) == owner_idx and int(g.owner_entry) >= 0 and not g.is_set_for(float(g.owner_need)):
+			return false
+	return true
+
+
 func update_signals() -> void:
+	var grp_ok := _group_set()
 	for k in range(_sig_state.size()):
-		var green := owner_idx >= 0 and owner_entry == k and is_set_for(owner_need)
+		var green := owner_idx >= 0 and owner_entry == k and is_set_for(owner_need) and grp_ok
 		_set_lens(k, SIG_GREEN if green else SIG_RED)
 
 

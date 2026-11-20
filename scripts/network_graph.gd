@@ -167,6 +167,7 @@ func export_state() -> Dictionary:
 		"stations": st_arr,
 		"lines": ln_arr,
 		"monorail_seeded": monorail_seeded,
+		"mono_two_way": true,
 	}
 
 
@@ -179,8 +180,6 @@ func import_state(state: Dictionary) -> void:
 		var bst := int(t_item["bed_style"])
 		var tmode := int(t_item.get("track_mode", TrackMode.SINGLE))
 		var xover := int(t_item.get("crossover", CrossoverType.NONE))
-		if TrackBuilder.is_monorail_style(bst) and xover > CrossoverType.SINGLE:
-			xover = CrossoverType.SINGLE
 		if edges.has(eid):
 			built_tracks[eid] = bst
 			built_track_modes[eid] = tmode
@@ -236,6 +235,13 @@ func import_state(state: Dictionary) -> void:
 		}
 		next_line_id = maxi(next_line_id, lid + 1)
 
+	# Older saves only had one-way monorail beam switches: upgrade them to two-way crossovers where they fit,
+	# so a terminal can be entered on either platform track.
+	if not bool(state.get("mono_two_way", false)):
+		for eid: int in crossovers.keys():
+			if int(crossovers[eid]) == CrossoverType.SINGLE and TrackBuilder.is_monorail_style(int(built_tracks.get(eid, -1))):
+				set_crossover_on_edge(eid, CrossoverType.DOUBLE, float(crossover_t.get(eid, 0.5)))
+
 
 func set_track_on_edge(edge_id: int, bed_style: int, track_mode: int = TrackMode.SINGLE) -> bool:
 	if not edges.has(edge_id):
@@ -261,12 +267,10 @@ func set_crossover_on_edge(edge_id: int, xover_type: int, t_val: float = 0.5) ->
 		crossovers.erase(edge_id)
 		crossover_t.erase(edge_id)
 		return true
-	var place := TrackBuilder.compute_crossover_placement(self, edge_id, t_val)
+	# Monorail DOUBLE = two-way crossover: two opposite-handed beam switches in series (no scissors on a guideway)
+	var place := TrackBuilder.compute_crossover_placement(self, edge_id, t_val, xover_type)
 	if not bool(place.get("valid", false)):
 		return false
-	# Monorail switches are single movable beams: no scissors (X) crossovers on a guideway
-	if TrackBuilder.is_monorail_style(int(built_tracks.get(edge_id, -1))):
-		xover_type = CrossoverType.SINGLE
 	crossovers[edge_id] = xover_type
 	crossover_t[edge_id] = float(place["t_clamped"])
 	return true
@@ -516,6 +520,15 @@ func get_turnout_world_positions() -> Array[Vector3]:
 			out.append(Vector3(p2.x, 0.0, p2.y))
 	for eid: int in crossovers.keys():
 		if int(crossovers[eid]) > CrossoverType.NONE and edges.has(eid):
+			if int(crossovers[eid]) == CrossoverType.DOUBLE and TrackBuilder.is_monorail_style(int(built_tracks.get(eid, -1))):
+				# Two-way monorail crossover: one switch centre per beam switch
+				var g := TrackBuilder.edge_track_geom(self, eid)
+				var xo := TrackBuilder.edge_crossover_span(self, eid, g)
+				if not xo.is_empty():
+					for pt: Dictionary in TrackBuilder.mono_switch_parts(self, eid, xo):
+						var tf := TrackBuilder.sample_track_frame(g["curve"] as Curve3D, float(pt["s_mid"]), float(g["clen"]), false)
+						out.append(Vector3(tf.origin.x, 0.0, tf.origin.z))
+					continue
 			out.append(sample_edge(eid, float(crossover_t.get(eid, 0.5)))["pos"] as Vector3)
 	return out
 
@@ -1270,6 +1283,8 @@ func _route_junction_points(sp_a: Dictionary, sp_b: Dictionary, cache: Dictionar
 
 # First crossover lying fully inside the spans, searched forward (departure) or backward from the station (arrival).
 # Returns {k, eid, s_inner, s_outer}: inner = crossover end nearer the terminal station.
+# Two-way monorail crossovers hold two beam switches: the arrival move onto platform B uses the hand -1 one, the
+# departure move uses the hand +1 one; s_zone is the outer end of the whole footprint (terminal interlocking).
 func _route_find_crossover(spans: Array, cache: Dictionary, backward: bool) -> Dictionary:
 	var order: Array = range(spans.size())
 	if backward:
@@ -1288,9 +1303,15 @@ func _route_find_crossover(spans: Array, cache: Dictionary, backward: bool) -> D
 		var s_a := float(xo["s_mid"]) - d * float(xo["x_half"]) # first end met in travel direction
 		var s_b := float(xo["s_mid"]) + d * float(xo["x_half"])
 		if (s_a - s0) * d >= -0.05 and (s1 - s_b) * d >= -0.05:
+			var s_zone := s_a if backward else s_b
+			if TrackBuilder.edge_system(self, eid) == 1 and int(crossovers.get(eid, CrossoverType.NONE)) == CrossoverType.DOUBLE:
+				for pt: Dictionary in TrackBuilder.mono_switch_parts(self, eid, xo):
+					if float(pt["hand"]) == (-1.0 if backward else 1.0):
+						s_a = float(pt["s_mid"]) - d * float(pt["x_half"])
+						s_b = float(pt["s_mid"]) + d * float(pt["x_half"])
 			if backward:
-				return {"k": k, "eid": eid, "s_outer": s_a, "s_inner": s_b}
-			return {"k": k, "eid": eid, "s_inner": s_a, "s_outer": s_b}
+				return {"k": k, "eid": eid, "s_outer": s_a, "s_inner": s_b, "s_zone": s_zone}
+			return {"k": k, "eid": eid, "s_inner": s_a, "s_outer": s_b, "s_zone": s_zone}
 	return {}
 
 
@@ -1307,13 +1328,22 @@ func _route_apply_arrival_crossover(spans: Array, xo: Dictionary, use_b: bool, s
 	var out: Array = []
 	for i in range(k):
 		out.append(spans[i])
-	var first := _span_copy(sp, float(sp["s0"]), float(xo["s_outer"]), lat_ok, lat_ok)
+	var s_zone := float(xo.get("s_zone", xo["s_outer"]))
+	var first := _span_copy(sp, float(sp["s0"]), s_zone, lat_ok, lat_ok)
 	if sp.has("mark"):
 		first["mark"] = sp["mark"]
 	out.append(first)
+	var held := false
+	if absf(s_zone - float(xo["s_outer"])) > 0.05:
+		# Two-way crossover: run straight through the first switch to the one this move uses
+		var app := _span_copy(sp, s_zone, float(xo["s_outer"]), lat_ok, lat_ok)
+		app["mark"] = "hold:%d" % sid
+		out.append(app)
+		held = true
 	if use_b:
 		var diag := _span_copy(sp, float(xo["s_outer"]), float(xo["s_inner"]), lat_ok, -lat_ok)
-		diag["mark"] = "hold:%d" % sid
+		if not held:
+			diag["mark"] = "hold:%d" % sid
 		out.append(diag)
 		out.append(_span_copy(sp, float(xo["s_inner"]), float(sp["s1"]), -lat_ok, -lat_ok))
 		for i in range(k + 1, spans.size()):
@@ -1323,7 +1353,8 @@ func _route_apply_arrival_crossover(spans: Array, xo: Dictionary, use_b: bool, s
 			out.append(rest)
 	else:
 		var tail := _span_copy(sp, float(xo["s_outer"]), float(sp["s1"]), lat_ok, lat_ok)
-		tail["mark"] = "hold:%d" % sid
+		if not held:
+			tail["mark"] = "hold:%d" % sid
 		out.append(tail)
 		for i in range(k + 1, spans.size()):
 			out.append(spans[i])
@@ -1350,7 +1381,10 @@ func _route_apply_departure_crossover(spans: Array, xo: Dictionary, from_a: bool
 		first["mark"] = sp["mark"]
 	out.append(first)
 	out.append(_span_copy(sp, float(xo["s_inner"]), float(xo["s_outer"]), lat_first, lat_ok))
-	var tail := _span_copy(sp, float(xo["s_outer"]), float(sp["s1"]), lat_ok, lat_ok)
+	var s_zone := float(xo.get("s_zone", xo["s_outer"]))
+	if absf(s_zone - float(xo["s_outer"])) > 0.05:
+		out.append(_span_copy(sp, float(xo["s_outer"]), s_zone, lat_ok, lat_ok)) # through the other switch
+	var tail := _span_copy(sp, s_zone, float(sp["s1"]), lat_ok, lat_ok)
 	tail["mark"] = "exit:%d" % sid
 	out.append(tail)
 	for i in range(k + 1, spans.size()):
@@ -1432,10 +1466,10 @@ func seed_seattle_monorail(start_xz: Vector2, end_xz: Vector2, model_key: String
 	var sb := add_station_on_edge(e1, t1, 0, "西雅图中心站（单轨）", StationKind.ISLAND)
 	if sa < 0 or sb < 0:
 		return -1
-	# Scissors beam switch inward of each terminal for the turnback onto the other guideway
+	# Two-way beam-switch crossover inward of each terminal for the turnback onto the other guideway
 	for idx: Array in [range(1, path.size() - 1), range(path.size() - 2, 0, -1)]:
 		for k: int in idx:
-			if set_crossover_on_edge(int(path[k]), CrossoverType.SINGLE):
+			if set_crossover_on_edge(int(path[k]), CrossoverType.DOUBLE) or set_crossover_on_edge(int(path[k]), CrossoverType.SINGLE):
 				break
 	var ids: Array[int] = [sa, sb, sa]
 	return create_line(ids, model_key, 2, 2, "西雅图中心单轨")

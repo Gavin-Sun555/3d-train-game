@@ -868,6 +868,15 @@ func _refresh_home_screen_ui() -> void:
 		_btn_home_reset.text = "重新开始"
 
 
+# Label that takes the spare row width but never forces the row wider (long text ends in "…")
+func _fit_label(lbl: Label) -> void:
+	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lbl.clip_text = true
+	lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	lbl.custom_minimum_size = Vector2(40, 0)
+	lbl.mouse_filter = Control.MOUSE_FILTER_PASS
+
+
 func _refresh_slot_modal_ui() -> void:
 	if _slot_modal == null or not _slot_modal.visible:
 		return
@@ -904,24 +913,27 @@ func _refresh_slot_modal_ui() -> void:
 		hbox.add_child(badge)
 
 		var info_lbl := Label.new()
-		info_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_fit_label(info_lbl)
+		info_lbl.text = str(s_info["name"])
+		info_lbl.tooltip_text = info_lbl.text
+		info_lbl.add_theme_color_override("font_color", Color(0.94, 0.96, 0.98) if exists else Color(0.58, 0.62, 0.68))
+		hbox.add_child(info_lbl)
 		if exists:
-			info_lbl.text = "【建设规划】%s  |  轨道%d · 站%d · 线%d  (%s)" % [
-				str(s_info["name"]),
+			var meta_lbl := Label.new()
+			_fit_label(meta_lbl)
+			meta_lbl.text = "      轨道 %d · 车站 %d · 线路 %d · %s" % [
 				int(s_info["tracks"]),
 				int(s_info["stations"]),
 				int(s_info["lines"]),
 				str(s_info["saved_at"]),
 			]
-			info_lbl.add_theme_color_override("font_color", Color(0.94, 0.96, 0.98))
-		else:
-			info_lbl.text = str(s_info["name"])
-			info_lbl.add_theme_color_override("font_color", Color(0.58, 0.62, 0.68))
-		hbox.add_child(info_lbl)
+			meta_lbl.add_theme_font_size_override("font_size", 12)
+			meta_lbl.add_theme_color_override("font_color", Color(0.62, 0.68, 0.75))
+			row_vbox.add_child(meta_lbl)
 
 		if can_save_here:
 			var idx_save := idx
-			var save_btn := _make_btn("覆盖规划" if exists else "存建设规划", func():
+			var save_btn := _make_btn("覆盖" if exists else "保存规划", func():
 				var custom_nm := _edit_slot_name.text.strip_edges()
 				var payload := _build_current_save_payload(custom_nm)
 				if SaveManager.save_manual_slot(_current_map_key, idx_save, custom_nm, payload):
@@ -938,7 +950,7 @@ func _refresh_slot_modal_ui() -> void:
 			var idx_load := idx
 			var is_auto_load := is_auto_tab
 			var mkey_load := _slot_modal_map_key
-			hbox.add_child(_make_btn("读取规划", func():
+			hbox.add_child(_make_btn("读取", func():
 				if not _in_home_menu and not _is_demo_readonly:
 					SaveManager.push_autosave(_current_map_key, "读档前自动备份", _build_current_save_payload("读档前备份"))
 				var loaded := SaveManager.load_slot(mkey_load, is_auto_load, idx_load)
@@ -959,11 +971,14 @@ func _refresh_slot_modal_ui() -> void:
 			var idx_del := idx
 			var is_auto_del := is_auto_tab
 			var mkey_del := _slot_modal_map_key
-			hbox.add_child(_make_btn("删除" if is_auto_del else "删规划+3运行档", func():
+			var del_btn := _make_btn("删除", func():
 				SaveManager.delete_slot(mkey_del, is_auto_del, idx_del)
 				_refresh_slot_modal_ui()
 				_show_toast("已删除槽位 %02d（关联运行存档已同步删除）" % (idx_del + 1))
-			))
+			)
+			if not is_auto_del:
+				del_btn.tooltip_text = "删除该建设规划及其 3 个运行档"
+			hbox.add_child(del_btn)
 
 			# Embedded linked driving run saves (up to 3 per manual blueprint save)
 			if not is_auto_tab:
@@ -977,26 +992,27 @@ func _refresh_slot_modal_ui() -> void:
 					row_vbox.add_child(sub_row)
 
 					var indent := Label.new()
-					indent.text = "   ↳ 运行档 %d：" % (si + 1)
+					indent.text = "   ↳ 运行档%d" % (si + 1)
 					indent.add_theme_font_size_override("font_size", 12)
 					indent.add_theme_color_override("font_color", Color(0.46, 0.86, 0.96) if rexists else Color(0.50, 0.56, 0.62))
 					sub_row.add_child(indent)
 
 					var r_lbl := Label.new()
-					r_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+					_fit_label(r_lbl)
 					r_lbl.add_theme_font_size_override("font_size", 12)
 					if rexists:
-						r_lbl.text = "累计送达 %d 人  (%s)" % [int(rs.get("delivered", 0)), str(rs.get("saved_at", ""))]
+						r_lbl.text = "送达 %d 人 · %s" % [int(rs.get("delivered", 0)), str(rs.get("saved_at", ""))]
 						r_lbl.add_theme_color_override("font_color", Color(0.84, 0.94, 1.0))
 					else:
-						r_lbl.text = "空（可存当前驾驶进度）"
+						r_lbl.text = "空"
 						r_lbl.add_theme_color_override("font_color", Color(0.52, 0.56, 0.62))
+					r_lbl.tooltip_text = r_lbl.text
 					sub_row.add_child(r_lbl)
 
 					if can_save_here and _game_mode == GameMode.RUN and not _transit_sim.trams.is_empty():
 						var p_s := idx
 						var s_s := si
-						sub_row.add_child(_make_btn("覆盖运行" if rexists else "存运行", func():
+						sub_row.add_child(_make_btn("覆盖" if rexists else "保存运行", func():
 							_save_run_progress_to_slot(p_s, s_s)
 							_refresh_slot_modal_ui()
 						))
@@ -1638,7 +1654,7 @@ func _update_build_hover_preview(screen_pos: Vector2) -> void:
 			return
 		var eid := int(hit["edge_id"])
 		var t_hit := float(hit["t"])
-		var place := TrackBuilder.compute_crossover_placement(_graph, eid, t_hit)
+		var place := TrackBuilder.compute_crossover_placement(_graph, eid, t_hit, _build_crossover_type)
 		if not bool(place.get("valid", false)):
 			var rsn := str(place.get("reason", ""))
 			if rsn == "on_station":
@@ -1748,7 +1764,7 @@ func _handle_map_left_click(screen_pos: Vector2) -> void:
 				return
 			var eid := int(hit["edge_id"])
 			var t_hit := float(hit["t"])
-			var place := TrackBuilder.compute_crossover_placement(_graph, eid, t_hit)
+			var place := TrackBuilder.compute_crossover_placement(_graph, eid, t_hit, _build_crossover_type)
 			if not bool(place.get("valid", false)):
 				if str(place.get("reason", "")) == "on_station":
 					_show_toast("⚠ 不可在车站站台上修建道岔/渡线，请移至出站并线后的轨道位置！")
@@ -1759,6 +1775,8 @@ func _handle_map_left_click(screen_pos: Vector2) -> void:
 				_rebuild_tracks_only_visual()
 				_mark_modified_and_quick_save()
 				var xo_name := "交叉渡线 (剪刀)" if _build_crossover_type == NetworkGraph.CrossoverType.DOUBLE else "单渡线"
+				if TrackBuilder.edge_system(_graph, eid) == 1:
+					xo_name = "双向单轨道岔 (两组梁式道岔)" if _build_crossover_type == NetworkGraph.CrossoverType.DOUBLE else "单向单轨道岔"
 				_show_toast("已在 %s 修建【%s】！" % [str(_graph.edges[eid]["name"]), xo_name])
 
 		elif _build_tool == BuildTool.STATION:
@@ -1894,6 +1912,14 @@ func _process(delta: float) -> void:
 		_reset_confirm_timer -= dt
 		if _reset_confirm_timer <= 0.0 and _btn_home_reset != null:
 			_btn_home_reset.text = "重新开始"
+
+	# Save manager open during play: the game is paused (no simulation, clock, traffic or autosave)
+	if _slot_modal != null and _slot_modal.visible and not _in_home_menu and not _game_over:
+		_sound.speed_mps = 0.0
+		_sound.traction_effort = 0.0
+		_sound.overspeed_squeal = 0.0
+		_process_shot_tour()
+		return
 
 	if _game_mode == GameMode.RUN and not _in_home_menu and not _game_over:
 		_update_monorail(dt)
@@ -3034,7 +3060,7 @@ func _build_slot_modal_ui(parent: Control) -> void:
 	_slot_modal.add_child(center)
 
 	var box := _make_panel(Color(0.07, 0.09, 0.13, 0.97))
-	box.custom_minimum_size = Vector2(740, 510)
+	box.custom_minimum_size = Vector2(640, 540)
 	center.add_child(box)
 
 	var vbox := VBoxContainer.new()
@@ -3061,7 +3087,7 @@ func _build_slot_modal_ui(parent: Control) -> void:
 	tabs_row.add_theme_constant_override("separation", 8)
 	vbox.add_child(tabs_row)
 
-	_btn_tab_manual = _make_btn("建设规划档 (10 · 每档含3运行档)", func():
+	_btn_tab_manual = _make_btn("建设规划档 (10槽 · 各含3运行档)", func():
 		_slot_tab_mode = 0
 		_refresh_slot_modal_ui()
 	)
@@ -3081,15 +3107,16 @@ func _build_slot_modal_ui(parent: Control) -> void:
 	_slot_name_row.add_child(nm_lbl)
 
 	_edit_slot_name = LineEdit.new()
-	_edit_slot_name.placeholder_text = "输入自定义存档名（如：西雅图双环线方案A），留空自动命名"
+	_edit_slot_name.placeholder_text = "自定义存档名（留空自动命名）"
 	_edit_slot_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_slot_name_row.add_child(_edit_slot_name)
 
 	vbox.add_child(HSeparator.new())
 
 	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(700, 365)
+	scroll.custom_minimum_size = Vector2(610, 400)
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED # rows fit the width: never scroll sideways
 	vbox.add_child(scroll)
 
 	_slot_list_vbox = VBoxContainer.new()

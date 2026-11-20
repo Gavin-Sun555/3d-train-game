@@ -313,11 +313,326 @@ static func track_clearance_dist(idx: Dictionary, p: Vector2) -> float:
 	return sqrt(best_sq)
 
 
+# ---------------------------------------------------------------------------------------------
+# Monorail alignment: an elevated guideway does not have to follow the kerb line. Street polylines jog 30-80 deg
+# around offset intersections although the street runs straight on; following them gives needless sharp
+# S-bends (20 km/h). Each chain of guideway edges (between dead ends / guideway junctions) is therefore
+# re-aligned as a whole: the street polyline is simplified (Douglas-Peucker, MONO_ALIGN_TOL) so jogs vanish and
+# only real corners remain, each real corner is rounded with the widest curve that fits, and the result is cut
+# back into per-edge polylines at the nodes. Station platforms (+ approach) keep the exact street line, since
+# platforms are placed on it.
+# ---------------------------------------------------------------------------------------------
+const MONO_ALIGN_TOL := 6.0
+const MONO_STATION_GUARD := 10.0
+const MONO_MAX_CORNER_CUT := 5.0
+static var _mono_align_cache := {}
+static var _mono_align_key := ""
+
+
+static func _polyline_len(pts2: Array) -> float:
+	var l := 0.0
+	for k in range(pts2.size() - 1):
+		l += (pts2[k] as Vector2).distance_to(pts2[k + 1])
+	return l
+
+
+static func _dp_simplify(pts: Array, i0: int, i1: int, tol: float, keep: Dictionary) -> void:
+	if i1 <= i0 + 1:
+		return
+	var a: Vector2 = pts[i0]
+	var b: Vector2 = pts[i1]
+	var best := -1.0
+	var bi := -1
+	var ab := b - a
+	var l2 := ab.length_squared()
+	for i in range(i0 + 1, i1):
+		var p: Vector2 = pts[i]
+		var dist := p.distance_to(a) if l2 < 0.0001 else p.distance_to(a + ab * clampf((p - a).dot(ab) / l2, 0.0, 1.0))
+		if dist > best:
+			best = dist
+			bi = i
+	if best > tol:
+		keep[bi] = true
+		_dp_simplify(pts, i0, bi, tol, keep)
+		_dp_simplify(pts, bi, i1, tol, keep)
+
+
+static func _mono_align_signature(graph: NetworkGraph) -> String:
+	var parts: PackedStringArray = []
+	var ks: Array = graph.built_tracks.keys()
+	ks.sort()
+	for eid: int in ks:
+		if is_monorail_style(int(graph.built_tracks[eid])):
+			parts.append(str(eid))
+	parts.append("|")
+	for sid: int in graph.stations.keys():
+		var st: Dictionary = graph.stations[sid]
+		if graph.built_tracks.has(int(st["edge_id"])) and is_monorail_style(int(graph.built_tracks[int(st["edge_id"])])):
+			parts.append("%d:%.3f:%.1f" % [int(st["edge_id"]), float(st["t"]), float(st.get("platform_len", 27.0))])
+	return ",".join(parts) + "#%d" % graph.get_instance_id()
+
+
+# Per-edge guideway polylines (oriented a -> b) for every monorail edge; cached until the guideway/stations change
+static func _mono_alignments(graph: NetworkGraph) -> Dictionary:
+	var key := _mono_align_signature(graph)
+	if key == _mono_align_key:
+		return _mono_align_cache
+	var res := {}
+	var mono: Dictionary = {}
+	for eid: int in graph.built_tracks.keys():
+		if is_monorail_style(int(graph.built_tracks[eid])) and graph.edges.has(eid) and (graph.edges[eid]["pts"] as Array).size() >= 2:
+			mono[eid] = true
+	var used := {}
+	var deg := func(nid: int) -> int:
+		var c := 0
+		for nb: Dictionary in graph.adj.get(nid, []):
+			if mono.has(int(nb["edge_id"])):
+				c += 1
+		return c
+	var starts: Array = []
+	for eid: int in mono.keys():
+		for nid: int in [int(graph.edges[eid]["a"]), int(graph.edges[eid]["b"])]:
+			if deg.call(nid) != 2:
+				starts.append([eid, nid])
+	for st_pair: Array in starts:
+		var e0 := int(st_pair[0])
+		if used.has(e0):
+			continue
+		# Walk the chain
+		var chain_e: Array = []
+		var chain_fwd: Array = [] # true when the edge runs a -> b along the chain
+		var cur_e := e0
+		var cur_n := int(st_pair[1])
+		while true:
+			used[cur_e] = true
+			chain_e.append(cur_e)
+			var fwd := int(graph.edges[cur_e]["a"]) == cur_n
+			chain_fwd.append(fwd)
+			var far_n := int(graph.edges[cur_e]["b"]) if fwd else int(graph.edges[cur_e]["a"])
+			if deg.call(far_n) != 2 or far_n == int(st_pair[1]):
+				break
+			var nxt := -1
+			for nb: Dictionary in graph.adj.get(far_n, []):
+				var ne := int(nb["edge_id"])
+				if mono.has(ne) and ne != cur_e and not used.has(ne):
+					nxt = ne
+			if nxt < 0:
+				break
+			cur_e = nxt
+			cur_n = far_n
+		_mono_align_chain(graph, chain_e, chain_fwd, res)
+	_mono_align_cache = res
+	_mono_align_key = key
+	return res
+
+
+static func _mono_align_chain(graph: NetworkGraph, chain_e: Array, chain_fwd: Array, res: Dictionary) -> void:
+	# 1. Raw chain polyline, node positions (arc length) and fixed (station) ranges
+	var pts: Array = []
+	var node_d: Array[float] = [0.0]
+	var fixed: Array = [] # [d0, d1]
+	var acc := 0.0
+	for ci in range(chain_e.size()):
+		var eid := int(chain_e[ci])
+		var ep: Array = (graph.edges[eid]["pts"] as Array).duplicate()
+		if not bool(chain_fwd[ci]):
+			ep.reverse()
+		var e_len := _polyline_len(ep)
+		for sid: int in graph.stations.keys():
+			var st: Dictionary = graph.stations[sid]
+			if int(st["edge_id"]) != eid:
+				continue
+			var st_d := float(st["t"]) * e_len if bool(chain_fwd[ci]) else (1.0 - float(st["t"])) * e_len
+			var hw := float(st.get("platform_len", 27.0)) * 0.5 + MONO_STATION_GUARD
+			fixed.append([acc + st_d - hw, acc + st_d + hw])
+		for k in range(ep.size()):
+			if k == 0 and not pts.is_empty():
+				continue
+			pts.append(ep[k])
+		acc += e_len
+		node_d.append(acc)
+	# Resample every 2 m (fine enough to cut fixed ranges and nodes exactly), remember fixed samples
+	var samples: Array = []
+	var s_d: Array[float] = []
+	var total := acc
+	var n_s := maxi(2, int(ceil(total / 2.0)) + 1)
+	var seg_i := 0
+	var seg_acc := 0.0
+	for k in range(n_s):
+		var d := total * float(k) / float(n_s - 1)
+		while seg_i < pts.size() - 2 and seg_acc + (pts[seg_i] as Vector2).distance_to(pts[seg_i + 1]) < d:
+			seg_acc += (pts[seg_i] as Vector2).distance_to(pts[seg_i + 1])
+			seg_i += 1
+		var pa: Vector2 = pts[seg_i]
+		var pb: Vector2 = pts[seg_i + 1]
+		var sl := maxf(pa.distance_to(pb), 0.0001)
+		samples.append(pa.lerp(pb, clampf((d - seg_acc) / sl, 0.0, 1.0)))
+		s_d.append(d)
+	var keep := {0: true, n_s - 1: true}
+	var is_fixed := func(d: float) -> bool:
+		for fr: Array in fixed:
+			if d >= float(fr[0]) - 0.01 and d <= float(fr[1]) + 0.01:
+				return true
+		return false
+	for k in range(n_s):
+		if is_fixed.call(s_d[k]):
+			keep[k] = true
+	# 2. Douglas-Peucker between consecutive kept samples
+	var kept_sorted: Array = keep.keys()
+	kept_sorted.sort()
+	for i in range(kept_sorted.size() - 1):
+		_dp_simplify(samples, int(kept_sorted[i]), int(kept_sorted[i + 1]), MONO_ALIGN_TOL, keep)
+	kept_sorted = keep.keys()
+	kept_sorted.sort()
+	var verts: Array = []
+	var v_fixed: Array[bool] = []
+	for k: int in kept_sorted:
+		verts.append(samples[k])
+		v_fixed.append(bool(is_fixed.call(s_d[k])) or k == 0 or k == n_s - 1)
+	# 2b. DP vertices sit on jog points (offset intersection nodes are usually all offset to the same side), so
+	#     fit each straight run to the street samples it spans (least squares) and put free corners where the
+	#     neighbouring fitted lines meet -> the guideway follows the street centre, not its kerb-side jogs.
+	var fits: Array = [] # per run: [point, dir] or []
+	for i in range(kept_sorted.size() - 1):
+		var k0 := int(kept_sorted[i])
+		var k1 := int(kept_sorted[i + 1])
+		if k1 - k0 < 6:
+			fits.append([])
+			continue
+		var c := Vector2.ZERO
+		for k in range(k0, k1 + 1):
+			c += samples[k]
+		c /= float(k1 - k0 + 1)
+		var sxx := 0.0
+		var syy := 0.0
+		var sxy := 0.0
+		for k in range(k0, k1 + 1):
+			var q: Vector2 = samples[k] - c
+			sxx += q.x * q.x
+			syy += q.y * q.y
+			sxy += q.x * q.y
+		var th := 0.5 * atan2(2.0 * sxy, sxx - syy)
+		fits.append([c, Vector2(cos(th), sin(th))])
+	for i in range(1, verts.size() - 1):
+		if v_fixed[i]:
+			continue
+		var fa: Array = fits[i - 1]
+		var fb: Array = fits[i]
+		var v0: Vector2 = verts[i]
+		var cands: Array = []
+		if not fa.is_empty():
+			var pa0: Vector2 = fa[0]
+			var da0: Vector2 = fa[1]
+			cands.append(pa0 + da0 * (v0 - pa0).dot(da0))
+		if not fb.is_empty():
+			var pb0: Vector2 = fb[0]
+			var db0: Vector2 = fb[1]
+			cands.append(pb0 + db0 * (v0 - pb0).dot(db0))
+		if cands.is_empty():
+			continue
+		var nv := Vector2.ZERO
+		for cq: Vector2 in cands:
+			nv += cq
+		nv /= float(cands.size())
+		if not fa.is_empty() and not fb.is_empty():
+			var da: Vector2 = fa[1]
+			var db: Vector2 = fb[1]
+			var den := da.cross(db)
+			if absf(den) > sin(deg_to_rad(4.0)):
+				var pa: Vector2 = fa[0]
+				var pb: Vector2 = fb[0]
+				var x := pa + da * ((pb - pa).cross(db) / den)
+				if x.distance_to(v0) < 15.0:
+					nv = x
+		verts[i] = nv
+	# 3. Round every free corner as widely as the neighbouring straights allow
+	var line: Array = [verts[0]]
+	for i in range(1, verts.size() - 1):
+		var v: Vector2 = verts[i]
+		if v_fixed[i]:
+			line.append(v)
+			continue
+		var pv: Vector2 = verts[i - 1]
+		var nv: Vector2 = verts[i + 1]
+		var lp := v.distance_to(pv) * (0.95 if v_fixed[i - 1] else 0.5)
+		var ln := v.distance_to(nv) * (0.95 if v_fixed[i + 1] else 0.5)
+		var t := minf(lp, ln)
+		var ang := absf((v - pv).angle_to(nv - v))
+		# The arc's middle cuts the corner by t*sin(ang/2)/2: stay within the street (no slicing building corners)
+		t = minf(t, 2.0 * MONO_MAX_CORNER_CUT / maxf(sin(ang * 0.5), 0.01))
+		if t < 0.5 or ang < deg_to_rad(1.0):
+			line.append(v)
+			continue
+		var t0 := v + (pv - v).normalized() * t
+		var t1 := v + (nv - v).normalized() * t
+		var n_arc := clampi(int(ceil(t / 3.0)), 3, 14)
+		for j in range(n_arc + 1):
+			var u := float(j) / float(n_arc)
+			line.append(t0 * (1.0 - u) * (1.0 - u) + v * 2.0 * u * (1.0 - u) + t1 * u * u)
+	line.append(verts[verts.size() - 1])
+	# 4. Cut back into edges: a node lands where the new line passes closest to it (in order, near its old position)
+	var l_cum: Array[float] = [0.0]
+	for i in range(1, line.size()):
+		l_cum.append(l_cum[i - 1] + (line[i - 1] as Vector2).distance_to(line[i]))
+	var l_tot: float = l_cum[l_cum.size() - 1]
+	var cuts: Array[float] = [0.0]
+	for ni in range(1, chain_e.size()):
+		var nid := int(graph.edges[int(chain_e[ni])]["a"]) if bool(chain_fwd[ni]) else int(graph.edges[int(chain_e[ni])]["b"])
+		var np: Vector2 = graph.nodes[nid]["pos"]
+		var guess := l_tot * node_d[ni] / maxf(total, 0.001)
+		var best_d := 1e18
+		var best_s := guess
+		for i in range(line.size() - 1):
+			if absf(l_cum[i] - guess) > 60.0 and absf(l_cum[i + 1] - guess) > 60.0:
+				continue
+			var a: Vector2 = line[i]
+			var b: Vector2 = line[i + 1]
+			var ab := b - a
+			var f := clampf((np - a).dot(ab) / maxf(ab.length_squared(), 0.0001), 0.0, 1.0)
+			var dd := np.distance_squared_to(a + ab * f)
+			if dd < best_d:
+				best_d = dd
+				best_s = l_cum[i] + f * ab.length()
+		cuts.append(clampf(best_s, cuts[cuts.size() - 1] + 4.0, l_tot - 4.0 * float(chain_e.size() - ni)))
+	cuts.append(l_tot)
+	var point_at := func(s: float) -> Vector2:
+		for i in range(line.size() - 1):
+			if l_cum[i + 1] >= s:
+				var seg := maxf(l_cum[i + 1] - l_cum[i], 0.0001)
+				return (line[i] as Vector2).lerp(line[i + 1], clampf((s - l_cum[i]) / seg, 0.0, 1.0))
+		return line[line.size() - 1]
+	for ci in range(chain_e.size()):
+		var s0 := cuts[ci]
+		var s1 := cuts[ci + 1]
+		var ep2: Array = [point_at.call(s0)]
+		for i in range(line.size()):
+			if l_cum[i] > s0 + 0.3 and l_cum[i] < s1 - 0.3:
+				ep2.append(line[i])
+		ep2.append(point_at.call(s1))
+		if not bool(chain_fwd[ci]):
+			ep2.reverse()
+		res[int(chain_e[ci])] = ep2
+
+
+# Polyline the guideway of monorail edge `eid` actually follows (oriented a -> b)
+static func mono_alignment_pts(graph: NetworkGraph, eid: int) -> Array:
+	var al := _mono_alignments(graph)
+	if al.has(eid):
+		return al[eid]
+	return graph.edges[eid]["pts"]
+
+
+static func _edge_pts(graph: NetworkGraph, eid: int) -> Array:
+	if edge_system(graph, eid) == 1:
+		return mono_alignment_pts(graph, eid)
+	return graph.edges[eid]["pts"]
+
+
 static func _edge_neighbor_dir(graph: NetworkGraph, eid: int, nid: int) -> Vector3:
 	if not graph.edges.has(eid):
 		return Vector3.ZERO
 	var ed: Dictionary = graph.edges[eid]
-	var pts2: Array = ed["pts"]
+	var pts2: Array = _edge_pts(graph, eid)
 	var n := pts2.size()
 	if n < 2:
 		return Vector3.ZERO
@@ -342,7 +657,7 @@ static func _edge_smooth_curve(graph: NetworkGraph, eid: int) -> Curve3D:
 	if not graph.edges.has(eid):
 		return null
 	var ed: Dictionary = graph.edges[eid]
-	var pts2: Array = ed["pts"]
+	var pts2: Array = _edge_pts(graph, eid)
 	if pts2.size() < 2:
 		return null
 	var raw3: Array = []
@@ -449,9 +764,7 @@ static func edge_crossover_span(graph: NetworkGraph, eid: int, geom: Dictionary)
 	var span := s1 - s0
 	if span < 10.0:
 		return {}
-	# Monorail beams sit 4.8m apart: a long beam switch keeps the S-bend gentle (real switches are long, slow)
-	var max_half := 20.0 if edge_system(graph, eid) == 1 else 9.5
-	var x_half := minf(max_half, span * 0.44)
+	var x_half := crossover_x_half(edge_system(graph, eid) == 1, int(graph.crossovers[eid]), span)
 	var t_xo := clampf(float(graph.crossover_t.get(eid, 0.5)), 0.0, 1.0)
 	var clen := float(geom["clen"])
 	var s_min := s0 + x_half + 0.8
@@ -463,10 +776,34 @@ static func edge_crossover_span(graph: NetworkGraph, eid: int, geom: Dictionary)
 	}
 
 
+# Half-length of a crossover footprint. Monorail beams sit 4.8m apart, so a beam switch is long (gentle S-bend);
+# a two-way monorail crossover is two such switches in series, hence twice as long.
+static func crossover_x_half(is_mono: bool, xtype: int, span: float) -> float:
+	if not is_mono:
+		return minf(9.5, span * 0.44)
+	if xtype == NetworkGraph.CrossoverType.DOUBLE:
+		return minf(40.0, span * 0.44)
+	return minf(20.0, span * 0.44)
+
+
+# Monorail beam switches inside a crossover footprint: SINGLE = one switch, DOUBLE (two-way) = two opposite-handed
+# switches in series. hand +1: lane -1 at the low-s end -> lane +1 at the high-s end (the turnback departure
+# move); hand -1 is its mirror (arrival straight onto the other platform track).
+static func mono_switch_parts(graph: NetworkGraph, eid: int, xo: Dictionary) -> Array:
+	if xo.is_empty():
+		return []
+	var s_mid := float(xo["s_mid"])
+	var xh := float(xo["x_half"])
+	if int(graph.crossovers.get(eid, NetworkGraph.CrossoverType.NONE)) != NetworkGraph.CrossoverType.DOUBLE:
+		return [{"s_mid": s_mid, "x_half": xh, "hand": 1.0}]
+	var h := xh * 0.5
+	return [{"s_mid": s_mid - h, "x_half": h, "hand": 1.0}, {"s_mid": s_mid + h, "x_half": h, "hand": -1.0}]
+
+
 # Validates and computes exact placement for a crossover near cursor `t_val` along double-track `eid`.
 # Automatically snaps cleanly right outside an island-station track merge taper while strictly forbidding
 # any overlap with station platforms!
-static func compute_crossover_placement(graph: NetworkGraph, eid: int, t_val: float) -> Dictionary:
+static func compute_crossover_placement(graph: NetworkGraph, eid: int, t_val: float, xtype: int = NetworkGraph.CrossoverType.SINGLE) -> Dictionary:
 	if not graph.built_tracks.has(eid) or not graph.edges.has(eid):
 		return {"valid": false, "reason": "no_track"}
 	if int(graph.built_track_modes.get(eid, NetworkGraph.TrackMode.SINGLE)) != NetworkGraph.TrackMode.DOUBLE:
@@ -479,12 +816,11 @@ static func compute_crossover_placement(graph: NetworkGraph, eid: int, t_val: fl
 	var clen := float(geom["clen"])
 	var span := s1 - s0
 	var is_mono := (edge_system(graph, eid) == 1)
-	var min_span := 26.0 if is_mono else 18.0
+	var min_span := (56.0 if xtype == NetworkGraph.CrossoverType.DOUBLE else 26.0) if is_mono else 18.0
 	if span < min_span or float(graph.edges[eid]["length"]) < 22.0:
 		return {"valid": false, "reason": "too_short"}
 
-	var max_half := 20.0 if is_mono else 9.5
-	var x_half := minf(max_half, span * 0.44)
+	var x_half := crossover_x_half(is_mono, xtype, span)
 	var s_min := s0 + x_half + 0.8
 	var s_max := s1 - x_half - 0.8
 	if s_min > s_max:
@@ -1903,22 +2239,20 @@ static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> vo
 		if bool(g["is_double"]):
 			lanes = [-1.0, 1.0]
 		var xo := edge_crossover_span(graph, eid, g)
+		var parts := mono_switch_parts(graph, eid, xo)
 		var gap0 := 1e9
 		var gap1 := -1e9
-		var gapm := 1e9
 		if not xo.is_empty():
 			gap0 = float(xo["s_mid"]) - float(xo["x_half"])
 			gap1 = float(xo["s_mid"]) + float(xo["x_half"])
-			gapm = float(xo["s_mid"])
-		# Break the beam exactly at the switch span ends so the moving beam fits the gap
+		# Break the beam exactly at the switch span ends so the moving beams fit the gaps
 		var cuts: Array[float] = []
 		for k in range(n + 1):
 			cuts.append(lerpf(s0, s1, float(k) / float(n)))
-		if not xo.is_empty():
-			cuts.append(gap0)
-			cuts.append(gap1)
-			cuts.append(gapm)
-			cuts.sort()
+		for pt: Dictionary in parts:
+			for sc: float in [float(pt["s_mid"]) - float(pt["x_half"]), float(pt["s_mid"]), float(pt["s_mid"]) + float(pt["x_half"])]:
+				cuts.append(sc)
+		cuts.sort()
 		for k in range(cuts.size() - 1):
 			var sa := cuts[k]
 			var sb := cuts[k + 1]
@@ -1927,10 +2261,18 @@ static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> vo
 			var fa := sample_track_frame(c, sa, clen, false)
 			var fb := sample_track_frame(c, sb, clen, false)
 			for ln: float in lanes:
-				if ln < 0.0 and sa >= gap0 - 0.01 and sb <= gapm + 0.01:
-					continue # movable half-beam A of the switch
-				if ln > 0.0 and sa >= gapm - 0.01 and sb <= gap1 + 0.01:
-					continue # movable half-beam B of the switch
+				var movable := false
+				for pt: Dictionary in parts:
+					var p0 := float(pt["s_mid"]) - float(pt["x_half"])
+					var pm := float(pt["s_mid"])
+					var p1 := float(pt["s_mid"]) + float(pt["x_half"])
+					var hand := float(pt["hand"])
+					if ln * hand < 0.0 and sa >= p0 - 0.01 and sb <= pm + 0.01:
+						movable = true # movable half-beam A of this switch
+					if ln * hand > 0.0 and sa >= pm - 0.01 and sb <= p1 + 0.01:
+						movable = true # movable half-beam B of this switch
+				if movable:
+					continue
 				var la := ln * geom_sep_at(g, sa)
 				var lb := ln * geom_sep_at(g, sb)
 				_mono_beam_segment(beam_st, rail_st, fa, fb, la, lb, top, bot, hw)
@@ -1955,26 +2297,44 @@ static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> vo
 			ps += 28.0
 		# Monorail crossover = an articulated moving-beam switch: the anchored guideway's beam over this span
 		# flexes across to the other guideway when a train needs to cross (driven by TransitSim).
-		if not xo.is_empty():
+		var group: Array = []
+		var cap_s: Array[float] = []
+		for pi in range(parts.size()):
+			var pt: Dictionary = parts[pi]
+			var q0 := float(pt["s_mid"]) - float(pt["x_half"])
+			var q1 := float(pt["s_mid"]) + float(pt["x_half"])
 			var frames_sw: Array[Transform3D] = []
 			var seps_sw := PackedFloat32Array()
 			for i in range(MonorailSwitchScript.SEGMENTS + 1):
-				var su := lerpf(gap0, gap1, float(i) / float(MonorailSwitchScript.SEGMENTS))
+				var su := lerpf(q0, q1, float(i) / float(MonorailSwitchScript.SEGMENTS))
 				frames_sw.append(sample_track_frame(c, su, clen, false))
 				seps_sw.append(geom_sep_at(g, su))
 			var sw: Node3D = MonorailSwitchScript.new()
-			sw.name = "MonorailSwitch_%d" % eid
+			sw.name = "MonorailSwitch_%d_%d" % [eid, pi]
 			sw.set("top", top)
 			sw.set("bot", bot)
 			sw.set("half_w", hw)
+			sw.set("hand", float(pt["hand"]))
 			switch_nodes.append(sw)
+			group.append(sw)
 			var sig_frames: Array[Transform3D] = []
 			var sig_seps := PackedFloat32Array()
-			for ss: float in [maxf(s0 + 0.5, gap0 - 10.0), minf(s1 - 0.5, gap1 + 10.0)]:
+			for ss: float in [maxf(s0 + 0.5, q0 - 10.0), minf(s1 - 0.5, q1 + 10.0)]:
 				sig_frames.append(sample_track_frame(c, ss, clen, false))
 				sig_seps.append(geom_sep_at(g, ss))
 			switch_setup.append([sw, frames_sw, seps_sw, sig_frames, sig_seps])
-			for se: float in [gap0, gapm, gap1]:
+			for se: float in [q0, float(pt["s_mid"]), q1]:
+				var dup := false
+				for cs: float in cap_s:
+					if absf(cs - se) < 1.0:
+						dup = true
+				if not dup:
+					cap_s.append(se)
+		# The switches of one crossover are interlocked as a unit (a train takes them all or none)
+		for sw_g: Node3D in group:
+			sw_g.set("group", group)
+		if not parts.is_empty():
+			for se: float in cap_s:
 				var pf := sample_track_frame(c, se, clen, false)
 				var p2 := Vector2(pf.origin.x, pf.origin.z)
 				var fw2 := Vector2(-pf.basis.z.x, -pf.basis.z.z).normalized()
