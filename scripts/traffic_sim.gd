@@ -9,6 +9,16 @@ const STOP_LINE_DIST := 9.2
 
 var cars: Array[Dictionary] = []
 var signals: Dictionary = {} # node_id (int) -> {axis: Vector2, timer: float, state_code: int, heads_a: Array, heads_b: Array, tram_heads: Array}
+# Big maps have thousands of signals: only tram-crossing signals (few) are stepped individually (transit signal
+# priority); plain street signals run off one shared clock and only refresh their lamps near the camera.
+var track_sig_ids: Array[int] = []
+var _sim_clock := 0.0
+var _near_sigs: Array[int] = []
+var _near_focus := Vector3(1e9, 0.0, 0.0)
+var _near_age := 99.0
+const SIG_NEAR_M := 520.0
+var _edge_ids: Array = []
+var _edge_ids_age := 0.0
 
 var _car_meshes: Array[ArrayMesh] = []
 var _veh_mat: ShaderMaterial
@@ -64,6 +74,8 @@ func rebuild_traffic(graph: NetworkGraph, focus_pos: Vector3) -> void:
 		c.queue_free()
 	cars.clear()
 	signals.clear()
+	track_sig_ids.clear()
+	_near_sigs.clear()
 
 	if graph.edges.is_empty():
 		return
@@ -178,7 +190,7 @@ func _build_intersection_signals(graph: NetworkGraph) -> void:
 		return score_a > score_b
 	)
 
-	var placed_positions: Array[Vector2] = []
+	var placed_grid := {} # 72 m cells -> placed signal positions (spacing checks without an O(n^2) scan)
 
 	for nid: int in ordered_nids:
 		var nbs: Array = graph.adj.get(nid, [])
@@ -197,10 +209,13 @@ func _build_intersection_signals(graph: NetworkGraph) -> void:
 		# Track intersections ALWAYS get dedicated tram signals (only deduplicate within 14m); non-track intersections keep 72m spacing!
 		var min_space := 14.0 if has_track else 72.0
 		var too_close := false
-		for pp: Vector2 in placed_positions:
-			if np2.distance_squared_to(pp) < min_space * min_space:
-				too_close = true
-				break
+		var gc := Vector2i(int(floor(np2.x / 72.0)), int(floor(np2.y / 72.0)))
+		for gdx in range(-1, 2):
+			for gdz in range(-1, 2):
+				for pp: Vector2 in placed_grid.get(gc + Vector2i(gdx, gdz), []):
+					if np2.distance_squared_to(pp) < min_space * min_space:
+						too_close = true
+						break
 		if too_close:
 			continue
 
@@ -215,7 +230,9 @@ func _build_intersection_signals(graph: NetworkGraph) -> void:
 					best_w = w
 					primary_axis = _edge_outward_dir_2d(graph, eid, nid)
 
-		placed_positions.append(np2)
+		if not placed_grid.has(gc):
+			placed_grid[gc] = []
+		(placed_grid[gc] as Array).append(np2)
 
 		var init_t := fposmod(float((nid * 7) % 13) * 2.1, CYCLE_SEC)
 		var heads_a: Array[Dictionary] = []
@@ -284,6 +301,7 @@ func _build_intersection_signals(graph: NetworkGraph) -> void:
 			"axis": primary_axis,
 			"has_track": has_track,
 			"timer": init_t,
+			"offset": init_t,
 			"state_code": -1,
 			"heads_a": heads_a,
 			"heads_b": heads_b,
@@ -291,6 +309,14 @@ func _build_intersection_signals(graph: NetworkGraph) -> void:
 		}
 		signals[nid] = sig_entry
 		_refresh_signal_visuals(sig_entry)
+	# Signal heads are small: thousands of them on the big map, so they are only drawn near the camera
+	for gi in sig_holder.find_children("*", "GeometryInstance3D", true, false):
+		(gi as GeometryInstance3D).visibility_range_end = 380.0
+	track_sig_ids.clear()
+	for nid2: int in signals.keys():
+		if bool((signals[nid2] as Dictionary)["has_track"]):
+			track_sig_ids.append(nid2)
+	_near_age = 99.0
 
 
 # Street-running tram track (monorail guideways are elevated and do not interact with road traffic)
@@ -445,6 +471,8 @@ func get_signal_aspect(node_id: int, approach_fwd_2d: Vector2) -> String:
 	if not signals.has(node_id):
 		return "green"
 	var sig: Dictionary = signals[node_id]
+	if not bool(sig["has_track"]):
+		sig["timer"] = fposmod(_sim_clock + float(sig["offset"]), CYCLE_SEC)
 	var axis: Vector2 = sig["axis"]
 	var is_phase_a := (absf(approach_fwd_2d.normalized().dot(axis)) >= 0.65)
 	var code := _phase_code_from_timer(float(sig["timer"]))
@@ -485,10 +513,8 @@ func get_upcoming_tram_signal(tr: Dictionary, graph: NetworkGraph) -> Dictionary
 				break
 			var p3 := curve.sample_baked(s_probe, true)
 			var p2 := Vector2(p3.x, p3.z)
-			for nid: int in signals.keys():
+			for nid: int in track_sig_ids:
 				var sig: Dictionary = signals[nid]
-				if not bool(sig["has_track"]):
-					continue
 				if (sig["pos2"] as Vector2).distance_squared_to(p2) <= 5.8 * 5.8:
 					var tf_p := TrackBuilder.sample_track_frame(curve, s_probe, rlen, is_loop)
 					var app_fwd := (-tf_p.basis.z) * dir
@@ -513,10 +539,8 @@ func on_bell_rung(tram_pos: Vector3, tram_fwd: Vector3) -> void:
 	# Ringing bell ('H') cautions nearby cars & requests immediate Transit Signal Priority ahead!
 	var tf2 := Vector2(tram_fwd.x, tram_fwd.z).normalized()
 	var tp2 := Vector2(tram_pos.x, tram_pos.z)
-	for nid: int in signals.keys():
+	for nid: int in track_sig_ids:
 		var sig: Dictionary = signals[nid]
-		if not bool(sig["has_track"]):
-			continue
 		if (sig["pos2"] as Vector2).distance_squared_to(tp2) > 55.0 * 55.0:
 			continue
 		# Advance red phase into yellow clearance if cross green has served >= 3.5s
@@ -542,8 +566,27 @@ func step_traffic(
 	focus_pos: Vector3
 ) -> void:
 	trams = _ground_trams(trams)
-	# 1. Advance all Intersection Signal Controllers (+ gentle Transit Signal Priority for approaching trams)
-	for nid: int in signals.keys():
+	_sim_clock += dt
+	# 1a. Plain street signals: shared clock; lamps refreshed only within SIG_NEAR_M of the camera
+	_near_age += dt
+	if _near_age > 1.0 or _near_focus.distance_squared_to(focus_pos) > 60.0 * 60.0:
+		_near_age = 0.0
+		_near_focus = focus_pos
+		_near_sigs.clear()
+		var f2 := Vector2(focus_pos.x, focus_pos.z)
+		for nid0: int in signals.keys():
+			var s0: Dictionary = signals[nid0]
+			if not bool(s0["has_track"]) and (s0["pos2"] as Vector2).distance_squared_to(f2) < SIG_NEAR_M * SIG_NEAR_M:
+				_near_sigs.append(nid0)
+	for nid1: int in _near_sigs:
+		if signals.has(nid1):
+			var s1: Dictionary = signals[nid1]
+			s1["timer"] = fposmod(_sim_clock + float(s1["offset"]), CYCLE_SEC)
+			_refresh_signal_visuals(s1)
+	# 1b. Tram-crossing signals (+ gentle Transit Signal Priority for approaching trams)
+	for nid: int in track_sig_ids:
+		if not signals.has(nid):
+			continue
 		var sig: Dictionary = signals[nid]
 		var t := fposmod(float(sig["timer"]) + dt, CYCLE_SEC)
 
@@ -572,7 +615,12 @@ func step_traffic(
 	if cars.is_empty() or graph.edges.is_empty():
 		return
 
-	var edge_ids := graph.edges.keys()
+	# Edge id list for respawns: rebuilt when the street graph changes size, else once a second (not every frame)
+	_edge_ids_age += dt
+	if graph.edges.size() != _edge_ids.size() or _edge_ids_age > 1.0:
+		_edge_ids = graph.edges.keys()
+		_edge_ids_age = 0.0
+	var edge_ids := _edge_ids
 	clear_idx_cache = graph.get_meta("track_clear_idx") if graph.has_meta("track_clear_idx") else {}
 
 	# 2. Step all Street Cars with Strict Signal Obedience & Full-Consist Tram Avoidance!

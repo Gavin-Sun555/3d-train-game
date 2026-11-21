@@ -2,9 +2,10 @@
 """
 Builds data files for the full 3D Seattle Streetcar/Train Simulation Game:
 1. data/tram_models.json      - 14 detailed modern & pre-1950s classic vintage trams (ported from 2d-train-game)
-2. data/seattle_expanded.json - Expanded ~980m x 2010m Downtown Seattle -> Denny Triangle -> South Lake Union
-   map with a clean connected buildable Street Graph (junctions + edges), 590+ 3D buildings, landmarks,
-   crosswalks, streetlamps, trees, and a pre-built editable Starter Line.
+2. tools/osm_cache/seattle_v3_base.json - the core Downtown -> Denny Triangle -> South Lake Union -> Seattle Center
+   map with a clean connected buildable Street Graph (junctions + edges), 3D buildings, landmarks,
+   crosswalks, streetlamps, trees, and a pre-built editable Starter Line; then tools/extend_seattle_map.py
+   grows it into data/seattle_expanded.json (Fremont, UW, Queen Anne, Capitol Hill, SoDo ...).
 """
 
 import gzip
@@ -1259,7 +1260,8 @@ def build_seattle_expanded():
         "plazas": plazas,
         "piers": piers,
     }
-    out_path = os.path.join(DATA_DIR, "seattle_expanded.json")
+    # v3 core map -> the frozen base that tools/extend_seattle_map.py grows into the full (v4) Seattle map
+    out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "osm_cache", "seattle_v3_base.json")
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False)
     print(
@@ -1496,3 +1498,6 @@ if __name__ == "__main__":
     build_tram_models()
     build_grid_city()
     build_seattle_expanded()
+    # v4: Fremont / UW / Queen Anne / Capitol Hill / SoDo from raw OSM (osm_cache/fetch_overpass.py downloads it)
+    import extend_seattle_map
+    extend_seattle_map.main()

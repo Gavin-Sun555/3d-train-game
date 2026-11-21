@@ -2894,6 +2894,8 @@ static func _is_mono_pier_clear(
 	# 2. Never place a pier inside ANY street intersection or on its crosswalk zebra stripes!
 	for nid: int in graph.nodes.keys():
 		var np: Vector2 = graph.nodes[nid]["pos"]
+		if p2.distance_squared_to(np) > 60.0 * 60.0:
+			continue # far junction (cheap reject first: the big map has thousands)
 		var deg := (graph.adj.get(nid, []) as Array).size()
 		if deg >= 3:
 			var clr := _node_intersection_trim(graph, nid) + 6.0
@@ -2913,6 +2915,8 @@ static func _is_mono_pier_clear(
 		var pts: Array = oe["pts"]
 		var hw := float(oe.get("width", 12.0)) * 0.5
 		var clr_d := hw + 4.8
+		if p2.distance_to(pts[0]) > float(oe.get("length", 1e6)) + clr_d + 2.0:
+			continue # the whole street is out of reach
 		for i in range(pts.size() - 1):
 			var a: Vector2 = pts[i]
 			var b: Vector2 = pts[i + 1]

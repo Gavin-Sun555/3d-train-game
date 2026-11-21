@@ -27,8 +27,12 @@ static func build_city(
 	ground_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(ground_mi)
 
-	# 2. Plazas, brick squares, parks & water
-	_build_areas(parent, map_data.get("areas", []))
+	# Big maps (Seattle v4): only the core is built here; the outer map streams in as CityTiles
+	var full_data := map_data
+	map_data = CityTiles.core_subset(map_data)
+
+	# 2. Plazas, brick squares, parks & water (whole map: cheap flat fills)
+	_build_areas(parent, full_data.get("areas", []))
 
 	# 3. Realistic weathered asphalt streets, 3D granite curbs, lane dashes & crosswalks
 	_build_roads_and_curbs(parent, map_data.get("roads", []), map_data.get("crosswalks", []), road_mat)
@@ -64,7 +68,11 @@ static func build_city(
 		lm_info["lights"].append(ll)
 
 	# 7. High-detail Seattle parks, Lake Union waterfront, and multi-species sculpted 3D trees!
-	ParkLandscapeBuilder.build_all_parks_and_trees(parent, map_data, lm_info["lights"], globe_mat)
+	var park_data := map_data
+	if map_data.has("park_areas"):
+		park_data = map_data.duplicate(false)
+		park_data["areas"] = map_data["park_areas"]
+	ParkLandscapeBuilder.build_all_parks_and_trees(parent, park_data, lm_info["lights"], globe_mat)
 
 	return lm_info
 
@@ -115,7 +123,7 @@ static func _build_areas(parent: Node3D, areas: Array) -> void:
 		var kind: String = str(a.get("kind", ""))
 		if kind == "water":
 			buckets["water"].append(a)
-		elif kind in ["park", "grass", "wood", "meadow", "garden"]:
+		elif kind in ["park", "grass", "wood", "meadow", "garden", "sports"]:
 			buckets["park"].append(a)
 		elif kind == "brick_plaza":
 			buckets["brick"].append(a)
@@ -258,10 +266,15 @@ static func _build_roads_and_curbs(
 	parent: Node3D,
 	roads: Array,
 	crosswalks: Array,
-	road_mat: ShaderMaterial
+	road_mat: ShaderMaterial,
+	emit_n: int = -1
 ) -> void:
 	if roads.is_empty():
 		return
+	# Map tiles pass their own streets first and the neighbouring ones after them: those only inform
+	# junctions, kerbs and sidewalk widths, and are built by their own tile.
+	if emit_n < 0:
+		emit_n = roads.size()
 	var road_st := SurfaceTool.new()
 	road_st.begin(Mesh.PRIMITIVE_TRIANGLES)
 
@@ -281,6 +294,10 @@ static func _build_roads_and_curbs(
 	var road_level := _road_height_levels(roads)
 	for road_i in range(roads.size()):
 		var r: Dictionary = roads[road_i]
+		if road_i >= emit_n:
+			break
+		if r.has("lv"):
+			road_level[road_i] = int(r["lv"]) # level fixed map-wide, so streets meeting across tiles differ
 		var raw_pts: Array = r.get("pts", [])
 		if raw_pts.size() < 2:
 			continue
@@ -409,6 +426,7 @@ static func _build_roads_and_curbs(
 		parent.add_child(road_mi)
 
 	parent.set_meta("kerb_roads", roads)
+	parent.set_meta("kerb_emit_n", emit_n)
 	parent.set_meta("road_mat", road_mat)
 	_build_kerbs(parent, roads, [], road_mat)
 
@@ -480,6 +498,28 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 
 	var beacon_mat := LandmarksBuilder._make_beacon_mat()
 
+	# Houses (style 3): painted lap siding walls + real pitched roofs (separate double-sided roof mesh)
+	var roof_st := SurfaceTool.new()
+	roof_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var has_roofs := false
+	var house_pal: Array[Color] = [
+		Color(0.55, 0.60, 0.62), # grey-blue
+		Color(0.45, 0.51, 0.43), # sage green
+		Color(0.79, 0.75, 0.66), # beige
+		Color(0.87, 0.86, 0.82), # white
+		Color(0.38, 0.43, 0.49), # slate blue
+		Color(0.64, 0.55, 0.43), # tan
+		Color(0.52, 0.33, 0.27), # barn red
+		Color(0.70, 0.66, 0.56), # khaki
+	]
+	var shingle_pal: Array[Color] = [
+		Color(0.22, 0.22, 0.23),
+		Color(0.31, 0.27, 0.24),
+		Color(0.37, 0.35, 0.33),
+		Color(0.25, 0.29, 0.27),
+		Color(0.40, 0.25, 0.20),
+	]
+
 	var b_idx := 0
 	var any_geom := false
 
@@ -490,7 +530,7 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 		if str(b.get("lm", "")) in SeattleV2Landmarks.SKIP_GENERIC:
 			continue # built as a dedicated landmark model
 		var h: float = clampf(float(b.get("h", 14.0)), 5.0, 185.0)
-		var style: int = clampi(int(b.get("style", 2)), 0, 2)
+		var style: int = clampi(int(b.get("style", 2)), 0, 3)
 		# Real-world look for named OSM buildings (landmark facades, recorded building colours)
 		var lm_o: Dictionary = LandmarkFacades.override_for(b)
 		if not lm_o.is_empty():
@@ -500,6 +540,34 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 				h = float(lm_o["h"])
 		if Geometry2D.is_polygon_clockwise(poly):
 			poly.reverse()
+
+		if style == 3:
+			var hc: Color = house_pal[int(absf(poly[0].x * 7.0 + poly[0].y * 13.0)) % house_pal.size()]
+			if str(b.get("colour", "")) != "":
+				hc = Color.from_string(str(b["colour"]), hc)
+			var rc: Color = shingle_pal[int(absf(poly[0].x * 3.0 + poly[0].y * 5.0)) % shingle_pal.size()]
+			if str(b.get("roof_colour", "")) != "":
+				rc = Color.from_string(str(b["roof_colour"]), rc)
+			var hcol := Color(hc.r, hc.g, hc.b, (3.0 * 64.0 + float(b_idx % 60)) / 255.0)
+			b_idx += 1
+			_emit_house(st, roof_st, poly, h, b.get("roof", {}), hcol, rc)
+			any_geom = true
+			has_roofs = has_roofs or not (b.get("roof", {}) as Dictionary).is_empty()
+			continue
+
+		# Stadium stands with the field as a hole (OSM inner ring): an open seating bowl round a grass field
+		if b.has("inner") and str(b.get("kind", "")) == "stadium":
+			var inner := _clean_poly(b["inner"])
+			if inner.size() >= 3:
+				if Geometry2D.is_polygon_clockwise(inner):
+					inner.reverse()
+				var svcol := Color(0.70, 0.70, 0.68, (2.0 * 64.0 + float(b_idx % 60)) / 255.0)
+				b_idx += 1
+				_emit_stadium(st, roof_st, frame_st, poly, inner, h, svcol)
+				any_geom = true
+				has_roofs = true
+				has_frames = true
+				continue
 
 		var base_c: Color
 		var trim_c: Color
@@ -545,6 +613,21 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 					tower_poly.reverse()
 				has_setback = true
 
+		var min_h := float(b.get("min_h", 0.0))
+		if min_h > 0.5:
+			# 3D building part raised off the ground (upper tower stage, skybridge, cantilever): extrude
+			# min_h .. h and close its underside
+			_extrude_tier_with_3d_relief(st, frame_st, poly, min_h, h, style, vcol, trim_c, false)
+			var tri_u := Geometry2D.triangulate_polygon(poly)
+			for k in range(0, tri_u.size(), 3):
+				for rp: Vector2 in [poly[tri_u[k]], poly[tri_u[k + 2]], poly[tri_u[k + 1]]]:
+					st.set_color(vcol)
+					st.set_normal(Vector3.DOWN)
+					st.set_uv(Vector2.ZERO)
+					st.add_vertex(Vector3(rp.x, min_h, rp.y))
+			has_frames = true
+			any_geom = true
+			continue
 		if has_setback:
 			# Extrude street-edge podium (0 .. podium_h) + setback upper tower (podium_h .. h)
 			_extrude_tier_with_3d_relief(st, frame_st, poly, 0.0, podium_h, style, vcol, trim_c, true)
@@ -610,6 +693,19 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 		b_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 		parent.add_child(b_mi)
 
+	if has_roofs:
+		var r_mi := MeshInstance3D.new()
+		r_mi.name = "HouseRoofs"
+		r_mi.mesh = roof_st.commit()
+		var r_mat := StandardMaterial3D.new()
+		r_mat.vertex_color_use_as_albedo = true
+		r_mat.roughness = 0.92
+		r_mat.metallic_specular = 0.18
+		r_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		r_mi.material_override = r_mat
+		r_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		parent.add_child(r_mi)
+
 	if has_frames:
 		var f_mi := MeshInstance3D.new()
 		f_mi.name = "BuildingFrames3D"
@@ -622,6 +718,217 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 		f_mi.material_override = f_mat
 		f_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 		parent.add_child(f_mi)
+
+
+# Stadium: precast outer facade up to the rim, raked seating from the rim down to the field edge, grass
+# field, and floodlight masts round the rim. The two rings are resampled to the same count to loft the bowl.
+static func _emit_stadium(st: SurfaceTool, bowl_st: SurfaceTool, frame_st: SurfaceTool, outer: PackedVector2Array, inner: PackedVector2Array, h: float, wcol: Color) -> void:
+	var rim := h
+	var u_acc := 0.0
+	for i in range(outer.size()):
+		var p0 := outer[i]
+		var p1 := outer[(i + 1) % outer.size()]
+		var e := p1 - p0
+		var el := e.length()
+		if el < 0.1:
+			continue
+		var d2 := e / el
+		_emit_wall_quad(st, Vector3(p0.x, 0.0, p0.y), Vector3(p1.x, 0.0, p1.y), Vector3(p1.x, rim, p1.y), Vector3(p0.x, rim, p0.y), Vector3(-d2.y, 0.0, d2.x), u_acc, u_acc + el, 0.0, rim, wcol)
+		u_acc += el
+	var n := 72
+	var ro := _resample_ring(outer, n)
+	var ri := _resample_ring(inner, n)
+	# align the inner ring's start with the outer ring's (nearest point), so the seating rows run straight
+	var best_k := 0
+	var best_d := 1e18
+	for k in range(n):
+		var dd := ro[0].distance_squared_to(ri[k])
+		if dd < best_d:
+			best_d = dd
+			best_k = k
+	var seat_a := Color(0.16, 0.30, 0.24)
+	var seat_b := Color(0.20, 0.34, 0.28)
+	var conc := Color(0.62, 0.61, 0.58)
+	var y_field := 0.22
+	var y_low := 2.6 # front row (field wall top)
+	for k in range(n):
+		var o0 := ro[k]
+		var o1 := ro[(k + 1) % n]
+		var i0 := ri[(k + best_k) % n]
+		var i1 := ri[(k + 1 + best_k) % n]
+		# two tiers: lower bowl to a concourse ledge, then the upper deck to the rim
+		var m0 := i0.lerp(o0, 0.52)
+		var m1 := i1.lerp(o1, 0.52)
+		var y_mid := lerpf(y_low, rim, 0.42)
+		var col := seat_a if k % 2 == 0 else seat_b
+		_roof_quad(bowl_st, _v3(i0, y_low), _v3(i1, y_low), _v3(m1, y_mid), _v3(m0, y_mid), col)
+		_roof_quad(bowl_st, _v3(m0, y_mid + 0.9), _v3(m1, y_mid + 0.9), _v3(o1, rim), _v3(o0, rim), col.darkened(0.06))
+		_roof_quad(bowl_st, _v3(m0, y_mid), _v3(m1, y_mid), _v3(m1, y_mid + 0.9), _v3(m0, y_mid + 0.9), conc) # concourse fascia
+		_roof_quad(bowl_st, _v3(i0, y_field), _v3(i1, y_field), _v3(i1, y_low), _v3(i0, y_low), Color(0.18, 0.20, 0.22)) # field wall
+	# grass field (mown stripes) on the inner ring
+	var tri := Geometry2D.triangulate_polygon(inner)
+	for k in range(0, tri.size(), 3):
+		var a := inner[tri[k]]
+		var stripe := int(floor((a.x + a.y) / 9.0)) % 2 == 0
+		_roof_tri(bowl_st, _v3(a, y_field), _v3(inner[tri[k + 1]], y_field), _v3(inner[tri[k + 2]], y_field), Color(0.24, 0.48, 0.20) if stripe else Color(0.27, 0.53, 0.23))
+	# floodlight masts at four points round the rim
+	for q in range(4):
+		var pm := ro[(q * n / 4 + n / 8) % n]
+		var mh := rim + 16.0
+		_emit_colored_box(frame_st, Transform3D(Basis.IDENTITY, Vector3(pm.x, mh * 0.5, pm.y)), Vector3(0.9, mh, 0.9), Color(0.55, 0.56, 0.58))
+		var toward := (ri[(q * n / 4 + n / 8 + best_k) % n] - pm).normalized()
+		var lp := pm + toward * 1.2
+		_emit_colored_box(frame_st, Transform3D(Basis(Vector3.UP, atan2(toward.x, toward.y)), Vector3(lp.x, mh + 1.2, lp.y)), Vector3(7.0, 3.2, 0.6), Color(0.92, 0.92, 0.86))
+
+
+static func _resample_ring(poly: PackedVector2Array, n: int) -> PackedVector2Array:
+	var total := 0.0
+	for i in range(poly.size()):
+		total += poly[i].distance_to(poly[(i + 1) % poly.size()])
+	var out := PackedVector2Array()
+	var step := total / float(n)
+	var seg := 0
+	var seg_pos := 0.0
+	for k in range(n):
+		var target := step * float(k)
+		while seg < poly.size():
+			var a := poly[seg]
+			var b := poly[(seg + 1) % poly.size()]
+			var L := a.distance_to(b)
+			if seg_pos + L >= target or seg == poly.size() - 1:
+				var t := 0.0 if L < 1e-6 else clampf((target - seg_pos) / L, 0.0, 1.0)
+				out.append(a.lerp(b, t))
+				break
+			seg_pos += L
+			seg += 1
+	return out
+
+
+# House: plain siding walls up to the eave (flat cap when there is no pitched roof), then a gabled /
+# hipped / pyramidal / skillion roof over the footprint's oriented box (OSM roof:shape or estimated).
+static func _emit_house(st: SurfaceTool, roof_st: SurfaceTool, poly: PackedVector2Array, h: float, roof: Dictionary, wcol: Color, rcol: Color) -> void:
+	var u_acc := 0.0
+	for i in range(poly.size()):
+		var p0 := poly[i]
+		var p1 := poly[(i + 1) % poly.size()]
+		var e := p1 - p0
+		var el := e.length()
+		if el < 0.1:
+			continue
+		var d2 := e / el
+		var n3 := Vector3(-d2.y, 0.0, d2.x)
+		_emit_wall_quad(st, Vector3(p0.x, 0.0, p0.y), Vector3(p1.x, 0.0, p1.y), Vector3(p1.x, h, p1.y), Vector3(p0.x, h, p0.y), n3, u_acc, u_acc + el, 0.0, h, wcol)
+		u_acc += el
+	if roof.is_empty():
+		var tri := Geometry2D.triangulate_polygon(poly)
+		for k in range(0, tri.size(), 3):
+			for rp: Vector2 in [poly[tri[k]], poly[tri[k + 1]], poly[tri[k + 2]]]:
+				st.set_color(wcol)
+				st.set_normal(Vector3.UP)
+				st.set_uv(Vector2.ZERO)
+				st.add_vertex(Vector3(rp.x, h, rp.y))
+		return
+	var cc: Array = roof.get("c", [0.0, 0.0])
+	var c := Vector2(float(cc[0]), float(cc[1]))
+	var ang := float(roof.get("a", 0.0))
+	var u := Vector2(cos(ang), sin(ang))
+	var v := Vector2(-u.y, u.x)
+	var hl := float(roof.get("hl", 4.0))
+	var hw := float(roof.get("hw", 3.0))
+	var rh := float(roof.get("h", 2.5))
+	var shape := str(roof.get("shape", "gabled"))
+	var ov := 0.38 # eave overhang
+	var L := hl + ov
+	var W := hw + ov
+	var y0 := h - 0.12 # eaves sit a touch below the wall top: no light gap
+	var y1 := h + rh
+
+	if shape == "pyramidal" or (shape == "hipped" and hl <= hw * 1.02):
+		var apex := Vector3(c.x, y1, c.y)
+		var cs: Array = [c - u * L - v * W, c + u * L - v * W, c + u * L + v * W, c - u * L + v * W]
+		for k in range(4):
+			_roof_tri(roof_st, _v3(cs[k], y0), _v3(cs[(k + 1) % 4], y0), apex, rcol)
+	elif shape == "hipped":
+		var rr := L - W # ridge half length
+		var ra := Vector3((c - u * rr).x, y1, (c - u * rr).y)
+		var rb := Vector3((c + u * rr).x, y1, (c + u * rr).y)
+		var a0 := _v3(c - u * L - v * W, y0)
+		var a1 := _v3(c + u * L - v * W, y0)
+		var a2 := _v3(c + u * L + v * W, y0)
+		var a3 := _v3(c - u * L + v * W, y0)
+		_roof_quad(roof_st, a0, a1, rb, ra, rcol)
+		_roof_quad(roof_st, a2, a3, ra, rb, rcol)
+		_roof_tri(roof_st, a1, a2, rb, rcol)
+		_roof_tri(roof_st, a3, a0, ra, rcol)
+	elif shape == "skillion":
+		var lo0 := _v3(c - u * L - v * W, y0)
+		var lo1 := _v3(c + u * L - v * W, y0)
+		var hi1 := _v3(c + u * L + v * W, y1)
+		var hi0 := _v3(c - u * L + v * W, y1)
+		_roof_quad(roof_st, lo0, lo1, hi1, hi0, rcol)
+		# raised wall under the high eave and the two side triangles (siding)
+		_gable_end(st, c + v * hw, u, hl, h, h + rh * 0.96, wcol, true)
+		_gable_wedge(st, c - u * hl, -u, v, hw, h, rh, wcol)
+		_gable_wedge(st, c + u * hl, u, v, hw, h, rh, wcol)
+	else: # gabled: ridge along the long axis, siding gable triangles at both ends
+		var ra2 := _v3(c - u * L, y1)
+		var rb2 := _v3(c + u * L, y1)
+		_roof_quad(roof_st, _v3(c - u * L - v * W, y0), _v3(c + u * L - v * W, y0), rb2, ra2, rcol)
+		_roof_quad(roof_st, _v3(c + u * L + v * W, y0), _v3(c - u * L + v * W, y0), ra2, rb2, rcol)
+		for sgn: float in [-1.0, 1.0]:
+			var ec := c + u * (hl * sgn)
+			var n2 := u * sgn
+			var d := Vector2(n2.y, -n2.x)
+			var b0 := Vector3((ec - d * hw).x, h, (ec - d * hw).y)
+			var b1 := Vector3((ec + d * hw).x, h, (ec + d * hw).y)
+			var ap := Vector3(ec.x, y1 - 0.05, ec.y)
+			var n3 := Vector3(n2.x, 0.0, n2.y)
+			st.set_color(wcol); st.set_normal(n3); st.set_uv(Vector2(0.0, h)); st.add_vertex(b0)
+			st.set_color(wcol); st.set_normal(n3); st.set_uv(Vector2(hw * 2.0, h)); st.add_vertex(b1)
+			st.set_color(wcol); st.set_normal(n3); st.set_uv(Vector2(hw, y1)); st.add_vertex(ap)
+
+
+static func _v3(p: Vector2, y: float) -> Vector3:
+	return Vector3(p.x, y, p.y)
+
+
+static func _roof_tri(rst: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, col: Color) -> void:
+	var n := (b - a).cross(c - a).normalized()
+	if n.y < 0.0:
+		n = -n
+	var shade := col * (0.86 + 0.14 * clampf(n.dot(Vector3(0.45, 0.8, 0.4).normalized()), 0.0, 1.0))
+	shade.a = 1.0
+	for p: Vector3 in [a, b, c]:
+		rst.set_color(shade)
+		rst.set_normal(n)
+		rst.add_vertex(p)
+
+
+static func _roof_quad(rst: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3, col: Color) -> void:
+	_roof_tri(rst, a, b, c, col)
+	_roof_tri(rst, a, c, d, col)
+
+
+# Raised siding wall along a skillion's high eave (outward normal `side` direction from the centre)
+static func _gable_end(st: SurfaceTool, mid: Vector2, along: Vector2, half: float, yb: float, yt: float, wcol: Color, _hi: bool) -> void:
+	var p0 := mid - along * half
+	var p1 := mid + along * half
+	var e := (p1 - p0).normalized()
+	var n3 := Vector3(-e.y, 0.0, e.x)
+	_emit_wall_quad(st, Vector3(p0.x, yb, p0.y), Vector3(p1.x, yb, p1.y), Vector3(p1.x, yt, p1.y), Vector3(p0.x, yt, p0.y), n3, 0.0, half * 2.0, yb, yt, wcol)
+
+
+# Triangular siding wedge under a skillion roof at one end of the box
+static func _gable_wedge(st: SurfaceTool, ec: Vector2, out_u: Vector2, v: Vector2, hw: float, h: float, rh: float, wcol: Color) -> void:
+	var n3 := Vector3(out_u.x, 0.0, out_u.y)
+	var lo := ec - v * hw
+	var hi := ec + v * hw
+	var verts: Array = [Vector3(lo.x, h, lo.y), Vector3(hi.x, h, hi.y), Vector3(hi.x, h + rh, hi.y)]
+	if Vector2(-(hi - lo).y, (hi - lo).x).dot(out_u) < 0.0:
+		verts = [Vector3(hi.x, h, hi.y), Vector3(lo.x, h, lo.y), Vector3(hi.x, h + rh, hi.y)]
+	for k in range(3):
+		var vv: Vector3 = verts[k]
+		st.set_color(wcol); st.set_normal(n3); st.set_uv(Vector2(float(k) * hw, vv.y)); st.add_vertex(vv)
 
 
 static func _extrude_tier_with_3d_relief(
@@ -1221,6 +1528,28 @@ static func _add_flat_quad(
 static func apply_track_clearance(city_root: Node3D, clear_idx: Dictionary, bays: Array = []) -> void:
 	if city_root == null:
 		return
+	var tiles := city_root.get_node_or_null("CityTiles")
+	if tiles != null:
+		# Only tiles a track or station bay reaches (or that still hide something from before) need a pass
+		var touched := {}
+		if not clear_idx.is_empty():
+			for ck: Vector2i in (clear_idx["grid"] as Dictionary).keys():
+				var cp := (Vector2(ck) + Vector2(0.5, 0.5)) * TrackBuilder.CLEAR_CELL
+				for dx in [-1, 0, 1]:
+					for dz in [-1, 0, 1]:
+						touched[Vector2i(int(floor((cp.x + dx * 30.0) / CityTiles.TILE)), int(floor((cp.y + dz * 30.0) / CityTiles.TILE)))] = true
+		for bay: Dictionary in bays:
+			var bp: Vector3 = bay["pos"]
+			touched[Vector2i(int(floor(bp.x / CityTiles.TILE)), int(floor(bp.z / CityTiles.TILE)))] = true
+		for tile: Node in tiles.get_children():
+			if not (tile is Node3D):
+				continue
+			var parts := str(tile.name).split("_")
+			var tk := Vector2i(int(parts[1]), int(parts[2])) if parts.size() == 3 else Vector2i.ZERO
+			var hit := touched.has(tk)
+			if hit or bool(tile.get_meta("clear_hidden", false)):
+				apply_track_clearance(tile as Node3D, clear_idx, bays)
+				tile.set_meta("clear_hidden", hit)
 	var lamp_posts := city_root.get_node_or_null("StreetlampPosts") as MultiMeshInstance3D
 	var lamp_hidden := _clearance_hidden_set(lamp_posts, clear_idx, TrackBuilder.LAMP_CLEARANCE_M, bays)
 	_apply_hidden(lamp_posts, lamp_hidden, 1)
@@ -1314,13 +1643,35 @@ static func _station_bays_sig(bays: Array) -> String:
 
 
 static func apply_station_bays(city_root: Node3D, bays: Array) -> void:
-	if city_root == null or not city_root.has_meta("kerb_roads"):
+	if city_root == null:
+		return
+	var tiles := city_root.get_node_or_null("CityTiles")
+	if tiles != null:
+		for tile: Node in tiles.get_children():
+			if tile is Node3D:
+				apply_station_bays(tile as Node3D, _bays_near(tile as Node3D, bays))
+	if not city_root.has_meta("kerb_roads"):
 		return
 	var sig := _station_bays_sig(bays)
 	if city_root.has_meta("last_bays_sig") and str(city_root.get_meta("last_bays_sig")) == sig:
 		return
 	city_root.set_meta("last_bays_sig", sig)
 	_build_kerbs(city_root, city_root.get_meta("kerb_roads"), bays, city_root.get_meta("road_mat"))
+
+
+# Station bays that touch a tile (its kerbs are only rebuilt when one of these changes)
+static func _bays_near(tile: Node3D, bays: Array) -> Array:
+	var out: Array = []
+	var nm := str(tile.name)
+	var parts := nm.split("_")
+	if parts.size() != 3:
+		return bays
+	var r := Rect2(Vector2(float(parts[1]), float(parts[2])) * CityTiles.TILE, Vector2(CityTiles.TILE, CityTiles.TILE)).grow(60.0)
+	for bay: Dictionary in bays:
+		var bp: Vector3 = bay["pos"]
+		if r.has_point(Vector2(bp.x, bp.z)):
+			out.append(bay)
+	return out
 
 
 static func _in_bay(bays: Array, p: Vector2) -> bool:
@@ -1382,7 +1733,8 @@ static func _build_kerbs(parent: Node3D, roads: Array, bays: Array, road_mat: Ma
 	walk_st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var furn := {"bin": [], "rack": [], "hydrant": [], "pay": [], "news": [], "cover": []}
 	var has_curb := false
-	for road_i in range(roads.size()):
+	var emit_n := int(parent.get_meta("kerb_emit_n", roads.size()))
+	for road_i in range(mini(emit_n, roads.size())):
 		var r: Dictionary = roads[road_i]
 		var raw_pts: Array = r.get("pts", [])
 		if raw_pts.size() < 2 or int(r.get("layer", 0)) != 0:

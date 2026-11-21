@@ -3,3 +3,4 @@
 build/
 *.import
 traingame3d
+tools/osm_cache/raw/

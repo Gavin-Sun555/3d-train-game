@@ -362,24 +362,50 @@ void fragment() {
 				metal = 0.02;
 			}
 		} else {
-			// === STYLE 3: Structural Piers, Cornices & Westin Fluted Concrete ===
-			float fh = 3.4;
+			// === STYLE 3: Seattle house: painted lap siding, white-trimmed double-hung windows, front door ===
+			float fh = 3.0;
+			float bw = 3.2;
+			float floor_idx = floor(h / fh);
+			float bay_idx = floor(u / bw);
 			float fy = fract(h / fh);
-			float flute = 0.90 + 0.10 * sin(u * 5.6);
-			bool win = (h > 14.5) && (fy > 0.28 && fy < 0.76) && (fract(u / 1.6) > 0.28);
-			if (win) {
-				float r_seed = hash21(vec2(floor(u / 1.6) + b_seed * 5.1, floor(h / fh)));
-				vec2 wuv = vec2(fract(u / 1.6), (fy - 0.28) / 0.48);
-				vec3 r_alb;
-				vec3 r_em;
-				trace_interior_room(wuv, ray_local, r_seed, false, night_factor, cam_dist, r_alb, r_em);
-				col = mix(r_alb, env_sky_tint * 0.7, clamp(0.18 + fresnel * 0.5, 0.0, 0.7) * (1.0 - night_factor * 0.65));
-				emit = r_em;
-				rough = 0.14;
-				spec = 0.72;
+			float fx = fract(u / bw);
+			float board = fract(h / 0.19);
+			float lap = 0.86 + 0.14 * smoothstep(0.0, 0.22, board); // shadow line under each board
+			vec3 siding = base_col * lap * (0.96 + 0.06 * hash21(vec2(floor(u / 4.8), floor(h / 0.19))));
+			bool has_door = (floor_idx < 0.5) && (abs(bay_idx - floor(b_seed * 0.13) - 1.0) < 0.5);
+			bool door = has_door && fx > 0.33 && fx < 0.67 && h > 0.45 && h < 2.55;
+			bool door_trim = has_door && fx > 0.30 && fx < 0.70 && h > 0.40 && h < 2.68 && !door;
+			bool win = !has_door && fx > 0.34 && fx < 0.66 && fy > 0.31 && fy < 0.80;
+			bool trim = !has_door && fx > 0.31 && fx < 0.69 && fy > 0.27 && fy < 0.84 && !win;
+			if (h < 0.42) {
+				col = vec3(0.50, 0.49, 0.47) * (0.92 + 0.08 * hash21(floor(vec2(u, h) * 9.0))); // concrete foundation
+				rough = 0.9;
+			} else if (door) {
+				vec3 door_c = mix(vec3(0.20, 0.13, 0.09), base_col * 0.45, step(0.5, hash21(vec2(b_seed, 3.1))));
+				col = door_c * (abs(fx - 0.5) > 0.12 && h > 1.0 && h < 2.2 ? 0.86 : 1.0);
+				rough = 0.6;
+			} else if (door_trim || trim) {
+				col = vec3(0.90, 0.89, 0.85) * ground_ao;
+				rough = 0.7;
+			} else if (win) {
+				bool sash = abs(fy - 0.555) < 0.018 || abs(fx - 0.5) < 0.012;
+				if (sash) {
+					col = vec3(0.92, 0.91, 0.87);
+					rough = 0.6;
+				} else {
+					float r_seed = hash21(vec2(bay_idx + b_seed * 7.3, floor_idx + b_seed * 2.9));
+					vec2 wuv = vec2((fx - 0.34) / 0.32, (fy - 0.31) / 0.49);
+					vec3 r_alb;
+					vec3 r_em;
+					trace_interior_room(wuv, ray_local, r_seed, false, night_factor, cam_dist, r_alb, r_em);
+					col = mix(r_alb, env_sky_tint * 0.7, clamp(0.18 + fresnel * 0.5, 0.0, 0.7) * (1.0 - night_factor * 0.65));
+					emit = r_em * 0.85;
+					rough = 0.14;
+					spec = 0.7;
+				}
 			} else {
-				col = base_col * flute * ground_ao;
-				rough = 0.80;
+				col = siding * ground_ao;
+				rough = 0.8;
 			}
 		}
 

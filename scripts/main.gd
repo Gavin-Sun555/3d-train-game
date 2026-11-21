@@ -25,9 +25,9 @@ const MAP_PRESETS := {
 	"seattle": {
 		"key": "seattle",
 		"index": "02",
-		"title": "西雅图 · 中心城区",
-		"subtitle": "Pike · Westlake · 亚马逊球体 · 联合湖",
-		"desc": "基于真实 OSM 街区构建的西雅图核心城景、高架单轨与湖岸建筑群，沉浸式多视角驾驶电车。",
+		"title": "西雅图 · 城区",
+		"subtitle": "市中心 · 联合湖 · 弗里蒙特 · 华盛顿大学 · 国会山 · 体育场区",
+		"desc": "基于真实 OSM 数据：从弗里蒙特、华盛顿大学到 T-Mobile 球场，约 5 万栋按真实高度与屋顶还原的建筑，高架单轨与湖岸城景。",
 		"data_path": "res://data/seattle_expanded.json",
 		"default_target": Vector3(0.0, 0.0, 120.0),
 		"default_height": 600.0,
@@ -142,6 +142,7 @@ var _lane_cfg_btns: Array[Button] = []
 var _built_land_sig := ""
 var _shop_mat: ShaderMaterial = null
 var _bld_grid: Dictionary = {}
+var _city_tiles: CityTiles = null # outer map tiles (Seattle v4), streamed in around the core
 var _build_station_side := 1
 var _build_station_kind: int = NetworkGraph.StationKind.SIDE_SINGLE
 var _build_station_len_idx := 0
@@ -585,7 +586,39 @@ func _build_city_world() -> void:
 	for l in lm_info.get("lights", []):
 		if l is OmniLight3D:
 			_city_lights.append(l)
+	_city_tiles = null
+	if CityTiles.has_tiles(_map_data):
+		_city_tiles = CityTiles.new()
+		_city_tiles.name = "CityTiles"
+		_city_root.add_child(_city_tiles)
+		_city_tiles.on_tile_built = _on_city_tile_built
+		_city_tiles.setup(_effective_land_data(), {"building": _building_mat, "road": _road_mat, "globe": _globe_mat})
 	_loaded_city_map_key = _current_map_key
+
+
+# A streamed map tile is in: clear it for player tracks / station bays and hook up its night lighting
+func _on_city_tile_built(tile: Node3D) -> void:
+	var bays: Array = _graph.get_meta("station_bays", [])
+	CityBuilder.apply_track_clearance(tile, _graph.get_meta("track_clear_idx", {}), bays)
+	CityBuilder.apply_station_bays(tile, CityBuilder._bays_near(tile, bays))
+	var i := 0
+	while i < _city_lights.size():
+		if is_instance_valid(_city_lights[i]):
+			i += 1
+		else:
+			_city_lights.remove_at(i)
+	for l in tile.get_meta("lights", []):
+		if l is OmniLight3D:
+			_city_lights.append(l)
+	if tile.has_meta("shop_mat"):
+		_night_mats.append(tile.get_meta("shop_mat"))
+	var lamp_e := _night_factor * 2.05
+	for l in tile.get_meta("lights", []):
+		if l is OmniLight3D:
+			(l as OmniLight3D).visible = lamp_e > 0.02
+			(l as OmniLight3D).light_energy = lamp_e
+	if tile.has_meta("shop_mat"):
+		(tile.get_meta("shop_mat") as ShaderMaterial).set_shader_parameter("night_factor", _night_factor)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -611,7 +644,8 @@ func _effective_land_data() -> Dictionary:
 		var cws: Array = []
 		for cw: Dictionary in _map_data.get("crosswalks", []):
 			var cp: Array = cw["pos"]
-			var hit := _graph.find_closest_edge(Vector2(float(cp[0]), float(cp[1])), 3.0, false)
+			# 7 m: crossings are placed along the street's chord, so on a curve they sit a few metres off its centreline
+			var hit := _graph.find_closest_edge(Vector2(float(cp[0]), float(cp[1])), 7.0, false)
 			if not hit.is_empty() and not bool(_graph.edges[int(hit["edge_id"])].get("no_cars", false)):
 				cws.append(cw)
 		for eid2: int in _graph.edges.keys():
@@ -653,7 +687,10 @@ func _refresh_land_layers_if_needed() -> void:
 
 
 func _refresh_land_layers(roads: bool, buildings: bool) -> void:
-	var d := _effective_land_data()
+	var d_full := _effective_land_data()
+	var d := CityTiles.core_subset(d_full)
+	if _city_tiles != null:
+		_city_tiles.finish_pending() # the builders' shared mesh caches are not touched by two threads at once
 	if roads:
 		CityBuilder.rebuild_road_layer(_city_root, d.get("roads", []), d.get("crosswalks", []), _road_mat)
 	if buildings:
@@ -664,6 +701,8 @@ func _refresh_land_layers(roads: bool, buildings: bool) -> void:
 		if sm != null:
 			_night_mats.append(sm)
 		_apply_lighting_from_clock()
+	if _city_tiles != null:
+		_city_tiles.update_data(d_full)
 	_built_land_sig = _graph.land_edit_signature()
 
 
@@ -894,6 +933,8 @@ func _sync_landmark_monorail() -> void:
 		for ch in nd.get_children():
 			if str(ch.name) in ["SeattleCenterMonorail", "SeattleCenterMonorailTerminal"] and ch is Node3D:
 				(ch as Node3D).visible = not has_mono
+			elif ch == _city_tiles:
+				continue # the landmark monorail is part of the core city, never of the streamed outer tiles
 			elif ch.get_child_count() > 0 and ch.get_child_count() < 400:
 				stack.append(ch)
 	if has_mono:
@@ -2435,6 +2476,11 @@ func _process(delta: float) -> void:
 		_reset_confirm_timer -= dt
 		if _reset_confirm_timer <= 0.0 and _btn_home_reset != null:
 			_btn_home_reset.text = "重新开始"
+
+	# Outer map tiles stream in on a worker thread on every screen (home backdrop included)
+	if _city_tiles != null and _camera != null:
+		_city_tiles.focus = _camera.global_position
+		_city_tiles.step()
 
 	# Save manager open during play: the game is paused (no simulation, clock, traffic or autosave)
 	if _slot_modal != null and _slot_modal.visible and not _in_home_menu and not _game_over:
