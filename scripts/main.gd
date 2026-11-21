@@ -253,6 +253,7 @@ var _btn_doors: Button
 var _btn_reverser: Button
 var _run_paused := false # RUN mode paused: trains, cars, passengers and autosave stand still; the camera stays free
 var _btn_pause: Button
+var _btn_hold_manual: Button
 var _lbl_paused: Label
 var _btn_drive_mode: Button
 var _notch_bars: Array[ColorRect] = []
@@ -1689,7 +1690,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		else:
 			# RUN & DRIVE Mode Controls:
 			# W / S = Throttle / Brake; Arrow Keys (Up/Down/Left/Right) = Move/Rotate Camera View!
-			if _run_paused and k in [KEY_Q, KEY_W, KEY_S, KEY_SPACE, KEY_O, KEY_B, KEY_R, KEY_X, KEY_G, KEY_H]:
+			if _run_paused and k in [KEY_Q, KEY_W, KEY_S, KEY_SPACE, KEY_O, KEY_B, KEY_R, KEY_X, KEY_G, KEY_H, KEY_K]:
 				_show_toast("⏸ 已暂停：按 V 继续运营后再操作列车")
 				return
 			match k:
@@ -1731,6 +1732,8 @@ func _unhandled_input(event: InputEvent) -> void:
 					_do_cab_change()
 				KEY_X:
 					_do_toggle_reverser()
+				KEY_K:
+					_do_toggle_hold_manual()
 				KEY_G:
 					_do_throw_switch()
 				KEY_H:
@@ -1759,6 +1762,19 @@ func _do_throw_switch() -> void:
 			_show_toast("⚠ 列车正在道岔上，道岔已锁闭不能扳动")
 		_:
 			_show_toast("前方 260 m 内没有道岔")
+
+
+func _do_toggle_hold_manual() -> void:
+	match _transit_sim.manual_toggle_hold():
+		"held":
+			_sound.play_notch_click()
+			_show_toast("📌 已保留手动：切换到其他列车后，本车原地停车待命（不交给 AI）；切回本车即可继续手动驾驶")
+		"released":
+			_show_toast("已取消保留手动：切换到其他列车后，本车交回 AI 自动运营")
+		"moving":
+			_show_toast("⚠ 请先停车，再保留手动")
+		"not_manual":
+			_show_toast("⚠ 先接管手动驾驶 (Q) 并停车，才能把本车保留为手动")
 
 
 func _toggle_run_pause() -> void:
@@ -3361,7 +3377,7 @@ func _build_ui() -> void:
 	cam_hbox.add_child(_make_btn("5 鸟瞰全局", func(): _set_cam_mode(CamMode.BIRD)))
 
 	var cam_hint := Label.new()
-	cam_hint.text = "↑↓←→ 方向键移动/旋转视角 · W/S 牵引与制动 · X 倒档 · V 暂停 · O 开关车门 · G 手动扳道岔(特殊情况)"
+	cam_hint.text = "↑↓←→ 方向键移动/旋转视角 · W/S 牵引与制动 · X 倒档 · K 保留手动 · V 暂停 · O 开关车门 · G 手动扳道岔(特殊情况)"
 	cam_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	cam_hint.add_theme_font_size_override("font_size", 12)
 	cam_hint.add_theme_color_override("font_color", Color(0.75, 0.82, 0.88))
@@ -3426,6 +3442,9 @@ func _build_ui() -> void:
 	act_row.add_child(_make_btn("换端折返 (R)", func(): _do_cab_change()))
 	_btn_reverser = _make_btn("倒档 R (X)", func(): _do_toggle_reverser())
 	act_row.add_child(_btn_reverser)
+	_btn_hold_manual = _make_btn("保留手动 (K)", func(): _do_toggle_hold_manual())
+	_btn_hold_manual.tooltip_text = "手动驾驶且停车时：切换到其他列车后，本车原地停车待命（不交给 AI），切回后继续手动驾驶"
+	act_row.add_child(_btn_hold_manual)
 	_btn_pause = _make_btn("⏸ 暂停 (V)", func(): _toggle_run_pause())
 	act_row.add_child(_btn_pause)
 	act_row.add_child(_make_btn("手动扳道岔 (G)", func(): _do_throw_switch()))
@@ -5003,6 +5022,10 @@ func _update_run_hud() -> void:
 	if _btn_reverser != null:
 		_btn_reverser.text = "回前进档 (X)" if reversing else "倒档 R (X)"
 		_highlight_active_btn(_btn_reverser, reversing)
+	if _btn_hold_manual != null:
+		var held := bool(tr.get("held_manual", false))
+		_btn_hold_manual.text = "📌 已保留手动 (K)" if held else "保留手动 (K)"
+		_highlight_active_btn(_btn_hold_manual, held)
 	_btn_drive_mode.text = "切回 AI 托管 (Q)" if _transit_sim.manual_drive else "接管手动驾驶 (Q)"
 
 

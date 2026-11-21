@@ -17,6 +17,7 @@ var operating_seconds := 0.0
 var line_dist_m: Dictionary = {} # line_id -> float (total distance traveled by trams on this line)
 var _switch_timer := 0.0
 var _last_tram_of_line: Dictionary = {} # line_id -> tram index last watched on that line
+var _graph_ref: NetworkGraph = null # for compiling wrong-track route variants on demand
 var line_variants: Dictionary = {} # line_id -> {variant_key: compiled route} (one per terminal platform combination)
 
 
@@ -32,6 +33,7 @@ func rebuild_fleet(
 	operating_seconds = 0.0
 	line_dist_m.clear()
 	line_variants.clear()
+	_graph_ref = graph
 	var placed_pts := PackedVector3Array() # every spawned train's footprint (any line) so new ones never overlap
 
 	for lid: int in graph.lines.keys():
@@ -210,6 +212,7 @@ func export_run_state() -> Dictionary:
 			"pax_dests": (tr["pax_dests"] as Array).duplicate(),
 			"reverser": float(tr.get("reverser", 1.0)),
 			"stats": _tram_stats_dict(tr),
+			"held_manual": bool(tr.get("held_manual", false)),
 		})
 	return {
 		"active_tram_idx": active_tram_idx,
@@ -236,9 +239,9 @@ func import_run_state(run_state: Dictionary, graph: NetworkGraph) -> void:
 		if int(st.get("line_id", -1)) != int(tr["line_id"]):
 			continue
 		var v_key := str(st.get("variant_key", ""))
-		var variants: Dictionary = line_variants.get(int(tr["line_id"]), {})
-		if v_key != "" and variants.has(v_key):
-			_apply_route_variant(tr, variants[v_key] as Dictionary, v_key)
+		var v_route := _get_variant(int(tr["line_id"]), v_key) if v_key != "" else {}
+		if not v_route.is_empty():
+			_apply_route_variant(tr, v_route, v_key)
 		tr["term_res"] = {}
 		tr["term_init_done"] = false
 		var rlen := float(tr["route_len"])
@@ -253,6 +256,7 @@ func import_run_state(run_state: Dictionary, graph: NetworkGraph) -> void:
 		tr["term_sid"] = int(st.get("term_sid", -1))
 		tr["term_flip_timer"] = 0.0
 		tr["reverser"] = -1.0 if float(st.get("reverser", 1.0)) < 0.0 else 1.0
+		tr["held_manual"] = bool(st.get("held_manual", false))
 		var sd: Dictionary = st.get("stats", {})
 		for k: String in TRAM_STAT_KEYS:
 			if sd.has(k):
@@ -285,6 +289,7 @@ func cycle_active_tram(delta_i: int = 1) -> void:
 	var pos := maxi(0, same.find(active_tram_idx))
 	active_tram_idx = int(same[posmod(pos + delta_i, same.size())])
 	_last_tram_of_line[lid] = active_tram_idx
+	_on_active_changed()
 
 
 func select_tram(idx: int) -> void:
@@ -292,6 +297,7 @@ func select_tram(idx: int) -> void:
 		return
 	active_tram_idx = idx
 	_last_tram_of_line[int(trams[idx]["line_id"])] = idx
+	_on_active_changed()
 
 
 # Previous / next line (in line-id order); returns to the train last watched on that line.
@@ -306,6 +312,7 @@ func cycle_active_line(delta_i: int = 1) -> void:
 	var idxs := line_tram_indices(nl)
 	var prefer := int(_last_tram_of_line.get(nl, -1))
 	active_tram_idx = prefer if idxs.has(prefer) else int(idxs[0])
+	_on_active_changed()
 
 
 func line_ids_in_service() -> Array:
@@ -346,13 +353,17 @@ func _accumulate_tram_stats(tr: Dictionary, dt: float) -> void:
 func tram_status_text(tr: Dictionary) -> String:
 	if bool(tr.get("derailed", false)) or bool(tr.get("crashed", false)):
 		return "事故"
+	if bool(tr.get("held_manual", false)):
+		return "手动保留 · 停车待命"
 	var spd := float(tr["speed_mps"])
 	var term_stage := str(tr.get("term_stage", ""))
 	if term_stage == "flip_wait":
 		return "终点换端折返"
 	if float(tr["door_ratio"]) > 0.02 or bool(tr["doors_target_open"]):
 		var here := _find_station_at_current_pos(tr)
-		return "停站 · %s" % str(here.get("name", "站台"))
+		var hi := int(here.get("stop_idx", -1))
+		var stops_h: Array = tr["stops"]
+		return "停站 · %s" % (str(stops_h[hi]["name"]) if hi >= 0 and hi < stops_h.size() else "站台")
 	if float(tr.get("express_hold_t", 0.0)) > 0.0:
 		return "待避快车"
 	var nxt := find_next_stop_info(tr)
@@ -414,13 +425,19 @@ func step_all_trams(
 	for i in range(trams.size()):
 		var tr: Dictionary = trams[i]
 		var is_player_manual := (i == active_tram_idx and manual_drive)
+		if i == active_tram_idx and bool(tr.get("held_manual", false)) and (not manual_drive or float(tr["speed_mps"]) > 0.5):
+			tr["held_manual"] = false # the player drove off (or handed it to the AI): no longer held
+		var is_held := i != active_tram_idx and bool(tr.get("held_manual", false))
 
-		if not is_player_manual:
+		if is_held:
+			tr["notch"] = 3 # held in manual by the player: stands with the brakes on, no AI driving
+		elif not is_player_manual:
 			tr["reverser"] = 1.0
 			_step_ai_driver(tr, i, dt, graph, pax_sim, traffic_sim, sound, i == active_tram_idx)
 
 		var derail_ev := _step_tram_physics_and_doors(tr, i, dt, graph, pax_sim, sound, i == active_tram_idx, is_player_manual)
 		_accumulate_tram_stats(tr, dt)
+		_clear_wrong_track(tr)
 		if derail_ev.is_empty() and is_player_manual:
 			derail_ev = _check_switch_entry(tr, i)
 		_position_tram_3d(tr)
@@ -537,6 +554,32 @@ func manual_step_notch(delta_notch: int, sound: SoundSynth) -> void:
 # Reverser (方向手柄): forward / R. Only changed at a standstill; reverse runs the train backwards along its
 # route (rear cab end leading) at shunting speed. AI driving always runs forward.
 const REVERSE_MAX_KMH := 15.0
+
+# Keep a stopped, manually driven train in manual: once the player switches to another train it stands where
+# it is (brakes on, no AI) until the player comes back to it and drives on.
+func manual_toggle_hold() -> String:
+	var tr := get_active_tram()
+	if tr.is_empty():
+		return "no_tram"
+	if bool(tr.get("held_manual", false)):
+		tr["held_manual"] = false
+		return "released"
+	if not manual_drive:
+		return "not_manual"
+	if float(tr["speed_mps"]) >= 0.15:
+		return "moving"
+	tr["held_manual"] = true
+	tr["notch"] = 3
+	return "held"
+
+
+# Coming back to a held train: the player drives it again (manual), and the hold has done its job
+func _on_active_changed() -> void:
+	var tr := get_active_tram()
+	if not tr.is_empty() and bool(tr.get("held_manual", false)):
+		tr["held_manual"] = false
+		manual_drive = true
+
 
 func manual_toggle_reverser() -> String:
 	var tr := get_active_tram()
@@ -1908,13 +1951,39 @@ static func _find_model_spec(catalogue: Array, key: String) -> Dictionary:
 # Terminal interlocking: platform tracks A / B at double-track turnback terminals
 # ---------------------------------------------------------------------------------------------
 
-static func _variant_key(b_sids: Dictionary) -> String:
+static func _variant_key(b_sids: Dictionary, w_sids: Dictionary = {}) -> String:
 	var ks: Array = b_sids.keys()
 	ks.sort()
 	var parts: PackedStringArray = []
 	for k in ks:
 		parts.append(str(k))
+	var ws: Array = w_sids.keys()
+	ws.sort()
+	for k in ws:
+		parts.append("w%d" % int(k))
 	return ",".join(parts)
+
+
+# Compiled route for a variant key (platform B choices + "w<sid>" wrong-track departures); wrong-track ones
+# are compiled the first time a driver needs them
+func _get_variant(lid: int, key: String) -> Dictionary:
+	var variants: Dictionary = line_variants.get(lid, {})
+	if variants.has(key):
+		return variants[key]
+	if _graph_ref == null or not _graph_ref.lines.has(lid):
+		return {}
+	var b := {}
+	var w := {}
+	for part in key.split(",", false):
+		if part.begins_with("w"):
+			w[int(part.substr(1))] = true
+		else:
+			b[int(part)] = true
+	var c := _graph_ref.compile_line_route(_graph_ref.lines[lid], b, w)
+	if not c.is_empty():
+		variants[key] = c
+		line_variants[lid] = variants
+	return c
 
 
 func _compile_line_variants(graph: NetworkGraph, ln: Dictionary, base: Dictionary) -> Dictionary:
@@ -1948,9 +2017,14 @@ func _apply_route_variant(tr: Dictionary, compiled: Dictionary, key: String) -> 
 	tr["terminal_zones"] = compiled.get("terminal_zones", [])
 	tr["variant_key"] = key
 	var b_sids := {}
+	var w_sids := {}
 	for part in key.split(",", false):
-		b_sids[int(part)] = true
+		if part.begins_with("w"):
+			w_sids[int(part.substr(1))] = true
+		else:
+			b_sids[int(part)] = true
 	tr["b_sids"] = b_sids
+	tr["w_sids"] = w_sids
 
 
 static func _zone_for(tr: Dictionary, sid: int) -> Dictionary:
@@ -1968,16 +2042,16 @@ func _switch_terminal_platform(tr: Dictionary, sid: int, platform: int) -> void:
 		b_sids[sid] = true
 	else:
 		b_sids.erase(sid)
-	var key := _variant_key(b_sids)
+	var key := _variant_key(b_sids, tr.get("w_sids", {}))
 	if key == str(tr.get("variant_key", "")):
 		return
-	var variants: Dictionary = line_variants.get(int(tr["line_id"]), {})
-	if not variants.has(key):
+	var v_route := _get_variant(int(tr["line_id"]), key)
+	if v_route.is_empty():
 		return
 	var old_z := _zone_for(tr, sid)
 	var dir := float(tr["dir"])
 	var d_before_hold := fposmod((float(old_z["hold_s"]) - float(tr["s"])) * dir, float(tr["route_len"]))
-	_apply_route_variant(tr, variants[key] as Dictionary, key)
+	_apply_route_variant(tr, v_route, key)
 	var new_z := _zone_for(tr, sid)
 	tr["s"] = fposmod(float(new_z["hold_s"]) - dir * d_before_hold, float(tr["route_len"]))
 	_position_tram_3d(tr)
@@ -2572,6 +2646,73 @@ func manual_throw_switch(graph: NetworkGraph) -> String:
 	return "none"
 
 
+# Toggle the wrong-track departure of one terminal on this route and keep the variant whose path through `sw`
+# matches how the switch is set. Variants are identical up to the departure crossover, so `s` carries over.
+func _reroute_through_switch(tr: Dictionary, sw) -> bool:
+	var lid := int(tr["line_id"])
+	var b_sids: Dictionary = tr.get("b_sids", {})
+	var w_now: Dictionary = tr.get("w_sids", {})
+	for st: Dictionary in tr["stops"]:
+		if not bool(st.get("turnback", false)):
+			continue
+		var sid := int(st["station_id"])
+		var w_new := w_now.duplicate()
+		if w_new.has(sid):
+			w_new.erase(sid)
+		else:
+			w_new[sid] = true
+		var key := _variant_key(b_sids, w_new)
+		var c := _get_variant(lid, key)
+		if c.is_empty():
+			continue
+		var probe := {"curve": c["curve"], "route_len": float(c["length"]), "is_loop": bool(tr["is_loop"]), "dir": float(tr["dir"]),
+			"s": float(tr["s"]), "elevated": tr.get("elevated", false), "spec": tr["spec"], "tram_info": tr["tram_info"]}
+		var head_old := (tr["curve"] as Curve3D).sample_baked(float(tr["s"]), false)
+		var head_new := (c["curve"] as Curve3D).sample_baked(float(tr["s"]), false)
+		if head_old.distance_to(head_new) > 1.0:
+			continue # this variant does not start out the same here
+		var ok := false
+		for cand: Dictionary in _scan_switches(probe, [sw], 40.0):
+			if cand["sw"] == sw and float(cand["need"]) >= 0.0 and absf(float(cand["need"]) - float(sw.throw)) < 0.02:
+				ok = true
+		if not ok:
+			continue
+		_apply_route_variant(tr, c, key)
+		tr["sw_next"] = {}
+		return true
+	return false
+
+
+# Back to normal routing once a wrong-track run has reached the next terminal and turned back there (the
+# variants agree from that turnback point on, so the train keeps its place relative to it)
+func _clear_wrong_track(tr: Dictionary) -> void:
+	var w_now: Dictionary = tr.get("w_sids", {})
+	if w_now.is_empty() or float(tr["speed_mps"]) > 0.05:
+		return
+	var sid := int(tr.get("term_sid", -1))
+	if sid < 0 or w_now.has(sid) or str(tr.get("term_stage", "")) != "board_only":
+		return
+	var key := _variant_key(tr.get("b_sids", {}), {})
+	var c := _get_variant(int(tr["line_id"]), key)
+	if c.is_empty():
+		return
+	var cusp_old := -1.0
+	var cusp_new := -1.0
+	for st: Dictionary in tr["stops"]:
+		if int(st["station_id"]) == sid and bool(st.get("turnback", false)):
+			cusp_old = float(st.get("cusp", st["offset"]))
+	for st: Dictionary in c["stops"]:
+		if int(st["station_id"]) == sid and bool(st.get("turnback", false)):
+			cusp_new = float(st.get("cusp", st["offset"]))
+	if cusp_old < 0.0 or cusp_new < 0.0:
+		return
+	var rel := float(tr["s"]) - cusp_old
+	_apply_route_variant(tr, c, key)
+	var rlen := float(tr["route_len"])
+	tr["s"] = fposmod(cusp_new + rel, rlen) if bool(tr["is_loop"]) else clampf(cusp_new + rel, 0.0, rlen)
+	_position_tram_3d(tr)
+
+
 # Player-driven train entering a switch span that is not set and cleared for it -> derailment
 func _check_switch_entry(tr: Dictionary, tram_idx: int) -> Dictionary:
 	for key: String in ["sw_pending", "sw_next"]:
@@ -2606,6 +2747,10 @@ func _check_switch_entry_one(tr: Dictionary, tram_idx: int, key: String) -> Dict
 		if Vector2(head.x - ep.x, head.z - ep.z).length() > 8.0:
 			return {}
 	if absf(float(sw.throw) - need) < 0.02:
+		return {}
+	# Switch fully set the other way at a terminal crossover: the train simply follows the beam / rails it is
+	# set for (wrong-track running to the next terminal) instead of coming off
+	if absf(float(sw.throw) - float(sw.target)) < 0.001 and _reroute_through_switch(tr, sw):
 		return {}
 	tr["derailed"] = true
 	tr["rollover_sign"] = 1.0

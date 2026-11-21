@@ -865,7 +865,10 @@ func _find_opposite_side_station(sid: int) -> int:
 
 # b_platform_sids: terminal station ids whose turnback should use platform track B (cross over BEFORE arriving,
 # depart straight out). All other terminals use track A (arrive straight in, cross over after departing).
-func compile_line_route(line_dict: Dictionary, b_platform_sids: Dictionary = {}) -> Dictionary:
+# wrong_sids: terminals the train leaves on the wrong track (the driver set the departure switch for it): the
+# route stays on that track (or crosses onto it, from platform B) until the next terminal, which it enters
+# straight onto platform B, or over the crossover onto platform A.
+func compile_line_route(line_dict: Dictionary, b_platform_sids: Dictionary = {}, wrong_sids: Dictionary = {}) -> Dictionary:
 	var raw_sids: Array = line_dict.get("station_ids", [])
 	if raw_sids.size() < 2:
 		return {}
@@ -922,6 +925,48 @@ func compile_line_route(line_dict: Dictionary, b_platform_sids: Dictionary = {})
 	is_turnback.resize(sids.size())
 	is_turnback.fill(false)
 	var turnback_meta: Array = []
+	# Wrong-track running: flip every span from the departure out of a wrong_sids terminal to the next terminal
+	var dep_wrong := {}
+	var arr_flip := {}
+	if not wrong_sids.is_empty():
+		var tb_js: Array[int] = []
+		var tb_io := {}
+		for j in range(sids.size()):
+			var in_k0 := j - 1
+			if is_loop:
+				if j == sids.size() - 1:
+					continue
+				if j == 0:
+					in_k0 = n_seg - 1
+			if in_k0 < 0 or j >= n_seg:
+				continue
+			var isp: Dictionary = (seg_spans[in_k0] as Array).back()
+			var osp: Dictionary = (seg_spans[j] as Array).front()
+			if int(isp["eid"]) != int(osp["eid"]):
+				continue
+			var di := signf(float(isp["s1"]) - float(isp["s0"]))
+			if di == 0.0 or signf(float(osp["s1"]) - float(osp["s0"])) != -di:
+				continue
+			tb_js.append(j)
+			tb_io[j] = in_k0
+		for ti in range(tb_js.size()):
+			var j0 := tb_js[ti]
+			if not wrong_sids.has(sids[j0]):
+				continue
+			if ti + 1 >= tb_js.size() and not is_loop:
+				continue
+			var j1 := tb_js[(ti + 1) % tb_js.size()]
+			dep_wrong[j0] = true
+			arr_flip[j1] = true
+			var k := j0
+			var k_end := int(tb_io[j1])
+			for _guard in range(n_seg):
+				for sp_f: Dictionary in seg_spans[k]:
+					sp_f["lat0"] = -float(sp_f["lat0"])
+					sp_f["lat1"] = -float(sp_f["lat1"])
+				if k == k_end:
+					break
+				k = (k + 1) % n_seg
 	for j in range(sids.size()):
 		var in_k := j - 1
 		var out_k := j
@@ -970,10 +1015,12 @@ func compile_line_route(line_dict: Dictionary, b_platform_sids: Dictionary = {})
 		var b_ok := (not xo_in.is_empty()) and (not xo_out.is_empty()) and int(xo_in["eid"]) == int(xo_out["eid"]) \
 			and int(crossovers.get(int(xo_in["eid"]), CrossoverType.NONE)) == CrossoverType.DOUBLE
 		var use_b := b_ok and b_platform_sids.has(tb_sid)
+		# Arriving on the wrong track, platform B lies straight ahead and platform A over the crossover
 		if not xo_in.is_empty():
-			_route_apply_arrival_crossover(in_spans, xo_in, use_b, tb_sid)
+			_route_apply_arrival_crossover(in_spans, xo_in, (not use_b) if arr_flip.has(j) else use_b, tb_sid)
+		# Leaving on the wrong track (spans already flipped): straight out from A, over the crossover from B
 		if not xo_out.is_empty():
-			_route_apply_departure_crossover(out_spans, xo_out, not use_b, tb_sid)
+			_route_apply_departure_crossover(out_spans, xo_out, use_b if dep_wrong.has(j) else not use_b, tb_sid)
 		turnback_meta.append({"j": j, "station_id": tb_sid, "b_available": b_ok, "platform": 1 if use_b else 0, "has_crossover": not xo_out.is_empty(), "stop_back": stop_back, "buffer": not end_info.is_empty()})
 
 	# Open (single-track) lines: run the track on a little past both terminals so the whole tram fits the platform
