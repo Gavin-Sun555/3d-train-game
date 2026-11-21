@@ -254,6 +254,8 @@ var _btn_reverser: Button
 var _run_paused := false # RUN mode paused: trains, cars, passengers and autosave stand still; the camera stays free
 var _btn_pause: Button
 var _btn_hold_manual: Button
+var _btn_sw_lock: Button
+var _btn_auto_sw: Button
 var _lbl_paused: Label
 var _btn_drive_mode: Button
 var _notch_bars: Array[ColorRect] = []
@@ -1690,7 +1692,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		else:
 			# RUN & DRIVE Mode Controls:
 			# W / S = Throttle / Brake; Arrow Keys (Up/Down/Left/Right) = Move/Rotate Camera View!
-			if _run_paused and k in [KEY_Q, KEY_W, KEY_S, KEY_SPACE, KEY_O, KEY_B, KEY_R, KEY_X, KEY_G, KEY_H, KEY_K]:
+			if _run_paused and k in [KEY_Q, KEY_W, KEY_S, KEY_SPACE, KEY_O, KEY_B, KEY_R, KEY_X, KEY_G, KEY_H, KEY_K, KEY_J, KEY_U]:
 				_show_toast("⏸ 已暂停：按 V 继续运营后再操作列车")
 				return
 			match k:
@@ -1734,6 +1736,10 @@ func _unhandled_input(event: InputEvent) -> void:
 					_do_toggle_reverser()
 				KEY_K:
 					_do_toggle_hold_manual()
+				KEY_J:
+					_do_toggle_switch_lock()
+				KEY_U:
+					_do_toggle_auto_switches()
 				KEY_G:
 					_do_throw_switch()
 				KEY_H:
@@ -1764,6 +1770,37 @@ func _do_throw_switch() -> void:
 			_show_toast("⚠ 前方道岔对本车是顺向（渡线从另一股道汇入），只能直向通过，不能扳向侧向")
 		_:
 			_show_toast("前方 260 m 内没有道岔")
+
+
+func _do_toggle_switch_lock() -> void:
+	match _transit_sim.toggle_switch_lock(_graph):
+		"locked":
+			_sound.play_notch_click()
+			var sw = _transit_sim.player_lock[0] if not _transit_sim.player_lock.is_empty() else null
+			var pos_txt := ""
+			if sw != null:
+				var any_div := false
+				for g in _transit_sim.player_lock:
+					if float(g.target) > 0.5:
+						any_div = true
+				pos_txt = "（当前：%s）" % ("侧向/渡线" if any_div else "直向")
+			_show_toast("🔒 已锁定前方道岔%s：调度不会再扳动它，本车驶出该道岔后自动解锁；再按 J 手动解锁" % pos_txt)
+		"unlocked":
+			_show_toast("🔓 已解除道岔锁定，道岔恢复由调度按进路排列")
+		"busy":
+			_show_toast("⚠ 前方道岔已被锁定")
+		_:
+			_show_toast("前方 %d m 内没有道岔" % int(TransitSim.SW_SCAN_AHEAD))
+
+
+func _do_toggle_auto_switches() -> void:
+	var on := not _transit_sim.auto_switches
+	_transit_sim.set_auto_switches(on)
+	_sound.play_notch_click()
+	if on:
+		_show_toast("✅ AI 自动道岔已开启：调度按各列车进路自动排列道岔")
+	else:
+		_show_toast("⚠ AI 自动道岔已关闭：所有道岔保持不动，只能按 G 手动扳动；进路不符时信号保持红灯，AI 列车会停车等待")
 
 
 func _do_toggle_hold_manual() -> void:
@@ -3379,7 +3416,7 @@ func _build_ui() -> void:
 	cam_hbox.add_child(_make_btn("5 鸟瞰全局", func(): _set_cam_mode(CamMode.BIRD)))
 
 	var cam_hint := Label.new()
-	cam_hint.text = "↑↓←→ 方向键移动/旋转视角 · W/S 牵引与制动 · X 倒档 · K 保留手动 · V 暂停 · O 开关车门 · G 手动扳道岔(特殊情况)"
+	cam_hint.text = "↑↓←→ 方向键移动/旋转视角 · W/S 牵引与制动 · X 倒档 · K 保留手动 · J 锁道岔 · U AI道岔 · V 暂停 · O 开关车门 · G 手动扳道岔(特殊情况)"
 	cam_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	cam_hint.add_theme_font_size_override("font_size", 12)
 	cam_hint.add_theme_color_override("font_color", Color(0.75, 0.82, 0.88))
@@ -3447,6 +3484,12 @@ func _build_ui() -> void:
 	_btn_hold_manual = _make_btn("保留手动 (K)", func(): _do_toggle_hold_manual())
 	_btn_hold_manual.tooltip_text = "手动驾驶且停车时：切换到其他列车后，本车原地停车待命（不交给 AI），切回后继续手动驾驶"
 	act_row.add_child(_btn_hold_manual)
+	_btn_sw_lock = _make_btn("锁定前方道岔 (J)", func(): _do_toggle_switch_lock())
+	_btn_sw_lock.tooltip_text = "把前方道岔按现在的位置锁住，调度不会再扳动它；本车驶出该道岔后自动解锁"
+	act_row.add_child(_btn_sw_lock)
+	_btn_auto_sw = _make_btn("AI 道岔: 开 (U)", func(): _do_toggle_auto_switches())
+	_btn_auto_sw.tooltip_text = "关闭后调度不再自动扳动任何道岔，道岔只能由玩家按 G 扳动"
+	act_row.add_child(_btn_auto_sw)
 	_btn_pause = _make_btn("⏸ 暂停 (V)", func(): _toggle_run_pause())
 	act_row.add_child(_btn_pause)
 	act_row.add_child(_make_btn("手动扳道岔 (G)", func(): _do_throw_switch()))
@@ -5024,6 +5067,16 @@ func _update_run_hud() -> void:
 	if _btn_reverser != null:
 		_btn_reverser.text = "回前进档 (X)" if reversing else "倒档 R (X)"
 		_highlight_active_btn(_btn_reverser, reversing)
+	if _btn_sw_lock != null:
+		var locked := not _transit_sim.player_lock.is_empty()
+		_btn_sw_lock.text = "🔒 道岔已锁定 (J)" if locked else "锁定前方道岔 (J)"
+		_highlight_active_btn(_btn_sw_lock, locked)
+		if _transit_sim.lock_released:
+			_transit_sim.lock_released = false
+			_show_toast("🔓 本车已驶出锁定的道岔，锁定自动解除")
+	if _btn_auto_sw != null:
+		_btn_auto_sw.text = "AI 道岔: 开 (U)" if _transit_sim.auto_switches else "AI 道岔: 关 (U)"
+		_highlight_active_btn(_btn_auto_sw, not _transit_sim.auto_switches)
 	if _btn_hold_manual != null:
 		var held := bool(tr.get("held_manual", false))
 		_btn_hold_manual.text = "📌 已保留手动 (K)" if held else "保留手动 (K)"

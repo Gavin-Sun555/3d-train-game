@@ -17,6 +17,10 @@ var operating_seconds := 0.0
 var line_dist_m: Dictionary = {} # line_id -> float (total distance traveled by trams on this line)
 var _switch_timer := 0.0
 var _last_tram_of_line: Dictionary = {} # line_id -> tram index last watched on that line
+var auto_switches := true # false: the dispatcher never moves a switch; only the player (G) does
+var player_lock: Array = [] # switches of the crossover the player locked ahead of their train
+var _lock_entered := false # the locking train has reached the locked crossover (it unlocks once it is through)
+var lock_released := false # set when the lock lapsed on its own (the train has cleared it); main shows a note
 var _graph_ref: NetworkGraph = null # for compiling wrong-track route variants on demand
 var line_variants: Dictionary = {} # line_id -> {variant_key: compiled route} (one per terminal platform combination)
 
@@ -217,6 +221,7 @@ func export_run_state() -> Dictionary:
 	return {
 		"active_tram_idx": active_tram_idx,
 		"manual_drive": manual_drive,
+		"auto_switches": auto_switches,
 		"trams": tr_states,
 	}
 
@@ -269,6 +274,7 @@ func import_run_state(run_state: Dictionary, graph: NetworkGraph) -> void:
 		TramBuilder.update_onboard_passengers(tr["tram_info"], (tr["pax_dests"] as Array).size(), int(tr["capacity"]))
 	active_tram_idx = clampi(int(run_state.get("active_tram_idx", 0)), 0, maxi(0, trams.size() - 1))
 	manual_drive = bool(run_state.get("manual_drive", false))
+	auto_switches = bool(run_state.get("auto_switches", true))
 
 
 func get_active_tram() -> Dictionary:
@@ -1778,7 +1784,8 @@ func _check_tram_to_tram_collisions() -> Dictionary:
 					var pb2 := Vector2(pb3.x, pb3.z)
 					var fb2 := Vector2(fb3.x, fb3.z).normalized()
 					if TrafficSim.obb_overlap_2d(pa2, fa2, hla, hwa, pb2, fb2, hlb, hwb):
-						var rel_kmh := (float(tr_a["speed_mps"]) + float(tr_b["speed_mps"])) * 3.6
+						# Closing speed from the two velocity vectors: a rear-end hit is the speed difference, head-on the sum
+						var rel_kmh := (_world_velocity(tr_a) - _world_velocity(tr_b)).length() * 3.6
 						tr_a["crashed"] = true; tr_a["speed_mps"] = 0.0
 						tr_b["crashed"] = true; tr_b["speed_mps"] = 0.0
 						_apply_collision_jolt(tr_a, 1.0)
@@ -1788,9 +1795,30 @@ func _check_tram_to_tram_collisions() -> Dictionary:
 							"tram_idx": i,
 							"other_tram_idx": j,
 							"world_pos": (pa3 + pb3) * 0.5,
-							"speed_kmh": maxf(rel_kmh, 15.0),
+							"speed_kmh": rel_kmh,
 						}
 	return {"hit": false}
+
+
+# Horizontal velocity of a train along its route (direction of travel, including reverse gear)
+static func _world_velocity(tr: Dictionary) -> Vector2:
+	var spd := float(tr["speed_mps"])
+	if spd < 0.01:
+		return Vector2.ZERO
+	var curve: Curve3D = tr["curve"]
+	var rlen := float(tr["route_len"])
+	var mv := float(tr["dir"]) * float(tr.get("reverser", 1.0))
+	var s0 := float(tr["s"])
+	var s1 := s0 + mv * 1.0
+	if bool(tr["is_loop"]):
+		s1 = fposmod(s1, rlen)
+	else:
+		s1 = clampf(s1, 0.0, rlen)
+	var d := curve.sample_baked(s1, false) - curve.sample_baked(s0, false)
+	var d2 := Vector2(d.x, d.z)
+	if d2.length() < 0.001:
+		return Vector2.ZERO
+	return d2.normalized() * spd
 
 
 static func _apply_collision_jolt(tr: Dictionary, side: float) -> void:
@@ -2313,6 +2341,19 @@ func _update_monorail_switches(graph: NetworkGraph) -> void:
 		for ti in range(trams.size()):
 			if not g_de.has(ti):
 				(trams[ti].get("sw_req_t", {}) as Dictionary).erase(gkey)
+		# Player lock: the locking train owns the crossover and nothing moves it, until that train has cleared it
+		var lock_ti := int(grp[0].locked_by)
+		if lock_ti >= 0 and g_de.has(lock_ti) and float(g_de[lock_ti]) <= 0.0:
+			_lock_entered = true
+		var lock_done := lock_ti >= 0 and (lock_ti >= trams.size() or not g_de.has(lock_ti) \
+			or (_lock_entered and float(g_de[lock_ti]) > 0.0)) # through it (a terminal train meets it again ahead)
+		if lock_done:
+			for g in grp:
+				g.locked_by = -1
+			if player_lock.has(grp[0]):
+				player_lock.clear()
+				lock_released = true
+			lock_ti = -1
 		var cur := -1
 		for g in grp:
 			if int(g.owner_idx) >= 0 and int(g.owner_idx) < trams.size():
@@ -2332,6 +2373,8 @@ func _update_monorail_switches(graph: NetworkGraph) -> void:
 				if key < best_key:
 					best_key = key
 					cur = ti
+		if lock_ti >= 0:
+			cur = lock_ti
 		for sw in grp:
 			if cur >= 0:
 				var c2: Dictionary = (infos[cur] as Dictionary).get(sw, {})
@@ -2343,9 +2386,38 @@ func _update_monorail_switches(graph: NetworkGraph) -> void:
 			if cur != int(sw.owner_idx) or cur < 0 or not (cur == active_tram_idx and manual_drive):
 				sw.manual_override = false # override only lasts while that manual train holds the switch
 			sw.owner_idx = cur
-			if cur >= 0 and not sw.manual_override and int(sw.owner_entry) >= 0:
+			if cur >= 0 and not sw.manual_override and int(sw.owner_entry) >= 0 and lock_ti < 0 and auto_switches:
 				sw.target = sw.owner_need
 			sw.update_signals()
+	# Switches that stay put (player lock, or automatic switching off): a train whose route needs the other
+	# setting takes the terminal platform the switch is set for instead, where its route allows that
+	for ti: int in infos.keys():
+		var trr: Dictionary = trams[ti]
+		for cr: Dictionary in (infos[ti] as Dictionary).values():
+			var swr = cr["sw"]
+			if float(cr["need"]) < 0.0 or float(cr["d_entry"]) <= 0.0:
+				continue
+			var fixed := int(swr.locked_by) >= 0 or not auto_switches
+			if not fixed or absf(float(swr.throw) - float(swr.target)) > 0.001 or absf(float(swr.throw) - float(cr["need"])) < 0.02:
+				continue
+			if not _reroute_through_switch(trr, swr, false, SW_SCAN_AHEAD):
+				continue
+			# New route: refresh this train's view of the crossover so its signal clears right away
+			var per2 := {}
+			for c3: Dictionary in _scan_switches(trr, switches):
+				per2[c3["sw"]] = c3
+			infos[ti] = per2
+			trr["sw_next"] = {}
+			for c3: Dictionary in per2.values():
+				if float(c3["d_entry"]) > 0.0 and float(c3["need"]) >= 0.0 and (trr["sw_next"].is_empty() or float(c3["d_entry"]) < float(trr["sw_next"]["d_entry"])):
+					trr["sw_next"] = c3
+			for g3 in (swr.group if not (swr.group as Array).is_empty() else [swr]):
+				var c4: Dictionary = per2.get(g3, {})
+				if int(g3.owner_idx) == ti and not c4.is_empty() and float(c4["need"]) >= 0.0:
+					g3.owner_need = float(c4["need"])
+					g3.owner_entry = int(c4["entry"])
+				g3.update_signals()
+			break
 	# Stop points for trains whose next switch is not (yet) set and cleared for them
 	for ti: int in infos.keys():
 		var tr: Dictionary = trams[ti]
@@ -2619,6 +2691,57 @@ func switch_ahead_info(tr: Dictionary, me: int) -> Dictionary:
 	}
 
 
+# Some other train is on (or right at) this switch
+func _switch_occupied(sw, me: int) -> bool:
+	for j in range(trams.size()):
+		if j == me:
+			continue
+		for c: Dictionary in _scan_switches(trams[j], [sw], 5.0):
+			if c["sw"] == sw and float(c["need"]) >= 0.0 and float(c["d_entry"]) <= 2.0:
+				return true
+	return false
+
+
+# Lock the next crossover ahead of the active train as it is set now (press again to unlock). The lock
+# lapses by itself once the train has run through it.
+func toggle_switch_lock(graph: NetworkGraph) -> String:
+	var tr := get_active_tram()
+	if tr.is_empty() or graph == null or not graph.has_meta("monorail_switches"):
+		return "none"
+	var me := active_tram_idx
+	if not player_lock.is_empty():
+		for g in player_lock:
+			if is_instance_valid(g):
+				g.locked_by = -1
+		player_lock.clear()
+		return "unlocked"
+	var lst := _scan_switches(tr, graph.get_meta("monorail_switches"), SW_SCAN_AHEAD)
+	var pick = null
+	for c: Dictionary in lst:
+		if float(c["need"]) < 0.0:
+			continue
+		if pick == null or float(c["d_entry"]) > 0.0:
+			pick = c["sw"]
+		if float(c["d_entry"]) > 0.0:
+			break
+	if pick == null:
+		return "none"
+	var grp: Array = pick.group if not (pick.group as Array).is_empty() else [pick]
+	for g in grp:
+		if int(g.locked_by) >= 0 and int(g.locked_by) != me:
+			return "busy"
+	for g in grp:
+		g.locked_by = me
+	player_lock = grp.duplicate()
+	lock_released = false
+	_lock_entered = false
+	return "locked"
+
+
+func set_auto_switches(on: bool) -> void:
+	auto_switches = on
+
+
 # A switch is facing for a train entering at `entry` (0: low end -1, 1: low end +1, 2: high end -1, 3: high end +1)
 # when its crossing beam starts from that end: hand +1 runs lane -1 (low s) -> lane +1 (high s), hand -1 the mirror.
 static func _is_facing(sw, entry: int) -> bool:
@@ -2648,7 +2771,9 @@ func manual_throw_switch(graph: NetworkGraph) -> String:
 			if int(sw.owner_idx) == me:
 				continue # the train is on it: locked, look at the next one
 			return "locked"
-		if int(sw.owner_idx) >= 0 and int(sw.owner_idx) != me:
+		if int(sw.owner_idx) >= 0 and int(sw.owner_idx) != me and (auto_switches or _switch_occupied(sw, me)):
+			return "busy"
+		if int(sw.locked_by) >= 0 and int(sw.locked_by) != me:
 			return "busy"
 		if not _is_facing(sw, int(c["entry"])):
 			# Its crossing beam joins from the other track: the train can only pass it straight. Throw the
@@ -2679,7 +2804,7 @@ func manual_throw_switch(graph: NetworkGraph) -> String:
 # matches how it is set (arriving: the other platform track; leaving: wrong-track running, or both) and move
 # the train onto it. The train keeps its place relative to that terminal (hold point when arriving, turnback
 # point when leaving), where the variants are identical.
-func _reroute_through_switch(tr: Dictionary, sw) -> bool:
+func _reroute_through_switch(tr: Dictionary, sw, allow_wrong: bool = true, scan_m: float = 40.0) -> bool:
 	var lid := int(tr["line_id"])
 	var b_now: Dictionary = tr.get("b_sids", {})
 	var w_now: Dictionary = tr.get("w_sids", {})
@@ -2701,6 +2826,8 @@ func _reroute_through_switch(tr: Dictionary, sw) -> bool:
 		if absf(d_anchor) > 400.0:
 			continue # this terminal is nowhere near
 		for toggle: Array in [[true, false], [false, true], [true, true]]:
+			if bool(toggle[1]) and not allow_wrong:
+				continue
 			var b_new := b_now.duplicate()
 			var w_new := w_now.duplicate()
 			if toggle[0]:
@@ -2731,10 +2858,16 @@ func _reroute_through_switch(tr: Dictionary, sw) -> bool:
 			var head_new := (c["curve"] as Curve3D).sample_baked(s_new, false)
 			if head_old.distance_to(head_new) > 1.5:
 				continue # not the same track here
+			if not allow_wrong and not leaving:
+				# Automatic (dispatcher) reroute: only onto a platform track nobody else holds
+				var me_i := trams.find(tr)
+				var occ := _terminal_occupancy(me_i, lid, sid)
+				if bool(occ["b"] if int(z_new["platform"]) == PLATFORM_B else occ["a"]):
+					continue
 			var probe := {"curve": c["curve"], "route_len": len_new, "is_loop": bool(tr["is_loop"]), "dir": dir,
 				"s": s_new, "elevated": tr.get("elevated", false), "spec": tr["spec"], "tram_info": tr["tram_info"]}
 			var ok := false
-			for cand: Dictionary in _scan_switches(probe, [sw], 40.0):
+			for cand: Dictionary in _scan_switches(probe, [sw], scan_m):
 				if cand["sw"] == sw and float(cand["need"]) >= 0.0 and absf(float(cand["need"]) - float(sw.throw)) < 0.02:
 					ok = true
 			if not ok:
@@ -2746,7 +2879,8 @@ func _reroute_through_switch(tr: Dictionary, sw) -> bool:
 			if not leaving:
 				res[sid] = {"platform": int(z_new["platform"]), "phase": "in"}
 				tr["term_res"] = res
-				_hand_over_platform(tr, sid, int(z_new["platform"]))
+				if allow_wrong:
+					_hand_over_platform(tr, sid, int(z_new["platform"])) # the driver forced it: the other train yields
 			elif res.has(sid):
 				(res[sid] as Dictionary)["platform"] = int(z_new["platform"])
 			_position_tram_3d(tr)
