@@ -4078,9 +4078,9 @@ func _refresh_stats_modal_ui() -> void:
 				Color(0.10, 0.13, 0.19, 0.90)
 			))
 
-	var s_widths: Array[int] = [0, 95, 95, 95, 90]
+	var s_widths: Array[int] = [0, 82, 82, 82, 118, 118, 76]
 	_stats_stations_vbox.add_child(_make_stat_row(
-		["车站名称", "当前候车", "累计上车", "累计下车", "站台状态"],
+		["车站名称", "当前候车", "累计上车", "累计下车", "平均等待(已上车)", "当前候车已等", "站台状态"],
 		s_widths,
 		Color(0.95, 0.84, 0.58),
 		Color(0.09, 0.12, 0.18, 0.96)
@@ -4098,6 +4098,8 @@ func _refresh_stats_modal_ui() -> void:
 			"waiting": waiting,
 			"boarded": st_b,
 			"alighted": st_a,
+			"avg_wait": _pax_sim.get_avg_wait_boarded(sid),
+			"cur_wait": _pax_sim.get_avg_wait_current(sid),
 		})
 	st_rows.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		if int(a["waiting"]) != int(b["waiting"]):
@@ -4123,7 +4125,9 @@ func _refresh_stats_modal_ui() -> void:
 				status_txt = "较忙"
 				st_col = Color(0.98, 0.84, 0.46)
 			_stats_stations_vbox.add_child(_make_stat_row(
-				[str(sr["name"]), "%d 人" % w, "%d 人" % int(sr["boarded"]), "%d 人" % int(sr["alighted"]), status_txt],
+				[str(sr["name"]), "%d 人" % w, "%d 人" % int(sr["boarded"]), "%d 人" % int(sr["alighted"]),
+					"—" if float(sr["avg_wait"]) < 0.0 else _fmt_hms(float(sr["avg_wait"])),
+					"—" if float(sr["cur_wait"]) < 0.0 else _fmt_hms(float(sr["cur_wait"])), status_txt],
 				s_widths,
 				st_col,
 				Color(0.10, 0.13, 0.18, 0.88)

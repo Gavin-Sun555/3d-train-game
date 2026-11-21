@@ -8,6 +8,8 @@ var spawn_level := 3 # 1..5
 var total_delivered := 0
 var total_boarded := 0
 var station_boarded: Dictionary = {}  # station_id -> int
+var station_wait_sum: Dictionary = {} # station_id -> total seconds boarded passengers spent waiting
+var station_wait_n: Dictionary = {}   # station_id -> number of boarded passengers in that total
 var station_alighted: Dictionary = {} # station_id -> int
 var line_boarded: Dictionary = {}     # line_id -> int
 var line_delivered: Dictionary = {}   # line_id -> int
@@ -192,6 +194,8 @@ func reset_for_stations(station_views: Dictionary) -> void:
 		c.queue_free()
 	station_queues.clear()
 	station_boarded.clear()
+	station_wait_sum.clear()
+	station_wait_n.clear()
 	station_alighted.clear()
 	line_boarded.clear()
 	line_delivered.clear()
@@ -217,6 +221,23 @@ func _is_boardable(item: Dictionary) -> bool:
 
 
 # Passengers already on the platform (the ones a train at the platform can take right now)
+# Average wait of the passengers who boarded here (seconds; -1 = nobody yet)
+func get_avg_wait_boarded(sid: int) -> float:
+	var nb := int(station_wait_n.get(sid, 0))
+	return float(station_wait_sum.get(sid, 0.0)) / float(nb) if nb > 0 else -1.0
+
+
+# How long the people waiting here now have been waiting on average (seconds; -1 = nobody waiting)
+func get_avg_wait_current(sid: int) -> float:
+	var q: Array = station_queues.get(sid, [])
+	if q.is_empty():
+		return -1.0
+	var tot := 0.0
+	for item: Dictionary in q:
+		tot += maxf(0.0, _idle_time - float(item.get("t0", _idle_time)))
+	return tot / float(q.size())
+
+
 func get_boardable_count(sid: int) -> int:
 	var n := 0
 	for item: Dictionary in station_queues.get(sid, []):
@@ -352,6 +373,8 @@ func exchange_passengers_at_station(
 						tram_state["pending_boarders"] = pending_n + 1
 						total_boarded += 1
 						station_boarded[station_id] = int(station_boarded.get(station_id, 0)) + 1
+						station_wait_sum[station_id] = float(station_wait_sum.get(station_id, 0.0)) + maxf(0.0, _idle_time - float(item.get("t0", _idle_time)))
+						station_wait_n[station_id] = int(station_wait_n.get(station_id, 0)) + 1
 						line_boarded[lid_t] = int(line_boarded.get(lid_t, 0)) + 1
 						tram_state["st_boarded"] = int(tram_state.get("st_boarded", 0)) + 1
 						# Pick the nearest OPEN platform-facing doorway to this passenger so they never cut across the tram!
@@ -430,6 +453,7 @@ func _spawn_one_random_passenger(graph: NetworkGraph, instant_place: bool) -> vo
 		"dest_sid": dest_sid,
 		"line_id": lid,
 		"agent": agent_dict,
+		"t0": _idle_time, # arrival at the station (simulation time) for waiting-time statistics
 	})
 	station_queues[orig_sid] = q
 	_refresh_station_label(orig_sid)
