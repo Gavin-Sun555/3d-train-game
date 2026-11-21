@@ -209,12 +209,21 @@ func export_run_state() -> Dictionary:
 			"term_sid": int(tr.get("term_sid", -1)),
 			"pax_dests": (tr["pax_dests"] as Array).duplicate(),
 			"reverser": float(tr.get("reverser", 1.0)),
+			"stats": _tram_stats_dict(tr),
 		})
 	return {
 		"active_tram_idx": active_tram_idx,
 		"manual_drive": manual_drive,
 		"trams": tr_states,
 	}
+
+
+func _tram_stats_dict(tr: Dictionary) -> Dictionary:
+	var d := {}
+	for k: String in TRAM_STAT_KEYS:
+		if tr.has(k):
+			d[k] = tr[k]
+	return d
 
 
 func import_run_state(run_state: Dictionary, graph: NetworkGraph) -> void:
@@ -244,6 +253,10 @@ func import_run_state(run_state: Dictionary, graph: NetworkGraph) -> void:
 		tr["term_sid"] = int(st.get("term_sid", -1))
 		tr["term_flip_timer"] = 0.0
 		tr["reverser"] = -1.0 if float(st.get("reverser", 1.0)) < 0.0 else 1.0
+		var sd: Dictionary = st.get("stats", {})
+		for k: String in TRAM_STAT_KEYS:
+			if sd.has(k):
+				tr[k] = sd[k]
 		var dests: Array = st.get("pax_dests", [])
 		tr["pax_dests"] = dests.duplicate()
 		_position_tram_3d(tr)
@@ -274,6 +287,13 @@ func cycle_active_tram(delta_i: int = 1) -> void:
 	_last_tram_of_line[lid] = active_tram_idx
 
 
+func select_tram(idx: int) -> void:
+	if idx < 0 or idx >= trams.size():
+		return
+	active_tram_idx = idx
+	_last_tram_of_line[int(trams[idx]["line_id"])] = idx
+
+
 # Previous / next line (in line-id order); returns to the train last watched on that line.
 func cycle_active_line(delta_i: int = 1) -> void:
 	var lids := line_ids_in_service()
@@ -296,6 +316,54 @@ func line_ids_in_service() -> Array:
 			out.append(lid)
 	out.sort()
 	return out
+
+
+# Per-train service statistics (shown on the operations board): distance, time moving / standing / dwelling,
+# stops served (doors opened), top speed and peak load. Boarded / alighted counts come from PassengerSim.
+const TRAM_STAT_KEYS := ["st_dist_m", "st_move_s", "st_stand_s", "st_dwell_s", "st_stops", "st_max_kmh", "st_boarded", "st_alighted", "st_peak_load", "st_hold_s"]
+
+
+func _accumulate_tram_stats(tr: Dictionary, dt: float) -> void:
+	var spd := float(tr["speed_mps"])
+	var door_r := float(tr["door_ratio"])
+	if spd > 0.3:
+		tr["st_move_s"] = float(tr.get("st_move_s", 0.0)) + dt
+	else:
+		tr["st_stand_s"] = float(tr.get("st_stand_s", 0.0)) + dt
+		if door_r > 0.02:
+			tr["st_dwell_s"] = float(tr.get("st_dwell_s", 0.0)) + dt
+	var opening := door_r > 0.02
+	if opening and not bool(tr.get("st_doors_were_open", false)):
+		tr["st_stops"] = int(tr.get("st_stops", 0)) + 1
+	tr["st_doors_were_open"] = opening
+	tr["st_max_kmh"] = maxf(float(tr.get("st_max_kmh", 0.0)), spd * 3.6)
+	tr["st_peak_load"] = maxi(int(tr.get("st_peak_load", 0)), (tr["pax_dests"] as Array).size())
+	if spd <= 0.3 and (float(tr.get("express_hold_t", 0.0)) > 0.0 or float(tr.get("merge_hold_s", -1.0)) >= 0.0):
+		tr["st_hold_s"] = float(tr.get("st_hold_s", 0.0)) + dt
+
+
+# Where a train is and what it is doing, for the operations board
+func tram_status_text(tr: Dictionary) -> String:
+	if bool(tr.get("derailed", false)) or bool(tr.get("crashed", false)):
+		return "事故"
+	var spd := float(tr["speed_mps"])
+	var term_stage := str(tr.get("term_stage", ""))
+	if term_stage == "flip_wait":
+		return "终点换端折返"
+	if float(tr["door_ratio"]) > 0.02 or bool(tr["doors_target_open"]):
+		var here := _find_station_at_current_pos(tr)
+		return "停站 · %s" % str(here.get("name", "站台"))
+	if float(tr.get("express_hold_t", 0.0)) > 0.0:
+		return "待避快车"
+	var nxt := find_next_stop_info(tr)
+	var nxt_name := str(nxt.get("name", ""))
+	if spd < 0.3:
+		if float(tr.get("merge_hold_s", -1.0)) >= 0.0:
+			return "汇合让行"
+		if _terminal_hold_distance(tr) < 40.0:
+			return "等待终点站进站 → %s" % nxt_name if nxt_name != "" else "等待终点站进站"
+		return "停车等待 → %s" % nxt_name if nxt_name != "" else "停车等待"
+	return "开往 %s" % nxt_name if nxt_name != "" else "运行中"
 
 
 func line_tram_indices(lid: int) -> Array:
@@ -352,6 +420,7 @@ func step_all_trams(
 			_step_ai_driver(tr, i, dt, graph, pax_sim, traffic_sim, sound, i == active_tram_idx)
 
 		var derail_ev := _step_tram_physics_and_doors(tr, i, dt, graph, pax_sim, sound, i == active_tram_idx, is_player_manual)
+		_accumulate_tram_stats(tr, dt)
 		if derail_ev.is_empty() and is_player_manual:
 			derail_ev = _check_switch_entry(tr, i)
 		_position_tram_3d(tr)
@@ -1510,6 +1579,7 @@ func _step_tram_physics_and_doors(
 	var s_new := s_prev + ds
 	var lid_dist := int(tr["line_id"])
 	line_dist_m[lid_dist] = float(line_dist_m.get(lid_dist, 0.0)) + absf(ds)
+	tr["st_dist_m"] = float(tr.get("st_dist_m", 0.0)) + absf(ds)
 
 	if bool(tr["is_loop"]):
 		s_new = fposmod(s_new, rlen)

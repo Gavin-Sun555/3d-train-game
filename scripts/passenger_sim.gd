@@ -315,6 +315,7 @@ func exchange_passengers_at_station(
 			total_delivered += 1
 			station_alighted[station_id] = int(station_alighted.get(station_id, 0)) + 1
 			line_delivered[lid_t] = int(line_delivered.get(lid_t, 0)) + 1
+			tram_state["st_alighted"] = int(tram_state.get("st_alighted", 0)) + 1
 			var tinfo: Dictionary = tram_state["tram_info"]
 			TramBuilder.update_onboard_passengers(tinfo, onboard_list.size(), int(tram_state["capacity"]))
 			var p_info: Dictionary = portals[_rng.randi() % portals.size()]
@@ -352,6 +353,7 @@ func exchange_passengers_at_station(
 						total_boarded += 1
 						station_boarded[station_id] = int(station_boarded.get(station_id, 0)) + 1
 						line_boarded[lid_t] = int(line_boarded.get(lid_t, 0)) + 1
+						tram_state["st_boarded"] = int(tram_state.get("st_boarded", 0)) + 1
 						# Pick the nearest OPEN platform-facing doorway to this passenger so they never cut across the tram!
 						var p_target: Dictionary = portals[0]
 						var ag_chk: Dictionary = item.get("agent", {})

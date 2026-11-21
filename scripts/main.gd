@@ -195,6 +195,7 @@ var _stats_modal: Control
 var _stats_summary_lbl: Label
 var _stats_lines_vbox: VBoxContainer
 var _stats_stations_vbox: VBoxContainer
+var _stats_trams_vbox: VBoxContainer
 var _stats_refresh_accum := 0.0
 var _last_ann_approach_sid := -1
 var _last_ann_door_open := false
@@ -250,6 +251,9 @@ var _lbl_notch: Label
 var _lbl_drv_status: Label
 var _btn_doors: Button
 var _btn_reverser: Button
+var _run_paused := false # RUN mode paused: trains, cars, passengers and autosave stand still; the camera stays free
+var _btn_pause: Button
+var _lbl_paused: Label
 var _btn_drive_mode: Button
 var _notch_bars: Array[ColorRect] = []
 
@@ -1331,6 +1335,8 @@ func _refresh_slot_modal_ui() -> void:
 func _set_game_mode(mode: int) -> void:
 	var prev_mode := _game_mode
 	_game_mode = mode
+	if _run_paused:
+		_set_run_paused(false)
 	_path_start_node = -1
 	_preview_mi.mesh = null
 	_last_ann_approach_sid = -1
@@ -1664,6 +1670,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif k == KEY_T:
 			_toggle_stats_modal()
 			return
+		elif k == KEY_V and _game_mode == GameMode.RUN:
+			_toggle_run_pause()
+			return
 
 		if _game_mode == GameMode.BUILD:
 			if k == KEY_R:
@@ -1680,6 +1689,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		else:
 			# RUN & DRIVE Mode Controls:
 			# W / S = Throttle / Brake; Arrow Keys (Up/Down/Left/Right) = Move/Rotate Camera View!
+			if _run_paused and k in [KEY_Q, KEY_W, KEY_S, KEY_SPACE, KEY_O, KEY_B, KEY_R, KEY_X, KEY_G, KEY_H]:
+				_show_toast("⏸ 已暂停：按 V 继续运营后再操作列车")
+				return
 			match k:
 				KEY_1: _set_cam_mode(CamMode.CAB)
 				KEY_2: _set_cam_mode(CamMode.CHASE)
@@ -1747,6 +1759,22 @@ func _do_throw_switch() -> void:
 			_show_toast("⚠ 列车正在道岔上，道岔已锁闭不能扳动")
 		_:
 			_show_toast("前方 260 m 内没有道岔")
+
+
+func _toggle_run_pause() -> void:
+	if _game_mode != GameMode.RUN or _in_home_menu or _game_over:
+		return
+	_set_run_paused(not _run_paused)
+	_show_toast("⏸ 运营已暂停（V 继续）" if _run_paused else "▶ 继续运营")
+
+
+func _set_run_paused(p: bool) -> void:
+	_run_paused = p
+	if _btn_pause != null:
+		_btn_pause.text = "▶ 继续 (V)" if p else "⏸ 暂停 (V)"
+		_highlight_active_btn(_btn_pause, p)
+	if _lbl_paused != null:
+		_lbl_paused.visible = p and _game_mode == GameMode.RUN
 
 
 # Reverser: forward <-> R (reverse gear). Not needed for normal service, just for shunting about.
@@ -2361,7 +2389,10 @@ func _process(delta: float) -> void:
 		_process_shot_tour()
 		return
 
-	if _game_mode == GameMode.RUN and not _in_home_menu and not _game_over:
+	var paused_run := _run_paused and _game_mode == GameMode.RUN
+	if _lbl_paused != null:
+		_lbl_paused.visible = paused_run and not _in_home_menu and not _game_over
+	if _game_mode == GameMode.RUN and not _in_home_menu and not _game_over and not paused_run:
 		_update_monorail(dt)
 	_update_accident_fx(dt)
 
@@ -2390,7 +2421,7 @@ func _process(delta: float) -> void:
 		return
 
 	# Periodic rotating auto-save every 120 seconds during active play
-	if not _is_demo_readonly:
+	if not _is_demo_readonly and not paused_run:
 		_autosave_timer += dt
 		if _autosave_timer >= 120.0:
 			_autosave_timer = 0.0
@@ -2401,7 +2432,18 @@ func _process(delta: float) -> void:
 	if _slot_modal == null or not _slot_modal.visible:
 		_handle_bird_pan_keys(dt)
 
-	if _game_mode == GameMode.RUN:
+	if paused_run:
+		# Paused: nothing moves, but the camera, HUD and operations board still work
+		_sound.speed_mps = 0.0
+		_sound.traction_effort = 0.0
+		_sound.overspeed_squeal = 0.0
+		if _slot_modal == null or not _slot_modal.visible:
+			_handle_run_arrow_camera_keys(dt)
+		_hud_refresh_timer += dt
+		if _hud_refresh_timer >= 0.065:
+			_hud_refresh_timer = 0.0
+			_update_run_hud()
+	elif _game_mode == GameMode.RUN:
 		if _slot_modal == null or not _slot_modal.visible:
 			_handle_run_held_keys(dt)
 			_handle_run_arrow_camera_keys(dt)
@@ -2798,6 +2840,22 @@ func _build_ui() -> void:
 	_lbl_toast.add_theme_constant_override("shadow_offset_y", 1)
 	_lbl_toast.visible = false
 	master_root.add_child(_lbl_toast)
+
+	_lbl_paused = Label.new()
+	_lbl_paused.set_anchors_preset(Control.PRESET_CENTER)
+	_lbl_paused.position = Vector2(-260, -40)
+	_lbl_paused.custom_minimum_size = Vector2(520, 80)
+	_lbl_paused.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_lbl_paused.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_lbl_paused.text = "⏸ 已暂停\n按 V 或点击【▶ 继续】恢复运营 · 视角仍可移动"
+	_lbl_paused.add_theme_font_size_override("font_size", 22)
+	_lbl_paused.add_theme_color_override("font_color", Color(0.98, 0.96, 0.86))
+	_lbl_paused.add_theme_color_override("font_shadow_color", Color(0.0, 0.0, 0.0, 0.9))
+	_lbl_paused.add_theme_constant_override("shadow_offset_x", 2)
+	_lbl_paused.add_theme_constant_override("shadow_offset_y", 2)
+	_lbl_paused.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_lbl_paused.visible = false
+	master_root.add_child(_lbl_paused)
 
 	# Interactive 3D Cab Control Hover Tooltip
 	_lbl_cab_tip = Label.new()
@@ -3303,7 +3361,7 @@ func _build_ui() -> void:
 	cam_hbox.add_child(_make_btn("5 鸟瞰全局", func(): _set_cam_mode(CamMode.BIRD)))
 
 	var cam_hint := Label.new()
-	cam_hint.text = "↑↓←→ 方向键移动/旋转视角 · W/S 牵引与制动 · X 倒档 · O 开关车门 · G 手动扳道岔(特殊情况)"
+	cam_hint.text = "↑↓←→ 方向键移动/旋转视角 · W/S 牵引与制动 · X 倒档 · V 暂停 · O 开关车门 · G 手动扳道岔(特殊情况)"
 	cam_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	cam_hint.add_theme_font_size_override("font_size", 12)
 	cam_hint.add_theme_color_override("font_color", Color(0.75, 0.82, 0.88))
@@ -3368,6 +3426,8 @@ func _build_ui() -> void:
 	act_row.add_child(_make_btn("换端折返 (R)", func(): _do_cab_change()))
 	_btn_reverser = _make_btn("倒档 R (X)", func(): _do_toggle_reverser())
 	act_row.add_child(_btn_reverser)
+	_btn_pause = _make_btn("⏸ 暂停 (V)", func(): _toggle_run_pause())
+	act_row.add_child(_btn_pause)
 	act_row.add_child(_make_btn("手动扳道岔 (G)", func(): _do_throw_switch()))
 
 	# 5. HOME SCREEN OVERLAY (Map Selection + Progress Summary + Actions)
@@ -3693,11 +3753,11 @@ func _build_stats_modal_ui(parent: Control) -> void:
 	_stats_modal.add_child(center)
 
 	var box := _make_panel(Color(0.06, 0.09, 0.13, 0.97))
-	box.custom_minimum_size = Vector2(820, 540)
+	box.custom_minimum_size = Vector2(1060, 760)
 	center.add_child(box)
 
 	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 10)
+	vbox.add_theme_constant_override("separation", 8)
 	box.add_child(vbox)
 
 	var top_row := HBoxContainer.new()
@@ -3727,13 +3787,31 @@ func _build_stats_modal_ui(parent: Control) -> void:
 	vbox.add_child(l_hdr)
 
 	var l_scroll := ScrollContainer.new()
-	l_scroll.custom_minimum_size = Vector2(780, 175)
+	l_scroll.custom_minimum_size = Vector2(1020, 130)
 	vbox.add_child(l_scroll)
 
 	_stats_lines_vbox = VBoxContainer.new()
 	_stats_lines_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_stats_lines_vbox.add_theme_constant_override("separation", 4)
 	l_scroll.add_child(_stats_lines_vbox)
+
+	vbox.add_child(HSeparator.new())
+
+	var t_hdr := Label.new()
+	t_hdr.text = "各列车运营数据（点击一行切换到该列车）"
+	t_hdr.add_theme_font_size_override("font_size", 14)
+	t_hdr.add_theme_color_override("font_color", Color(0.62, 0.92, 0.80))
+	vbox.add_child(t_hdr)
+
+	var t_scroll := ScrollContainer.new()
+	t_scroll.custom_minimum_size = Vector2(1020, 250)
+	t_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	vbox.add_child(t_scroll)
+
+	_stats_trams_vbox = VBoxContainer.new()
+	_stats_trams_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_stats_trams_vbox.add_theme_constant_override("separation", 3)
+	t_scroll.add_child(_stats_trams_vbox)
 
 	vbox.add_child(HSeparator.new())
 
@@ -3744,7 +3822,7 @@ func _build_stats_modal_ui(parent: Control) -> void:
 	vbox.add_child(s_hdr)
 
 	var s_scroll := ScrollContainer.new()
-	s_scroll.custom_minimum_size = Vector2(780, 195)
+	s_scroll.custom_minimum_size = Vector2(1020, 150)
 	s_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	vbox.add_child(s_scroll)
 
@@ -3770,6 +3848,82 @@ func _make_stat_row(cols: Array[String], widths: Array[int], text_color: Color, 
 			lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		hb.add_child(lbl)
 	return pc
+
+
+func _fmt_hms(sec: float) -> String:
+	var t := int(sec)
+	if t >= 3600:
+		return "%d:%02d:%02d" % [t / 3600, (t / 60) % 60, t % 60]
+	return "%d:%02d" % [t / 60, t % 60]
+
+
+# One row per train: what it is doing now and what it has done since the run started
+func _refresh_stats_trams() -> void:
+	for c in _stats_trams_vbox.get_children():
+		c.queue_free()
+	var t_widths: Array[int] = [128, 0, 62, 62, 62, 64, 44, 48, 48, 70, 46, 62, 62]
+	_stats_trams_vbox.add_child(_make_stat_row(
+		["列车", "当前状态", "速度", "里程", "运行均速", "最高速度", "停站", "上车", "下车", "在车/定员", "满载", "停站时间", "等待时间"],
+		t_widths,
+		Color(0.66, 0.90, 0.80),
+		Color(0.09, 0.12, 0.18, 0.96)
+	))
+	if _transit_sim.trams.is_empty():
+		_stats_trams_vbox.add_child(_make_stat_row(["暂无运营列车"], [0], Color(0.62, 0.68, 0.74), Color(0.08, 0.10, 0.14, 0.85)))
+		return
+	var order: Array = range(_transit_sim.trams.size())
+	order.sort_custom(func(a: int, b: int) -> bool:
+		var la := int(_transit_sim.trams[a]["line_id"])
+		var lb := int(_transit_sim.trams[b]["line_id"])
+		return la < lb if la != lb else a < b
+	)
+	for i: int in order:
+		var tr: Dictionary = _transit_sim.trams[i]
+		var lid := int(tr["line_id"])
+		var same := _transit_sim.line_tram_indices(lid)
+		var is_active := i == _transit_sim.active_tram_idx
+		var ob := (tr["pax_dests"] as Array).size()
+		var cap := int(tr["capacity"])
+		var dist_m := float(tr.get("st_dist_m", 0.0))
+		var t_all := float(tr.get("st_move_s", 0.0)) + float(tr.get("st_stand_s", 0.0))
+		var avg_kmh := dist_m / t_all * 3.6 if t_all > 1.0 else 0.0
+		var name_txt := "%s%s 第%d列" % ["▶ " if is_active else "", str(tr["line_name"]), same.find(i) + 1]
+		if is_active and _transit_sim.manual_drive:
+			name_txt += "·手动"
+		var l_col: Color = tr.get("line_color", Color(0.85, 0.92, 1.0))
+		var row := _make_stat_row(
+			[
+				name_txt,
+				_transit_sim.tram_status_text(tr),
+				"%.0f km/h" % (float(tr["speed_mps"]) * 3.6),
+				"%.2f km" % (dist_m / 1000.0),
+				"%.1f km/h" % avg_kmh,
+				"%.0f km/h" % float(tr.get("st_max_kmh", 0.0)),
+				"%d" % int(tr.get("st_stops", 0)),
+				"%d" % int(tr.get("st_boarded", 0)),
+				"%d" % int(tr.get("st_alighted", 0)),
+				"%d/%d" % [ob, cap],
+				"%.0f%%" % (float(ob) / float(maxi(1, cap)) * 100.0),
+				_fmt_hms(float(tr.get("st_dwell_s", 0.0))),
+				_fmt_hms(float(tr.get("st_hold_s", 0.0))),
+			],
+			t_widths,
+			l_col.lerp(Color.WHITE, 0.55),
+			Color(0.16, 0.24, 0.22, 0.95) if is_active else Color(0.10, 0.13, 0.19, 0.90)
+		)
+		row.mouse_filter = Control.MOUSE_FILTER_STOP
+		(row.get_child(0) as Control).mouse_filter = Control.MOUSE_FILTER_PASS
+		row.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		row.tooltip_text = "峰值载客 %d 人 · 行驶 %s · 停车 %s（其中开门上下客 %s，待避/让行 %s）" % [
+			int(tr.get("st_peak_load", 0)), _fmt_hms(float(tr.get("st_move_s", 0.0))), _fmt_hms(float(tr.get("st_stand_s", 0.0))),
+			_fmt_hms(float(tr.get("st_dwell_s", 0.0))), _fmt_hms(float(tr.get("st_hold_s", 0.0)))]
+		row.gui_input.connect(func(ev: InputEvent) -> void:
+			if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
+				_transit_sim.select_tram(i)
+				_show_toast("已切换到 %s 第%d列" % [str(tr["line_name"]), same.find(i) + 1])
+				_refresh_stats_modal_ui()
+		)
+		_stats_trams_vbox.add_child(row)
 
 
 func _refresh_stats_modal_ui() -> void:
@@ -3799,6 +3953,7 @@ func _refresh_stats_modal_ui() -> void:
 		c.queue_free()
 	for c in _stats_stations_vbox.get_children():
 		c.queue_free()
+	_refresh_stats_trams()
 
 	var l_widths: Array[int] = [92, 165, 52, 62, 82, 64, 64, 62, 72]
 	_stats_lines_vbox.add_child(_make_stat_row(
