@@ -1015,6 +1015,11 @@ func compile_line_route(line_dict: Dictionary, b_platform_sids: Dictionary = {},
 		var b_ok := (not xo_in.is_empty()) and (not xo_out.is_empty()) and int(xo_in["eid"]) == int(xo_out["eid"]) \
 			and int(crossovers.get(int(xo_in["eid"]), CrossoverType.NONE)) == CrossoverType.DOUBLE
 		var use_b := b_ok and b_platform_sids.has(tb_sid)
+		# Crossings made from the "other" track take the other half of a two-way crossover
+		if arr_flip.has(j) and not use_b and not xo_in.is_empty():
+			xo_in = _route_find_crossover(in_spans, geo_cache, true, true)
+		if dep_wrong.has(j) and use_b and not xo_out.is_empty():
+			xo_out = _route_find_crossover(out_spans, geo_cache, false, true)
 		# Arriving on the wrong track, platform B lies straight ahead and platform A over the crossover
 		if not xo_in.is_empty():
 			_route_apply_arrival_crossover(in_spans, xo_in, (not use_b) if arr_flip.has(j) else use_b, tb_sid)
@@ -1430,7 +1435,9 @@ func _route_junction_points(sp_a: Dictionary, sp_b: Dictionary, cache: Dictionar
 # Returns {k, eid, s_inner, s_outer}: inner = crossover end nearer the terminal station.
 # Two-way monorail crossovers hold two beam switches: the arrival move onto platform B uses the hand -1 one, the
 # departure move uses the hand +1 one; s_zone is the outer end of the whole footprint (terminal interlocking).
-func _route_find_crossover(spans: Array, cache: Dictionary, backward: bool) -> Dictionary:
+# flip_hand: the train runs on the other track than usual here (wrong-track arrival / departure onto the wrong
+# track), so the crossing it can take is the other half of a two-way crossover.
+func _route_find_crossover(spans: Array, cache: Dictionary, backward: bool, flip_hand: bool = false) -> Dictionary:
 	var order: Array = range(spans.size())
 	if backward:
 		order.reverse()
@@ -1451,7 +1458,7 @@ func _route_find_crossover(spans: Array, cache: Dictionary, backward: bool) -> D
 			var s_zone := s_a if backward else s_b
 			if TrackBuilder.edge_system(self, eid) == 1 and int(crossovers.get(eid, CrossoverType.NONE)) == CrossoverType.DOUBLE:
 				for pt: Dictionary in TrackBuilder.mono_switch_parts(self, eid, xo):
-					if float(pt["hand"]) == (-1.0 if backward else 1.0):
+					if float(pt["hand"]) == (-1.0 if backward else 1.0) * (-1.0 if flip_hand else 1.0):
 						s_a = float(pt["s_mid"]) - d * float(pt["x_half"])
 						s_b = float(pt["s_mid"]) + d * float(pt["x_half"])
 			if backward:

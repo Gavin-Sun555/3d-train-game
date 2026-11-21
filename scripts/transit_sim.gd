@@ -2141,7 +2141,9 @@ func _update_terminal_interlocking() -> void:
 				can_a = can_a and int(z["platform"]) == PLATFORM_A
 				can_b = can_b and int(z["platform"]) == PLATFORM_B
 			var pick := -1
-			if can_a:
+			if can_b and not (tr.get("w_sids", {}) as Dictionary).is_empty():
+				pick = PLATFORM_B # arriving on the wrong track: platform B lies straight ahead
+			elif can_a:
 				pick = PLATFORM_A
 			elif can_b:
 				pick = PLATFORM_B
@@ -2617,6 +2619,16 @@ func switch_ahead_info(tr: Dictionary, me: int) -> Dictionary:
 	}
 
 
+# A switch is facing for a train entering at `entry` (0: low end -1, 1: low end +1, 2: high end -1, 3: high end +1)
+# when its crossing beam starts from that end: hand +1 runs lane -1 (low s) -> lane +1 (high s), hand -1 the mirror.
+static func _is_facing(sw, entry: int) -> bool:
+	if entry < 0:
+		return true
+	if float(sw.hand) > 0.0:
+		return entry == 0 or entry == 3
+	return entry == 1 or entry == 2
+
+
 # Manual driving: throw the next switch ahead of the active train (G). Returns a status string.
 func manual_throw_switch(graph: NetworkGraph) -> String:
 	var tr := get_active_tram()
@@ -2626,7 +2638,9 @@ func manual_throw_switch(graph: NetworkGraph) -> String:
 		return "none"
 	var lst := _scan_switches(tr, graph.get_meta("monorail_switches"), 260.0)
 	var me := active_tram_idx
-	for c: Dictionary in lst:
+	var trailing: Array = [] # switches of the same crossover the train only runs straight through
+	for ci in range(lst.size()):
+		var c: Dictionary = lst[ci]
 		if float(c["need"]) < 0.0:
 			continue
 		var sw = c["sw"]
@@ -2636,55 +2650,132 @@ func manual_throw_switch(graph: NetworkGraph) -> String:
 			return "locked"
 		if int(sw.owner_idx) >= 0 and int(sw.owner_idx) != me:
 			return "busy"
+		if not _is_facing(sw, int(c["entry"])):
+			# Its crossing beam joins from the other track: the train can only pass it straight. Throw the
+			# next switch of the same crossover instead; with none, this switch cannot be used from here.
+			var nxt_same := ci + 1 < lst.size() and (sw.group as Array).has((lst[ci + 1] as Dictionary)["sw"])
+			if nxt_same:
+				trailing.append(c)
+				continue
+			return "trailing"
+		for tc: Dictionary in trailing:
+			var tsw = tc["sw"]
+			tsw.owner_idx = me
+			tsw.owner_need = float(tc["need"])
+			tsw.owner_entry = int(tc["entry"])
+			tsw.target = 0.0
+			tsw.manual_override = absf(float(tc["need"])) > 0.5
 		sw.owner_idx = me
 		sw.owner_need = float(c["need"])
 		sw.owner_entry = int(c["entry"])
 		sw.target = 0.0 if float(sw.target) > 0.5 else 1.0
 		sw.manual_override = absf(float(sw.target) - float(c["need"])) > 0.5 # back on route = automatic again
-		tr["sw_next"] = c
+		tr["sw_next"] = lst[0] if not trailing.is_empty() else c
 		return "diverge" if float(sw.target) > 0.5 else "straight"
 	return "none"
 
 
-# Toggle the wrong-track departure of one terminal on this route and keep the variant whose path through `sw`
-# matches how the switch is set. Variants are identical up to the departure crossover, so `s` carries over.
+# The driver set a terminal crossover against the train's route: find the route variant whose path through `sw`
+# matches how it is set (arriving: the other platform track; leaving: wrong-track running, or both) and move
+# the train onto it. The train keeps its place relative to that terminal (hold point when arriving, turnback
+# point when leaving), where the variants are identical.
 func _reroute_through_switch(tr: Dictionary, sw) -> bool:
 	var lid := int(tr["line_id"])
-	var b_sids: Dictionary = tr.get("b_sids", {})
+	var b_now: Dictionary = tr.get("b_sids", {})
 	var w_now: Dictionary = tr.get("w_sids", {})
-	for st: Dictionary in tr["stops"]:
-		if not bool(st.get("turnback", false)):
-			continue
-		var sid := int(st["station_id"])
-		var w_new := w_now.duplicate()
-		if w_new.has(sid):
-			w_new.erase(sid)
-		else:
-			w_new[sid] = true
-		var key := _variant_key(b_sids, w_new)
-		var c := _get_variant(lid, key)
-		if c.is_empty():
-			continue
-		var probe := {"curve": c["curve"], "route_len": float(c["length"]), "is_loop": bool(tr["is_loop"]), "dir": float(tr["dir"]),
-			"s": float(tr["s"]), "elevated": tr.get("elevated", false), "spec": tr["spec"], "tram_info": tr["tram_info"]}
-		var head_old := (tr["curve"] as Curve3D).sample_baked(float(tr["s"]), false)
-		var head_new := (c["curve"] as Curve3D).sample_baked(float(tr["s"]), false)
-		if head_old.distance_to(head_new) > 1.0:
-			continue # this variant does not start out the same here
-		var ok := false
-		for cand: Dictionary in _scan_switches(probe, [sw], 40.0):
-			if cand["sw"] == sw and float(cand["need"]) >= 0.0 and absf(float(cand["need"]) - float(sw.throw)) < 0.02:
-				ok = true
-		if not ok:
-			continue
-		_apply_route_variant(tr, c, key)
-		tr["sw_next"] = {}
-		return true
+	var dir := float(tr["dir"])
+	var s_now := float(tr["s"])
+	var rlen := float(tr["route_len"])
+	var head_old := (tr["curve"] as Curve3D).sample_baked(s_now, false)
+	for z: Dictionary in tr.get("terminal_zones", []):
+		var sid := int(z["station_id"])
+		# Signed distance past the turnback point decides arriving vs leaving this terminal
+		var past_cusp := fposmod((s_now - float(z["cusp_s"])) * dir, rlen)
+		if past_cusp > rlen * 0.5:
+			past_cusp -= rlen
+		var leaving := past_cusp >= 0.0
+		var anchor_key := "cusp_s" if leaving else "hold_s"
+		var d_anchor := fposmod((s_now - float(z[anchor_key])) * dir, rlen)
+		if d_anchor > rlen * 0.5:
+			d_anchor -= rlen
+		if absf(d_anchor) > 400.0:
+			continue # this terminal is nowhere near
+		for toggle: Array in [[true, false], [false, true], [true, true]]:
+			var b_new := b_now.duplicate()
+			var w_new := w_now.duplicate()
+			if toggle[0]:
+				if b_new.has(sid):
+					b_new.erase(sid)
+				else:
+					b_new[sid] = true
+			if toggle[1]:
+				if w_new.has(sid):
+					w_new.erase(sid)
+				else:
+					w_new[sid] = true
+			var key := _variant_key(b_new, w_new)
+			if key == str(tr.get("variant_key", "")):
+				continue
+			var c := _get_variant(lid, key)
+			if c.is_empty():
+				continue
+			var z_new := {}
+			for zc: Dictionary in c.get("terminal_zones", []):
+				if int(zc["station_id"]) == sid:
+					z_new = zc
+			if z_new.is_empty():
+				continue
+			var len_new := float(c["length"])
+			var s_new := float(z_new[anchor_key]) + dir * d_anchor
+			s_new = fposmod(s_new, len_new) if bool(tr["is_loop"]) else clampf(s_new, 0.0, len_new)
+			var head_new := (c["curve"] as Curve3D).sample_baked(s_new, false)
+			if head_old.distance_to(head_new) > 1.5:
+				continue # not the same track here
+			var probe := {"curve": c["curve"], "route_len": len_new, "is_loop": bool(tr["is_loop"]), "dir": dir,
+				"s": s_new, "elevated": tr.get("elevated", false), "spec": tr["spec"], "tram_info": tr["tram_info"]}
+			var ok := false
+			for cand: Dictionary in _scan_switches(probe, [sw], 40.0):
+				if cand["sw"] == sw and float(cand["need"]) >= 0.0 and absf(float(cand["need"]) - float(sw.throw)) < 0.02:
+					ok = true
+			if not ok:
+				continue
+			_apply_route_variant(tr, c, key)
+			tr["s"] = s_new
+			tr["sw_next"] = {}
+			var res: Dictionary = tr.get("term_res", {})
+			if not leaving:
+				res[sid] = {"platform": int(z_new["platform"]), "phase": "in"}
+				tr["term_res"] = res
+				_hand_over_platform(tr, sid, int(z_new["platform"]))
+			elif res.has(sid):
+				(res[sid] as Dictionary)["platform"] = int(z_new["platform"])
+			_position_tram_3d(tr)
+			return true
 	return false
 
 
 # Back to normal routing once a wrong-track run has reached the next terminal and turned back there (the
 # variants agree from that turnback point on, so the train keeps its place relative to it)
+func _hand_over_platform(me_tr: Dictionary, sid: int, platform: int) -> void:
+	# The driver took platform `platform` by hand: another train still waiting to enter it goes to the other one
+	for j in range(trams.size()):
+		var o: Dictionary = trams[j]
+		if o == me_tr or bool(o.get("elevated", false)) != bool(me_tr.get("elevated", false)):
+			continue
+		var r: Dictionary = (o.get("term_res", {}) as Dictionary).get(sid, {})
+		if r.is_empty() or str(r["phase"]) != "in" or int(r["platform"]) != platform:
+			continue
+		var z := _zone_for(o, sid)
+		if z.is_empty() or not bool(z["b_available"]):
+			continue
+		var from_hold := fposmod((float(o["s"]) - float(z["hold_s"])) * float(o["dir"]), float(o["route_len"]))
+		if from_hold < float(o["route_len"]) * 0.5 and from_hold > NetworkGraph.TERMINAL_HOLD_MARGIN_M - 1.0:
+			continue # already at the crossover: cannot change track any more
+		var other := PLATFORM_A if platform == PLATFORM_B else PLATFORM_B
+		_switch_terminal_platform(o, sid, other)
+		r["platform"] = other
+
+
 func _clear_wrong_track(tr: Dictionary) -> void:
 	var w_now: Dictionary = tr.get("w_sids", {})
 	if w_now.is_empty() or float(tr["speed_mps"]) > 0.05:

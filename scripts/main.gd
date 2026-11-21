@@ -1760,6 +1760,8 @@ func _do_throw_switch() -> void:
 			_show_toast("⚠ 前方道岔已被其他列车的进路占用，请在信号机前停车等待")
 		"locked":
 			_show_toast("⚠ 列车正在道岔上，道岔已锁闭不能扳动")
+		"trailing":
+			_show_toast("⚠ 前方道岔对本车是顺向（渡线从另一股道汇入），只能直向通过，不能扳向侧向")
 		_:
 			_show_toast("前方 260 m 内没有道岔")
 
