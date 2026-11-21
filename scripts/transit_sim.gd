@@ -1062,7 +1062,20 @@ func _step_ai_driver(
 			var doors_blocked := (door_r > 0.55 and int(tr.get("open_doorways", 0)) == 0)
 			can_close = (float(tr["dwell_timer"]) <= 0.0) and (onboard_left == 0 or doors_blocked or float(tr["dwell_elapsed"]) >= 50.0)
 		else:
-			can_close = (float(tr["dwell_timer"]) <= 0.0) and ((not more_waiting and not walkers_still_boarding) or float(tr["dwell_elapsed"]) >= 16.0)
+			# Keep the doors open as long as people are actually boarding: someone waiting on the platform, room
+			# on board and the last passenger in or out no more than BOARD_STALL_S ago. A stalled queue (e.g. no doorway lined
+			# up with the platform) does not hold the train; walkers already heading for a door are let in.
+			var elapsed := float(tr["dwell_elapsed"])
+			var brd := int(tr.get("st_boarded", 0)) + int(tr.get("st_alighted", 0)) # alighting first counts as progress too
+			if float(tr.get("ai_brd_t", 1e9)) > elapsed:
+				tr["ai_brd_t"] = 0.0 # new stop: give boarding BOARD_STALL_S to get going
+				tr["ai_brd_seen"] = brd
+			if brd != int(tr.get("ai_brd_seen", brd)):
+				tr["ai_brd_seen"] = brd
+				tr["ai_brd_t"] = elapsed
+			var boarding_on := more_waiting and elapsed - float(tr["ai_brd_t"]) < BOARD_STALL_S
+			var walkers_hold := walkers_still_boarding and elapsed < 90.0
+			can_close = (float(tr["dwell_timer"]) <= 0.0) and not boarding_on and not walkers_hold
 
 		if can_close and target_open:
 			tr["doors_target_open"] = false
@@ -2192,6 +2205,7 @@ func _update_terminal_interlocking() -> void:
 # still throw it by hand with G for special cases (manual_override), which automatic setting respects.
 # ---------------------------------------------------------------------------------------------
 const SW_SCAN_AHEAD := 170.0
+const BOARD_STALL_S := 6.0 # AI dwell: doors close once nobody has boarded for this long (or nobody is left / no room)
 const SW_SIGNAL_BACK := 12.0 # stop point: 2 m before the signal mast, which stands 10 m before the span
 
 func _sw_ready(tr: Dictionary) -> bool:
