@@ -12,6 +12,8 @@ const SEGMENTS := 10 # 5 rigid segments per half
 const THROW_SPEED := 0.25 # full throw in ~4s
 const SIG_RED := 0
 const SIG_GREEN := 1
+const MONO_SIGNAL_OUT := 2.05 # post axis from the guideway axis: car half-width 1.45 + 0.6 clearance
+const MONO_SIGNAL_ARM_DROP := 1.3 # arm runs below the car skirts (skirt bottom ~1.0 m under the beam top)
 
 var base_frames: Array[Transform3D] = [] # SEGMENTS+1 frames along the edge centreline over the span
 var seps: PackedFloat32Array = PackedFloat32Array()
@@ -119,7 +121,11 @@ func _apply() -> void:
 func _build_signal(f: Transform3D, lane: float, sep: float, facing: float) -> void:
 	var side := f.basis.x * lane # outward side of this guideway
 	var fwd := f.basis.z * facing # direction the lenses face
-	var base := f.origin + f.basis.x * (lane * sep) + side * (half_w + 0.35)
+	var lane_c := f.origin + f.basis.x * (lane * sep)
+	# Monorail: the post stands clear of the car body (2.9 m wide, skirts reach 1.45 m from the beam axis),
+	# held on an arm under the skirts; street tram masts stand on the ground beside the rails
+	var out := half_w + 0.35 if signals_only else MONO_SIGNAL_OUT
+	var base := lane_c + side * out
 	var dark := StandardMaterial3D.new()
 	dark.albedo_color = Color(0.08, 0.08, 0.09)
 	dark.roughness = 0.6
@@ -127,13 +133,21 @@ func _build_signal(f: Transform3D, lane: float, sep: float, facing: float) -> vo
 	var bb := BoxMesh.new()
 	var head_y := top + 1.05
 	if signals_only:
-		# Street tram signal: a mast standing on the ground beside the track
 		head_y = top + 3.1
 		bb.size = Vector3(0.14, head_y, 0.14)
 		bracket.position = base + Vector3.UP * (head_y * 0.5)
 	else:
-		bb.size = Vector3(0.12, 1.9, 0.12)
-		bracket.position = base + Vector3.UP * (top - 0.2)
+		var y0 := top - MONO_SIGNAL_ARM_DROP
+		var y1 := head_y - 0.3
+		bb.size = Vector3(0.12, y1 - y0 + 0.06, 0.12)
+		bracket.position = base + Vector3.UP * ((y0 + y1) * 0.5)
+		var arm := MeshInstance3D.new()
+		var ab := BoxMesh.new()
+		ab.size = Vector3(out - half_w + 0.06, 0.12, 0.16)
+		arm.mesh = ab
+		arm.material_override = dark
+		arm.transform = Transform3D(f.basis.orthonormalized(), lane_c + side * ((out + half_w) * 0.5) + Vector3.UP * y0)
+		add_child(arm)
 	bracket.mesh = bb
 	bracket.material_override = dark
 	add_child(bracket)
