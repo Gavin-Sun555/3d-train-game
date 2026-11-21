@@ -1066,7 +1066,7 @@ func compile_line_route(line_dict: Dictionary, b_platform_sids: Dictionary = {},
 
 	var raw_arr: Array = []
 	for p: Vector3 in all_pts:
-		raw_arr.append([p.x, p.y, p.z])
+		raw_arr.append([p.x, p.y + Terrain.surface(p.x, p.z), p.z]) # trains run over the real ground
 
 	var curve := TrackBuilder.create_smooth_curve(raw_arr, is_loop)
 	var total_len := curve.get_baked_length()
@@ -1079,7 +1079,8 @@ func compile_line_route(line_dict: Dictionary, b_platform_sids: Dictionary = {},
 	for idx in range(stop_count):
 		var sid := sids[idx]
 		var st: Dictionary = stations[sid]
-		var s_off := curve.get_closest_offset(stop_pts[idx])
+		var sp_l: Vector3 = stop_pts[idx]
+		var s_off := curve.get_closest_offset(sp_l + Vector3(0.0, Terrain.surface(sp_l.x, sp_l.z), 0.0)) # curve is on the ground
 		var cusp_off := s_off
 		var stop_back := 0.0
 		if is_turnback[idx]:

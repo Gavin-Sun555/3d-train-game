@@ -16,7 +16,9 @@ static func build_city(
 	var sx: float = (float(bounds[2]) - float(bounds[0])) + 620.0
 	var sz: float = (float(bounds[3]) - float(bounds[1])) + 620.0
 
-	# 1. Brushed expansion-joint concrete sidewalk ground slab
+	# 1. Brushed expansion-joint concrete sidewalk ground slab (the real terrain where there is elevation data)
+	if Terrain.active:
+		Terrain.build_ground(parent, bounds, sidewalk_mat)
 	var ground_mi := MeshInstance3D.new()
 	ground_mi.name = "UrbanSidewalkBase"
 	var g_mesh := PlaneMesh.new()
@@ -25,14 +27,18 @@ static func build_city(
 	ground_mi.position = Vector3(cx, -0.01, cz)
 	ground_mi.material_override = sidewalk_mat
 	ground_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	parent.add_child(ground_mi)
+	if not Terrain.active:
+		parent.add_child(ground_mi)
+	else:
+		ground_mi.free()
 
 	# Big maps (Seattle v4): only the core is built here; the outer map streams in as CityTiles
 	var full_data := map_data
 	map_data = CityTiles.core_subset(map_data)
 
-	# 2. Plazas, brick squares, parks & water (whole map: cheap flat fills)
-	_build_areas(parent, full_data.get("areas", []))
+	# 2. Plazas, brick squares, parks & water: water for the whole map (flat sheets), the rest for the core;
+	#    the outer map's lawns / plazas are filled in by their tiles
+	_build_areas(parent, map_data.get("fill_areas", full_data.get("areas", [])))
 
 	# 3. Realistic weathered asphalt streets, 3D granite curbs, lane dashes & crosswalks
 	_build_roads_and_curbs(parent, map_data.get("roads", []), map_data.get("crosswalks", []), road_mat)
@@ -74,6 +80,8 @@ static func build_city(
 		park_data["areas"] = map_data["park_areas"]
 	ParkLandscapeBuilder.build_all_parks_and_trees(parent, park_data, lm_info["lights"], globe_mat)
 
+	# 8. Real terrain: put everything built above on the ground (buildings / water already placed)
+	Terrain.drape_subtree(parent)
 	return lm_info
 
 
@@ -87,6 +95,7 @@ static func rebuild_road_layer(parent: Node3D, roads: Array, crosswalks: Array, 
 	if parent.has_meta("last_bays_sig"):
 		parent.remove_meta("last_bays_sig")
 	_build_roads_and_curbs(parent, roads, crosswalks, road_mat)
+	Terrain.drape_subtree(parent)
 
 
 # Player edits: rebuild the generic buildings and their shopfronts (demolished ones have no footprint).
@@ -98,7 +107,9 @@ static func rebuild_building_layer(parent: Node3D, buildings: Array, storefronts
 			parent.remove_child(old)
 			old.queue_free()
 	_build_buildings(parent, buildings, building_mat)
-	return StorefrontBuilder.build_storefronts(parent, storefronts, buildings)
+	var sm := StorefrontBuilder.build_storefronts(parent, storefronts, buildings)
+	Terrain.drape_subtree(parent)
+	return sm
 
 
 static func _clean_poly(raw_pts: Array) -> PackedVector2Array:
@@ -136,14 +147,40 @@ static func _build_areas(parent: Node3D, areas: Array) -> void:
 	_emit_area_group(parent, "BrickPlazas", buckets["brick"], 0.034, Color(0.45, 0.27, 0.22), 0.84, 0.0)
 
 
+# Flat triangle; with terrain, split until no edge is longer than 10 m so the later drape bends it over the ground
+static var _tess_flat := false # water: stays one flat sheet
+
+static func _tri_out(st: SurfaceTool, a: Vector2, b: Vector2, c: Vector2, y: float) -> void:
+	if Terrain.active and not _tess_flat:
+		var lab := a.distance_squared_to(b)
+		var lbc := b.distance_squared_to(c)
+		var lca := c.distance_squared_to(a)
+		var lm := maxf(lab, maxf(lbc, lca))
+		if lm > 256.0:
+			if lm == lab:
+				var m := (a + b) * 0.5
+				_tri_out(st, a, m, c, y)
+				_tri_out(st, m, b, c, y)
+			elif lm == lbc:
+				var m2 := (b + c) * 0.5
+				_tri_out(st, a, b, m2, y)
+				_tri_out(st, a, m2, c, y)
+			else:
+				var m3 := (c + a) * 0.5
+				_tri_out(st, a, b, m3, y)
+				_tri_out(st, m3, b, c, y)
+			return
+	for rp: Vector2 in [a, b, c]:
+		st.set_normal(Vector3.UP)
+		st.add_vertex(Vector3(rp.x, y, rp.y))
+
+
 static func _append_triangulated_poly(st: SurfaceTool, poly: PackedVector2Array, y_level: float) -> int:
 	var idx := Geometry2D.triangulate_polygon(poly)
 	if not idx.is_empty():
 		var n_tri := 0
 		for i in range(0, idx.size(), 3):
-			for rp: Vector2 in [poly[idx[i]], poly[idx[i + 1]], poly[idx[i + 2]]]:
-				st.set_normal(Vector3.UP)
-				st.add_vertex(Vector3(rp.x, y_level, rp.y))
+			_tri_out(st, poly[idx[i]], poly[idx[i + 1]], poly[idx[i + 2]], y_level)
 			n_tri += 1
 		return n_tri
 	# Fallback for self-touching / clipped OSM water & park polygons (e.g., Lake Union!):
@@ -159,15 +196,11 @@ static func _append_triangulated_poly(st: SurfaceTool, poly: PackedVector2Array,
 			for np: PackedVector2Array in nudged:
 				var nidx := Geometry2D.triangulate_polygon(np)
 				for i in range(0, nidx.size(), 3):
-					for rp: Vector2 in [np[nidx[i]], np[nidx[i + 1]], np[nidx[i + 2]]]:
-						st.set_normal(Vector3.UP)
-						st.add_vertex(Vector3(rp.x, y_level, rp.y))
+					_tri_out(st, np[nidx[i]], np[nidx[i + 1]], np[nidx[i + 2]], y_level)
 					total_tri += 1
 			continue
 		for i in range(0, sidx.size(), 3):
-			for rp: Vector2 in [sub[sidx[i]], sub[sidx[i + 1]], sub[sidx[i + 2]]]:
-				st.set_normal(Vector3.UP)
-				st.add_vertex(Vector3(rp.x, y_level, rp.y))
+			_tri_out(st, sub[sidx[i]], sub[sidx[i + 1]], sub[sidx[i + 2]], y_level)
 			total_tri += 1
 	return total_tri
 
@@ -186,15 +219,22 @@ static func _emit_area_group(
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var tri_count := 0
+	var is_water := node_name == "WaterAreas"
+	_tess_flat = is_water
 	for a in list:
 		var poly := _clean_poly(a.get("pts", []))
 		if poly.size() < 3:
 			continue
-		tri_count += _append_triangulated_poly(st, poly, y_level)
+		# water sits flat at its own lake / sea level (terrain); everything else is draped afterwards
+		var y_use := y_level + (float(a.get("_level", 0.0)) if (is_water and Terrain.active) else 0.0)
+		tri_count += _append_triangulated_poly(st, poly, y_use)
+	_tess_flat = false
 	if tri_count == 0:
 		return
 	var mi := MeshInstance3D.new()
 	mi.name = node_name
+	if is_water:
+		mi.set_meta("on_terrain", true)
 	mi.mesh = st.commit()
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = col
@@ -275,6 +315,15 @@ static func _build_roads_and_curbs(
 	# junctions, kerbs and sidewalk widths, and are built by their own tile.
 	if emit_n < 0:
 		emit_n = roads.size()
+	var kerb_src := roads # kerbs sample every 0.5 m anyway: they keep the original polylines
+	if Terrain.active:
+		# short segments so the draped carriageway and its lines follow the slope
+		var dense: Array = []
+		for r0: Dictionary in roads:
+			var rd := r0.duplicate()
+			rd["pts"] = Terrain.densify(r0.get("pts", []), 10.0)
+			dense.append(rd)
+		roads = dense
 	var road_st := SurfaceTool.new()
 	road_st.begin(Mesh.PRIMITIVE_TRIANGLES)
 
@@ -425,10 +474,10 @@ static func _build_roads_and_curbs(
 		road_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(road_mi)
 
-	parent.set_meta("kerb_roads", roads)
+	parent.set_meta("kerb_roads", kerb_src)
 	parent.set_meta("kerb_emit_n", emit_n)
 	parent.set_meta("road_mat", road_mat)
-	_build_kerbs(parent, roads, [], road_mat)
+	_build_kerbs(parent, kerb_src, [], road_mat)
 
 	if has_mark:
 		var mark_mi := MeshInstance3D.new()
@@ -522,13 +571,34 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 
 	var b_idx := 0
 	var any_geom := false
+	# Terrain: every building is built into its own small tools, then appended to the batch raised onto the
+	# lowest ground under its footprint (rigid: level roofs, walls reaching down into the slope)
+	var acc_st := Terrain.acc_new()
+	var acc_fr := Terrain.acc_new()
+	var acc_rf := Terrain.acc_new()
+	var cur_y0 := 0.0
+	var pending := false
 
 	for b in buildings:
+		if pending:
+			Terrain.acc_add(acc_st, st, cur_y0)
+			Terrain.acc_add(acc_fr, frame_st, cur_y0)
+			Terrain.acc_add(acc_rf, roof_st, cur_y0)
+			pending = false
+			st = SurfaceTool.new()
+			st.begin(Mesh.PRIMITIVE_TRIANGLES)
+			frame_st = SurfaceTool.new()
+			frame_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+			roof_st = SurfaceTool.new()
+			roof_st.begin(Mesh.PRIMITIVE_TRIANGLES)
 		var poly := _clean_poly(b.get("pts", []))
 		if poly.size() < 3:
 			continue
 		if str(b.get("lm", "")) in SeattleV2Landmarks.SKIP_GENERIC:
 			continue # built as a dedicated landmark model
+		cur_y0 = Terrain.base_under(poly)
+		b["_y0"] = cur_y0
+		pending = true
 		var h: float = clampf(float(b.get("h", 14.0)), 5.0, 185.0)
 		var style: int = clampi(int(b.get("style", 2)), 0, 3)
 		# Real-world look for named OSM buildings (landmark facades, recorded building colours)
@@ -681,14 +751,23 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 			if h >= 82.0:
 				LandmarksBuilder._add_beacon(
 					roof_props,
-					Vector3(center2.x, h + ph + 1.2, center2.y),
+					Vector3(center2.x, h + ph + 1.2 + cur_y0, center2.y),
 					beacon_mat
 				)
 
+	if pending:
+		Terrain.acc_add(acc_st, st, cur_y0)
+		Terrain.acc_add(acc_fr, frame_st, cur_y0)
+		Terrain.acc_add(acc_rf, roof_st, cur_y0)
+	roof_props.set_meta("on_terrain", true)
+	any_geom = any_geom and not Terrain.acc_empty(acc_st)
+	has_roofs = has_roofs and not Terrain.acc_empty(acc_rf)
+	has_frames = has_frames and not Terrain.acc_empty(acc_fr)
 	if any_geom:
 		var b_mi := MeshInstance3D.new()
 		b_mi.name = "Buildings"
-		b_mi.mesh = st.commit()
+		b_mi.set_meta("on_terrain", true)
+		b_mi.mesh = Terrain.acc_mesh(acc_st)
 		b_mi.material_override = building_mat
 		b_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 		parent.add_child(b_mi)
@@ -696,7 +775,8 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 	if has_roofs:
 		var r_mi := MeshInstance3D.new()
 		r_mi.name = "HouseRoofs"
-		r_mi.mesh = roof_st.commit()
+		r_mi.set_meta("on_terrain", true)
+		r_mi.mesh = Terrain.acc_mesh(acc_rf)
 		var r_mat := StandardMaterial3D.new()
 		r_mat.vertex_color_use_as_albedo = true
 		r_mat.roughness = 0.92
@@ -709,7 +789,8 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 	if has_frames:
 		var f_mi := MeshInstance3D.new()
 		f_mi.name = "BuildingFrames3D"
-		f_mi.mesh = frame_st.commit()
+		f_mi.set_meta("on_terrain", true)
+		f_mi.mesh = Terrain.acc_mesh(acc_fr)
 		var f_mat := StandardMaterial3D.new()
 		f_mat.vertex_color_use_as_albedo = true
 		f_mat.roughness = 0.76
@@ -1657,6 +1738,7 @@ static func apply_station_bays(city_root: Node3D, bays: Array) -> void:
 		return
 	city_root.set_meta("last_bays_sig", sig)
 	_build_kerbs(city_root, city_root.get_meta("kerb_roads"), bays, city_root.get_meta("road_mat"))
+	Terrain.drape_subtree(city_root)
 
 
 # Station bays that touch a tile (its kerbs are only rebuilt when one of these changes)

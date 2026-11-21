@@ -61,6 +61,12 @@ static func build_details(parent: Node3D, buildings: Array, roads: Array) -> voi
 	labels.name = "LandmarkLettering"
 	parent.add_child(labels)
 	var any := false
+	# Each building's details are built apart and raised with it (terrain: rigid at the building's base)
+	var acc_f := Terrain.acc_new()
+	var acc_g := Terrain.acc_new()
+	labels.set_meta("on_terrain", true)
+	var main_f := fst
+	var main_g := gst
 	for b: Dictionary in buildings:
 		var lm := str(b.get("lm", ""))
 		if lm == "":
@@ -68,6 +74,12 @@ static func build_details(parent: Node3D, buildings: Array, roads: Array) -> voi
 		var poly := _poly(b)
 		if poly.size() < 3:
 			continue
+		var y0 := float(b.get("_y0", Terrain.base_under(poly)))
+		fst = SurfaceTool.new()
+		fst.begin(Mesh.PRIMITIVE_TRIANGLES)
+		gst = SurfaceTool.new()
+		gst.begin(Mesh.PRIMITIVE_TRIANGLES)
+		var n_lab := labels.get_child_count()
 		var h := float(b.get("h", 12.0))
 		var o: Dictionary = override_for(b)
 		if not o.is_empty() and float(o["h"]) > 0.0:
@@ -89,11 +101,20 @@ static func build_details(parent: Node3D, buildings: Array, roads: Array) -> voi
 		if TOWER_LOOKS.has(lm):
 			_tower_overlay(fst, poly, h, lm)
 			any = true
-	if not any:
+		Terrain.acc_add(acc_f, fst, y0)
+		Terrain.acc_add(acc_g, gst, y0)
+		for li in range(n_lab, labels.get_child_count()):
+			var ln := labels.get_child(li)
+			if ln is Node3D:
+				(ln as Node3D).position.y += y0
+	fst = main_f
+	gst = main_g
+	if not any or Terrain.acc_empty(acc_f):
 		return
 	var f_mi := MeshInstance3D.new()
 	f_mi.name = "LandmarkFacadeDetails"
-	f_mi.mesh = fst.commit()
+	f_mi.set_meta("on_terrain", true)
+	f_mi.mesh = Terrain.acc_mesh(acc_f)
 	var f_mat := StandardMaterial3D.new()
 	f_mat.vertex_color_use_as_albedo = true
 	f_mat.roughness = 0.45
@@ -103,7 +124,8 @@ static func build_details(parent: Node3D, buildings: Array, roads: Array) -> voi
 	parent.add_child(f_mi)
 	var g_mi := MeshInstance3D.new()
 	g_mi.name = "LandmarkGlazing"
-	g_mi.mesh = gst.commit()
+	g_mi.set_meta("on_terrain", true)
+	g_mi.mesh = Terrain.acc_mesh(acc_g) if not Terrain.acc_empty(acc_g) else ArrayMesh.new()
 	var g_mat := StandardMaterial3D.new()
 	g_mat.albedo_color = Color(0.30, 0.42, 0.44, 0.55)
 	g_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA

@@ -304,6 +304,7 @@ static func build_detailed_station(
 	# Top of the stairs / ramp: where arriving passengers step onto the platform deck
 	var plat_entry := tf * Vector3(stair_x if elevated else plat_cx, plat_h, plat_len * 0.5 - 0.6)
 
+	st_node.set_meta("drape_vertices", true) # long platform: bends with the ground (Terrain)
 	return {
 		"station_id": sid,
 		"name": st_name,

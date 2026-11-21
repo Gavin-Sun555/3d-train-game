@@ -345,6 +345,7 @@ func _async_startup_load() -> void:
 	var preset: Dictionary = MAP_PRESETS["seattle"]
 	_current_map_key = "seattle"
 	_map_data = _read_json(str(preset["data_path"]))
+	Terrain.load_for("seattle", _map_data.get("areas", [])) # real ground (elevation data)
 	var bounds: Array = _map_data.get("bounds", [-520.0, -520.0, 520.0, 520.0])
 	_pan_limit_x = maxf(absf(float(bounds[0])), absf(float(bounds[2]))) + 80.0
 	_pan_limit_z = maxf(absf(float(bounds[1])), absf(float(bounds[3]))) + 80.0
@@ -430,6 +431,7 @@ func _load_map_world(map_key: String, use_starter: bool, seed_pax: bool) -> void
 	_current_map_key = next_key
 	if not same_city:
 		_map_data = _read_json(str(preset["data_path"]))
+		Terrain.load_for(next_key, _map_data.get("areas", [])) # real ground where the map has elevation data
 
 	var bounds: Array = _map_data.get("bounds", [-520.0, -520.0, 520.0, 520.0])
 	_pan_limit_x = maxf(absf(float(bounds[0])), absf(float(bounds[2]))) + 80.0
@@ -888,6 +890,7 @@ func _rebuild_tracks_and_operations(seed_pax: bool = false) -> void:
 		_grass_track_mat
 	)
 	_station_views = built["stations"]
+	_put_tracks_on_terrain()
 	_sync_landmark_monorail()
 	CityBuilder.apply_track_clearance(_city_root, _graph.get_meta("track_clear_idx", {}), _graph.get_meta("station_bays", []))
 	CityBuilder.apply_station_bays(_city_root, _graph.get_meta("station_bays", []))
@@ -2033,13 +2036,20 @@ func _track_preview_width() -> float:
 func _screen_to_ground_xz(screen_pos: Vector2) -> Variant:
 	var orig := _camera.project_ray_origin(screen_pos)
 	var dir := _camera.project_ray_normal(screen_pos)
-	if absf(dir.y) < 0.001:
+	var hit = Terrain.raycast(orig, dir) # the real ground (a plane at 0 on flat maps)
+	if hit == null:
 		return null
-	var t := -orig.y / dir.y
-	if t <= 0.0:
-		return null
-	var hit := orig + dir * t
-	return Vector2(hit.x, hit.z)
+	return Vector2((hit as Vector3).x, (hit as Vector3).z)
+
+
+# Tracks, platforms and stations onto the real ground; station passenger points with them
+func _put_tracks_on_terrain() -> void:
+	if not Terrain.active:
+		return
+	Terrain.drape_subtree(_track_root)
+	for sv in _station_views.values():
+		if sv is Dictionary:
+			Terrain.lift_station_view(sv)
 
 
 func _update_build_hover_preview(screen_pos: Vector2) -> void:
@@ -2446,6 +2456,7 @@ func _rebuild_tracks_only_visual() -> void:
 		_grass_track_mat
 	)
 	_station_views = built["stations"]
+	_put_tracks_on_terrain()
 	_sync_landmark_monorail()
 	CityBuilder.apply_track_clearance(_city_root, _graph.get_meta("track_clear_idx", {}), _graph.get_meta("station_bays", []))
 	CityBuilder.apply_station_bays(_city_root, _graph.get_meta("station_bays", []))
@@ -2731,6 +2742,9 @@ func _set_cam_mode(mode: int) -> void:
 
 func _update_camera(dt: float) -> void:
 	if _game_mode != GameMode.RUN or _cam_mode == CamMode.BIRD or _transit_sim.trams.is_empty():
+		# the bird's-eye view looks at the real ground under its target
+		var gy := Terrain.surface(_plan_target.x, _plan_target.z)
+		_plan_target.y = gy if _snap_camera_next else lerpf(_plan_target.y, gy, minf(1.0, dt * 6.0))
 		var cam_pos := _plan_target + Vector3(0.0, _plan_height, _plan_height * 0.20)
 		if _snap_camera_next:
 			_camera.global_position = cam_pos
@@ -2786,6 +2800,7 @@ func _update_camera(dt: float) -> void:
 		var offset := Vector3(sin(total_yaw) * horiz, sin(_orbit_pitch) * _orbit_dist, cos(total_yaw) * horiz)
 		var desired_pos := focus + offset
 		desired_pos.y = maxf(desired_pos.y, focus.y - 1.2)
+		desired_pos.y = maxf(desired_pos.y, Terrain.surface(desired_pos.x, desired_pos.z) + 1.5) # never inside a hill
 		if _snap_camera_next:
 			_camera.global_position = desired_pos
 			_snap_camera_next = false
@@ -2806,6 +2821,13 @@ func _set_ribbon_preview(mi: MeshInstance3D, edge_ids: Array[int], col: Color, w
 		if not _graph.edges.has(eid):
 			continue
 		var pts: Array = _graph.edges[eid]["pts"]
+		if Terrain.active:
+			var dense: Array = []
+			for p2: Vector2 in pts:
+				dense.append([p2.x, p2.y])
+			pts = []
+			for q in Terrain.densify(dense, 6.0):
+				pts.append(Vector2(float(q[0]), float(q[1])))
 		for i in range(pts.size() - 1):
 			var a: Vector2 = pts[i]
 			var b: Vector2 = pts[i + 1]
@@ -2825,7 +2847,7 @@ func _set_ribbon_preview(mi: MeshInstance3D, edge_ids: Array[int], col: Color, w
 				st.set_normal(Vector3.UP)
 				st.add_vertex(v)
 	mi.global_transform = Transform3D.IDENTITY
-	mi.mesh = st.commit()
+	mi.mesh = Terrain.drape_mesh(st.commit()) if Terrain.active else st.commit()
 	mi.material_override = _translucent_mat(col)
 
 
@@ -2833,7 +2855,7 @@ func _set_point_box_preview(mi: MeshInstance3D, pos: Vector3, sz: Vector3, col: 
 	var b := BoxMesh.new()
 	b.size = sz
 	mi.mesh = b
-	mi.global_transform = Transform3D(Basis.IDENTITY, pos)
+	mi.global_transform = Transform3D(Basis.IDENTITY, pos + Vector3(0.0, Terrain.surface(pos.x, pos.z), 0.0))
 	mi.material_override = _translucent_mat(col)
 
 
@@ -2841,7 +2863,7 @@ func _set_oriented_box_preview(mi: MeshInstance3D, pos: Vector3, fwd: Vector3, s
 	var b := BoxMesh.new()
 	b.size = sz
 	mi.mesh = b
-	mi.global_transform = Transform3D(Basis.looking_at(fwd, Vector3.UP), pos)
+	mi.global_transform = Transform3D(Basis.looking_at(fwd, Vector3.UP), pos + Vector3(0.0, Terrain.surface(pos.x, pos.z), 0.0))
 	mi.material_override = _translucent_mat(col)
 
 
@@ -4836,7 +4858,7 @@ func _update_draft_route_preview() -> void:
 		]:
 			st.set_normal(Vector3.UP)
 			st.add_vertex(v)
-	_route_preview_mi.mesh = st.commit()
+	_route_preview_mi.mesh = Terrain.drape_mesh(st.commit()) if Terrain.active else st.commit()
 	_route_preview_mi.material_override = _translucent_mat(Color(0.18, 0.72, 1.0, 0.85))
 
 

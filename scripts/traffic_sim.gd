@@ -312,6 +312,7 @@ func _build_intersection_signals(graph: NetworkGraph) -> void:
 	# Signal heads are small: thousands of them on the big map, so they are only drawn near the camera
 	for gi in sig_holder.find_children("*", "GeometryInstance3D", true, false):
 		(gi as GeometryInstance3D).visibility_range_end = 380.0
+	Terrain.drape_subtree(sig_holder)
 	track_sig_ids.clear()
 	for nid2: int in signals.keys():
 		if bool((signals[nid2] as Dictionary)["has_track"]):
@@ -599,7 +600,7 @@ func step_traffic(
 				if secs_t.is_empty():
 					continue
 				var s0 := secs_t[0] as Node3D
-				var d_j := s0.global_position.distance_to(jp3)
+				var d_j := _flat(s0.global_position).distance_to(jp3)
 				if d_j > 6.5 and d_j < 24.0:
 					var tfwd := -s0.global_transform.basis.z
 					var is_a := (absf(Vector2(tfwd.x, tfwd.z).normalized().dot(sig["axis"] as Vector2)) >= 0.65)
@@ -711,7 +712,7 @@ func step_traffic(
 			for sec: Node3D in secs_chk:
 				if not is_instance_valid(sec):
 					continue
-				var dv_t := sec.global_position - c_pos
+				var dv_t := _flat(sec.global_position) - _flat(c_pos)
 				var d2_t := dv_t.length_squared()
 				if d2_t > 1225.0:
 					continue
@@ -829,7 +830,19 @@ func step_traffic(
 			c2["vis_pos"] = nxt
 			var vf := (c2["vis_fwd"] as Vector3).lerp(tf_, k)
 			c2["vis_fwd"] = vf.normalized() if vf.length_squared() > 1e-4 else tf_
-		mi2.global_transform = Transform3D(Basis.looking_at(c2["vis_fwd"], Vector3.UP), c2["vis_pos"])
+		# Shown on the real ground (the traffic simulation itself runs on the flat street plan), pitched to the slope
+		var vp2: Vector3 = c2["vis_pos"]
+		var vf2: Vector3 = c2["vis_fwd"]
+		var gy := Terrain.surface(vp2.x, vp2.z)
+		var look := vf2
+		if Terrain.active:
+			var dh := Terrain.surface(vp2.x + vf2.x * 2.0, vp2.z + vf2.z * 2.0) - Terrain.surface(vp2.x - vf2.x * 2.0, vp2.z - vf2.z * 2.0)
+			look = (Vector3(vf2.x, 0.0, vf2.z).normalized() * 4.0 + Vector3(0.0, dh, 0.0)).normalized()
+		mi2.global_transform = Transform3D(Basis.looking_at(look, Vector3.UP), vp2 + Vector3(0.0, gy, 0.0))
+
+
+static func _flat(v: Vector3) -> Vector3:
+	return Vector3(v.x, 0.0, v.z)
 
 
 static func _would_car_invade_tram_shield(car_pos: Vector3, car_fwd: Vector3, trams: Array[Dictionary], pad: float) -> bool:
@@ -843,8 +856,8 @@ static func _would_car_invade_tram_shield(car_pos: Vector3, car_fwd: Vector3, tr
 		for sec: Node3D in secs:
 			if not is_instance_valid(sec):
 				continue
-			var spos := sec.global_position
-			if spos.distance_squared_to(car_pos) > 120.0:
+			var spos := _flat(sec.global_position)
+			if spos.distance_squared_to(_flat(car_pos)) > 120.0:
 				continue
 			var sfwd := -sec.global_transform.basis.z
 			if obb_overlap_2d(Vector2(spos.x, spos.z), Vector2(sfwd.x, sfwd.z).normalized(), sec_hl, sec_hw, c2, cf2, CAR_HALF_LEN + 0.25, CAR_HALF_WID + 0.20):
@@ -857,7 +870,7 @@ static func _is_any_tram_occupying_point(trams: Array[Dictionary], pt: Vector3, 
 	for tr: Dictionary in trams:
 		var secs: Array = tr["tram_info"]["sections"]
 		for sec: Node3D in secs:
-			if is_instance_valid(sec) and sec.global_position.distance_squared_to(pt) <= r2:
+			if is_instance_valid(sec) and _flat(sec.global_position).distance_squared_to(_flat(pt)) <= r2:
 				return true
 	return false
 

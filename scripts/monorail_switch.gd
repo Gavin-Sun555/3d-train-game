@@ -98,6 +98,25 @@ func _lat(i: int, half: int, k: float) -> float:
 	return base + k * (_diverge_lat(i) - base)
 
 
+# Real terrain (Terrain.drape_subtree): the moving beams are re-posed from base_frames every frame, so the
+# frames themselves go onto the ground; signal heads and other fixed parts move as wholes.
+func terrain_drape() -> void:
+	var moving := {}
+	for m in _segs:
+		moving[m] = true
+	for r in _rails:
+		moving[r] = true
+	for ch in get_children():
+		if ch is Node3D and not moving.has(ch):
+			var n3 := ch as Node3D
+			n3.position.y += Terrain.surface(n3.position.x, n3.position.z)
+	for i in range(base_frames.size()):
+		var f: Transform3D = base_frames[i]
+		f.origin.y += Terrain.surface(f.origin.x, f.origin.z)
+		base_frames[i] = f
+	_apply()
+
+
 func _apply() -> void:
 	if _segs.is_empty():
 		return

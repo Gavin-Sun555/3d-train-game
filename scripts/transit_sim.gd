@@ -1883,7 +1883,7 @@ func _find_station_at_current_pos(tr: Dictionary) -> Dictionary:
 	for i in range(stops.size()):
 		var st_pos: Vector3 = stops[i]["pos"]
 		for sec: Node3D in secs:
-			if is_instance_valid(sec) and sec.global_position.distance_to(st_pos) <= 21.0:
+			if is_instance_valid(sec) and Vector2(sec.global_position.x - st_pos.x, sec.global_position.z - st_pos.z).length() <= 21.0:
 				return {"station_id": int(stops[i]["station_id"]), "stop_idx": i}
 
 	return {"station_id": -1, "stop_idx": -1}

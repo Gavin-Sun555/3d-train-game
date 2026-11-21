@@ -21,6 +21,10 @@ var _task_id := -1
 var _task_key := Vector2i.ZERO
 var _task_sig := 0
 var _task_result: Node3D = null
+# Real terrain: a finished tile is draped on the main thread (reading meshes back from the RenderingServer is
+# instant there, but waits a frame per call on a worker), a few milliseconds per frame, then swapped in
+var _drape := {} # {"key", "node", "sig", "queue": Array[Node]} while one is in progress
+const DRAPE_BUDGET_MS := 4.0
 
 
 static func has_tiles(map_data: Dictionary) -> bool:
@@ -96,6 +100,11 @@ static func core_subset(map_data: Dictionary) -> Dictionary:
 		if cr.has_point(_poly_centre(a.get("pts", []))):
 			park_areas.append(a)
 	d["park_areas"] = park_areas
+	var fills: Array = []
+	for a2: Dictionary in map_data.get("areas", []):
+		if str(a2.get("kind", "")) == "water" or cr.has_point(_poly_centre(a2.get("pts", []))):
+			fills.append(a2)
+	d["fill_areas"] = fills
 	var piers: Array = []
 	for pr: Dictionary in map_data.get("piers", []):
 		if cr.has_point(_poly_centre(pr.get("pts", []))):
@@ -136,7 +145,7 @@ func _cut_tiles(map_data: Dictionary) -> Dictionary:
 	var get_t := func(key: Vector2i) -> Dictionary:
 		if not cuts.has(key):
 			cuts[key] = {"key": key, "buildings": [], "storefronts": [], "roads": [], "context": [], "crosswalks": [],
-				"streetlamps": [], "trees": [], "areas": [], "piers": []}
+				"streetlamps": [], "trees": [], "areas": [], "piers": [], "fills": []}
 		return cuts[key]
 	# Buildings (local indices; storefronts follow their building)
 	var blds: Array = map_data.get("buildings", [])
@@ -240,6 +249,8 @@ func _cut_tiles(map_data: Dictionary) -> Dictionary:
 		if cr.has_point(ac):
 			continue
 		var kind := str(a.get("kind", ""))
+		if kind != "water":
+			(get_t.call(_tile_of(ac))["fills"] as Array).append(a)
 		if kind in ["park", "grass", "wood", "meadow", "garden"]:
 			(get_t.call(_tile_of(ac))["areas"] as Array).append(a)
 	for pr: Dictionary in map_data.get("piers", []):
@@ -276,7 +287,7 @@ static func _data_sig(td: Dictionary) -> int:
 		h = hash([h, _road_key(r), int(r.get("lanes_f", 1)), int(r.get("lanes_b", 1)), int(r.get("lv", 0))])
 	for r2: Dictionary in td["context"]:
 		h = hash([h, _road_key(r2)])
-	h = hash([h, (td["crosswalks"] as Array).size(), (td["storefronts"] as Array).size(), (td["streetlamps"] as Array).size(), (td["piers"] as Array).size()])
+	h = hash([h, (td["crosswalks"] as Array).size(), (td["storefronts"] as Array).size(), (td["streetlamps"] as Array).size(), (td["piers"] as Array).size(), (td["fills"] as Array).size()])
 	return h
 
 
@@ -294,6 +305,8 @@ static func build_tile_node(td: Dictionary, mats: Dictionary) -> Node3D:
 	var key: Vector2i = td["key"]
 	var root := Node3D.new()
 	root.name = "Tile_%d_%d" % [key.x, key.y]
+	if not (td["fills"] as Array).is_empty():
+		CityBuilder._build_areas(root, td["fills"]) # lawns, plazas, parking, playing fields of this tile
 	var blds: Array = td["buildings"]
 	if not blds.is_empty():
 		CityBuilder._build_buildings(root, blds, mats["building"])
@@ -357,8 +370,10 @@ func _thread_build(td: Dictionary) -> void:
 
 # Called every frame by main: finish the tile in flight, then start the nearest tile that needs building
 func step() -> void:
+	if not _drape.is_empty():
+		_drape_step()
 	if _task_id >= 0:
-		if not WorkerThreadPool.is_task_completed(_task_id):
+		if not WorkerThreadPool.is_task_completed(_task_id) or not _drape.is_empty():
 			return
 		WorkerThreadPool.wait_for_task_completion(_task_id)
 		_task_id = -1
@@ -395,6 +410,41 @@ func _install(key: Vector2i, node: Node3D, sig: int) -> void:
 	if not _tiles.has(key):
 		node.queue_free()
 		return
+	if Terrain.active and not node.has_meta("on_terrain"):
+		# put it on the ground first (hidden, over the next frames), then swap it in
+		node.visible = false
+		add_child(node)
+		var q: Array = []
+		for ch in node.get_children():
+			q.append(ch)
+		_drape = {"key": key, "node": node, "sig": sig, "queue": q}
+		return
+	_swap_in(key, node, sig)
+
+
+func _drape_step(budget_ms: float = DRAPE_BUDGET_MS) -> void:
+	var t0 := Time.get_ticks_usec()
+	var q: Array = _drape["queue"]
+	while not q.is_empty() and float(Time.get_ticks_usec() - t0) < budget_ms * 1000.0:
+		var ch: Node = q.pop_front()
+		if is_instance_valid(ch):
+			Terrain._drape_node(ch, Transform3D.IDENTITY)
+	if q.is_empty():
+		var node: Node3D = _drape["node"]
+		var key: Vector2i = _drape["key"]
+		var sig: int = _drape["sig"]
+		_drape = {}
+		node.set_meta("on_terrain", true)
+		if is_instance_valid(node):
+			remove_child(node)
+			_swap_in(key, node, sig)
+
+
+func _swap_in(key: Vector2i, node: Node3D, sig: int) -> void:
+	if not _tiles.has(key):
+		node.queue_free()
+		return
+	node.visible = true
 	var t: Dictionary = _tiles[key]
 	if is_instance_valid(t.get("node")):
 		(t["node"] as Node).queue_free()
@@ -407,11 +457,15 @@ func _install(key: Vector2i, node: Node3D, sig: int) -> void:
 
 # Waits for the tile in flight (before the main thread touches shared builder caches, or for tests)
 func finish_pending() -> void:
+	if not _drape.is_empty():
+		_drape_step(1e9)
 	if _task_id >= 0:
 		WorkerThreadPool.wait_for_task_completion(_task_id)
 		_task_id = -1
 		_install(_task_key, _task_result, _task_sig)
 		_task_result = null
+	if not _drape.is_empty():
+		_drape_step(1e9)
 
 
 # Builds every remaining tile right now on the calling thread (headless tests / screenshots)
@@ -423,6 +477,8 @@ func build_all_now() -> void:
 			break
 		var t: Dictionary = _tiles[key]
 		_install(key, build_tile_node(t["data"], _mats), int(t["sig"]))
+		if not _drape.is_empty():
+			_drape_step(1e9)
 
 
 func tile_count() -> int:
@@ -438,6 +494,7 @@ func built_count() -> int:
 
 
 func _exit_tree() -> void:
+	_drape = {}
 	if _task_id >= 0:
 		WorkerThreadPool.wait_for_task_completion(_task_id)
 		_task_id = -1
