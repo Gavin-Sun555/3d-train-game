@@ -51,6 +51,12 @@ float sidewalk_height(vec2 xz) {
 
 void vertex() {
 	v_world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	// The bare ground (terrain): pushed further back in depth than the streets, so streets, lawns and plazas
+	// draped onto it never get pierced by its own (differently triangulated) slopes
+	vec4 vp = MODELVIEW_MATRIX * vec4(VERTEX, 1.0);
+	float d = length(vp.xyz);
+	vp.xyz *= 1.0 + (0.30 + d * 0.0010) / max(d, 0.001);
+	POSITION = PROJECTION_MATRIX * vp;
 }
 
 void fragment() {

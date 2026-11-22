@@ -379,12 +379,36 @@ static func _build_roads_and_curbs(
 			var v2 := Vector3(b_ext.x + nrm.x, y, b_ext.y + nrm.y)
 			var v3 := Vector3(b_ext.x - nrm.x, y, b_ext.y - nrm.y)
 
-			road_st.set_normal(Vector3.UP); road_st.set_uv(Vector2(-1.0, 0.0)); road_st.add_vertex(v0)
-			road_st.set_normal(Vector3.UP); road_st.set_uv(Vector2(1.0, 0.0)); road_st.add_vertex(v1)
-			road_st.set_normal(Vector3.UP); road_st.set_uv(Vector2(1.0, seg_len)); road_st.add_vertex(v2)
-			road_st.set_normal(Vector3.UP); road_st.set_uv(Vector2(-1.0, 0.0)); road_st.add_vertex(v0)
-			road_st.set_normal(Vector3.UP); road_st.set_uv(Vector2(1.0, seg_len)); road_st.add_vertex(v2)
-			road_st.set_normal(Vector3.UP); road_st.set_uv(Vector2(-1.0, seg_len)); road_st.add_vertex(v3)
+			# On terrain the quad is split across its width into strips of at most 4 m: draped only at its four
+			# corners, a wide street across a slope would bow up to ~1 m above the ground along its middle
+			# (where tracks, markings and previews sit)
+			var strips := 1
+			if Terrain.active:
+				# only where the ground actually bows across the street (most streets stay one quad)
+				var bow := 0.0
+				for q in [a_ext, (a_ext + b_ext) * 0.5, b_ext]:
+					var qv: Vector2 = q
+					var gm := Terrain.surface(qv.x, qv.y)
+					var gl := Terrain.surface(qv.x - nrm.x, qv.y - nrm.y)
+					var gr := Terrain.surface(qv.x + nrm.x, qv.y + nrm.y)
+					bow = maxf(bow, absf((gl + gr) * 0.5 - gm))
+				if bow > 0.03:
+					strips = clampi(int(ceil(hw * 2.0 / 4.0)), 2, 7)
+			for k in range(strips):
+				var f0 := float(k) / float(strips)
+				var f1 := float(k + 1) / float(strips)
+				var w0 := v0.lerp(v1, f0)
+				var w1 := v0.lerp(v1, f1)
+				var w2 := v3.lerp(v2, f1)
+				var w3 := v3.lerp(v2, f0)
+				var u0 := lerpf(-1.0, 1.0, f0)
+				var u1 := lerpf(-1.0, 1.0, f1)
+				road_st.set_normal(Vector3.UP); road_st.set_uv(Vector2(u0, 0.0)); road_st.add_vertex(w0)
+				road_st.set_normal(Vector3.UP); road_st.set_uv(Vector2(u1, 0.0)); road_st.add_vertex(w1)
+				road_st.set_normal(Vector3.UP); road_st.set_uv(Vector2(u1, seg_len)); road_st.add_vertex(w2)
+				road_st.set_normal(Vector3.UP); road_st.set_uv(Vector2(u0, 0.0)); road_st.add_vertex(w0)
+				road_st.set_normal(Vector3.UP); road_st.set_uv(Vector2(u1, seg_len)); road_st.add_vertex(w2)
+				road_st.set_normal(Vector3.UP); road_st.set_uv(Vector2(u0, seg_len)); road_st.add_vertex(w3)
 			has_road = true
 
 			# Lane markings from the real lane counts: yellow centre line(s) on two-way streets, white dashes
