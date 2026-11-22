@@ -43,6 +43,10 @@ static func build_city(
 	# 3. Realistic weathered asphalt streets, 3D granite curbs, lane dashes & crosswalks
 	_build_roads_and_curbs(parent, map_data.get("roads", []), map_data.get("crosswalks", []), road_mat)
 
+	# 3a. Freeways (I-5, SR-520, Aurora Bridge ...) and the structure under street bridges
+	FreewayBuilder.build(parent, map_data.get("freeways", []), road_mat)
+	FreewayBuilder.build_street_bridges(parent, map_data.get("roads", []))
+
 	# 4. 3D architectural buildings (podium setbacks + 3D piers/cornices + interior parallax walls)
 	_build_buildings(parent, map_data.get("buildings", []), building_mat)
 
@@ -599,6 +603,20 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 		cur_y0 = Terrain.base_under(poly)
 		b["_y0"] = cur_y0
 		pending = true
+		if Terrain.active:
+			# a skirt below the base: on steep ground no gap opens between the walls and the slope
+			var skirt := Color(0.46, 0.45, 0.43, (2.0 * 64.0) / 255.0)
+			var cw := poly.duplicate()
+			if Geometry2D.is_polygon_clockwise(cw):
+				cw.reverse()
+			for si in range(cw.size()):
+				var q0 := cw[si]
+				var q1 := cw[(si + 1) % cw.size()]
+				var ed := q1 - q0
+				if ed.length() < 0.1:
+					continue
+				var dn := ed.normalized()
+				_emit_wall_quad(st, Vector3(q0.x, -4.0, q0.y), Vector3(q1.x, -4.0, q1.y), Vector3(q1.x, 0.0, q1.y), Vector3(q0.x, 0.0, q0.y), Vector3(-dn.y, 0.0, dn.x), 0.0, ed.length(), -4.0, 0.0, skirt)
 		var h: float = clampf(float(b.get("h", 14.0)), 5.0, 185.0)
 		var style: int = clampi(int(b.get("style", 2)), 0, 3)
 		# Real-world look for named OSM buildings (landmark facades, recorded building colours)

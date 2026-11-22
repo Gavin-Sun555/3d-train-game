@@ -15,13 +15,15 @@ static var _w := 0
 static var _h := 0
 static var _hs := PackedFloat32Array() # ground (bare earth), m
 static var _wl := PackedFloat32Array() # water surface where there is water, else -1e6
+static var _dk := PackedFloat32Array() # street bridge decks (overpasses, canal bridges), else -1e6
 static var _rigid_max := 60.0
 
 
-static func load_for(map_key: String, areas: Array) -> void:
+static func load_for(map_key: String, areas: Array, edges: Array = []) -> void:
 	active = false
 	_hs = PackedFloat32Array()
 	_wl = PackedFloat32Array()
+	_dk = PackedFloat32Array()
 	var base := "res://data/%s_terrain" % map_key
 	if not FileAccess.file_exists(base + ".bin") or not FileAccess.file_exists(base + ".json"):
 		return
@@ -41,6 +43,7 @@ static func load_for(map_key: String, areas: Array) -> void:
 	for i in range(_w * _h):
 		_hs[i] = float(buf.decode_s16(i * 2)) * sc
 	_build_water(areas)
+	_build_decks(edges)
 	active = true
 
 
@@ -87,6 +90,52 @@ static func _build_water(areas: Array) -> void:
 					_hs[k2] = minf(_hs[k2], lvl - 1.2)
 
 
+# Street bridges (graph edges with "bridge"): the elevation data is bare earth (an overpass would sink into
+# the freeway cut under it), so the deck spans straight from one end's ground to the other's. The ground mesh
+# keeps the real ground; streets, kerbs, cars and trams stand on the deck (surface()).
+static func _build_decks(edges: Array) -> void:
+	_dk.resize(_w * _h)
+	_dk.fill(-1e6)
+	for e: Dictionary in edges:
+		if not bool(e.get("bridge", false)):
+			continue
+		var pts: Array = e.get("pts", [])
+		if pts.size() < 2:
+			continue
+		var poly: Array[Vector2] = []
+		for p in pts:
+			poly.append(Vector2(float(p[0]), float(p[1])))
+		var cum: Array[float] = [0.0]
+		for i in range(1, poly.size()):
+			cum.append(cum[i - 1] + poly[i].distance_to(poly[i - 1]))
+		var L := maxf(cum[cum.size() - 1], 0.01)
+		var ha := maxf(_ground(poly[0].x, poly[0].y), _water_at(poly[0].x, poly[0].y))
+		var hb := maxf(_ground(poly[poly.size() - 1].x, poly[poly.size() - 1].y), _water_at(poly[poly.size() - 1].x, poly[poly.size() - 1].y))
+		var reach := float(e.get("width", 10.0)) * 0.5 + 4.0 + _cell * 0.5
+		for i in range(poly.size() - 1):
+			var a := poly[i]
+			var b := poly[i + 1]
+			var mn := a.min(b) - Vector2(reach, reach)
+			var mx := a.max(b) + Vector2(reach, reach)
+			for j in range(clampi(int(floor((mn.y - _z0) / _cell)), 0, _h - 1), clampi(int(ceil((mx.y - _z0) / _cell)), 0, _h - 1) + 1):
+				for ii in range(clampi(int(floor((mn.x - _x0) / _cell)), 0, _w - 1), clampi(int(ceil((mx.x - _x0) / _cell)), 0, _w - 1) + 1):
+					var c := Vector2(_x0 + float(ii) * _cell, _z0 + float(j) * _cell)
+					var q := Geometry2D.get_closest_point_to_segment(c, a, b)
+					if c.distance_to(q) > reach:
+						continue
+					var t := cum[i] + a.distance_to(q)
+					var k := j * _w + ii
+					_dk[k] = maxf(_dk[k], lerpf(ha, hb, t / L))
+
+
+static func _water_at(x: float, z: float) -> float:
+	if _wl.is_empty():
+		return -1e6
+	var fx := clampf((x - _x0) / _cell, 0.0, float(_w) - 1.0)
+	var fz := clampf((z - _z0) / _cell, 0.0, float(_h) - 1.0)
+	return _wl[int(round(fz)) * _w + int(round(fx))]
+
+
 # Level of a water polygon: the elevation data holds lakes as flat surfaces (their lowest value); the sea
 # (bathymetry, clamped) is at 0.
 static func water_level_of(poly: PackedVector2Array) -> float:
@@ -123,8 +172,8 @@ static func surface(x: float, z: float) -> float:
 	var g := _ground(x, z)
 	var fx := clampf((x - _x0) / _cell, 0.0, float(_w) - 1.0)
 	var fz := clampf((z - _z0) / _cell, 0.0, float(_h) - 1.0)
-	var wl := _wl[int(round(fz)) * _w + int(round(fx))]
-	return maxf(g, wl)
+	var k := int(round(fz)) * _w + int(round(fx))
+	return maxf(g, maxf(_wl[k], _dk[k]))
 
 
 static func surface_v(p: Vector3) -> float:
@@ -138,10 +187,10 @@ static func base_under(poly: PackedVector2Array) -> float:
 	var lo := 1e9
 	var c := Vector2.ZERO
 	for p in poly:
-		lo = minf(lo, surface(p.x, p.y))
+		lo = minf(lo, maxf(_ground(p.x, p.y), _water_at(p.x, p.y)))
 		c += p
 	c /= float(poly.size())
-	return minf(lo, surface(c.x, c.y)) - 0.25
+	return minf(lo, maxf(_ground(c.x, c.y), _water_at(c.x, c.y))) - 0.25
 
 
 # ---------------------------------------------------------------------------------------------
@@ -170,6 +219,8 @@ static func _lift_local(n3: Node3D, parent_xf: Transform3D, dy: float) -> void:
 static func _drape_node(n: Node, parent_xf: Transform3D) -> void:
 	if n.has_meta("on_terrain"):
 		return
+	if n.get_class() == "Node3D" and n.get_child_count() == 0:
+		return # an empty holder: nothing to place (and children it gets later are placed on their own)
 	n.set_meta("on_terrain", true)
 	if n.has_method("terrain_drape"):
 		n.call("terrain_drape") # e.g. monorail switches: animated from their own frames
@@ -285,6 +336,7 @@ static func drape_mesh(mesh: Mesh, xf: Transform3D = Transform3D.IDENTITY) -> Me
 static func _lift_verts(verts: PackedVector3Array) -> PackedVector3Array:
 	var hs := _hs
 	var wl := _wl
+	var dk := _dk
 	var w := _w
 	var x0 := _x0
 	var z0 := _z0
@@ -302,7 +354,7 @@ static func _lift_verts(verts: PackedVector3Array) -> PackedVector3Array:
 		var k := iz * w + ix
 		var g := (hs[k] * (1.0 - ux) + hs[k + 1] * ux) * (1.0 - uz) + (hs[k + w] * (1.0 - ux) + hs[k + w + 1] * ux) * uz
 		var kw := (iz + (1 if uz > 0.5 else 0)) * w + ix + (1 if ux > 0.5 else 0)
-		v.y += maxf(g, wl[kw])
+		v.y += maxf(g, maxf(wl[kw], dk[kw]))
 		verts[i] = v
 	return verts
 
@@ -323,8 +375,9 @@ static func densify(pts: Array, step: float) -> Array:
 	return out
 
 
-# Ground mesh: the terrain itself, in chunks (one MeshInstance3D each, for culling)
-static func build_ground(parent: Node3D, bounds: Array, mat: Material, step_cells: int = 2) -> void:
+# Ground mesh: the terrain itself, in 512 m chunks (one node each, for culling), full 8 m detail up close and a
+# 32 m version far away
+static func build_ground(parent: Node3D, bounds: Array, mat: Material, step_cells: int = 1) -> void:
 	if not active:
 		return
 	var holder := Node3D.new()
@@ -335,37 +388,54 @@ static func build_ground(parent: Node3D, bounds: Array, mat: Material, step_cell
 	var z_lo := maxf(float(bounds[1]) - 300.0, _z0)
 	var x_hi := minf(float(bounds[2]) + 300.0, _x0 + float(_w - 1) * _cell)
 	var z_hi := minf(float(bounds[3]) + 300.0, _z0 + float(_h - 1) * _cell)
-	var step := _cell * float(step_cells)
-	var chunk := 64
-	var nx := int((x_hi - x_lo) / step)
-	var nz := int((z_hi - z_lo) / step)
-	for cz in range(0, nz, chunk):
-		for cx in range(0, nx, chunk):
-			var st := SurfaceTool.new()
-			st.begin(Mesh.PRIMITIVE_TRIANGLES)
-			var ex := mini(cx + chunk, nx)
-			var ez := mini(cz + chunk, nz)
-			for j in range(cz, ez):
-				for i in range(cx, ex):
-					var xa := x_lo + float(i) * step
-					var za := z_lo + float(j) * step
-					var p00 := Vector3(xa, _ground(xa, za) - 0.02, za)
-					var p10 := Vector3(xa + step, _ground(xa + step, za) - 0.02, za)
-					var p01 := Vector3(xa, _ground(xa, za + step) - 0.02, za + step)
-					var p11 := Vector3(xa + step, _ground(xa + step, za + step) - 0.02, za + step)
-					var nrm := (p01 - p00).cross(p10 - p00).normalized()
-					if nrm.y < 0.0:
-						nrm = -nrm
-					for v: Vector3 in [p00, p10, p11, p00, p11, p01]:
-						st.set_normal(nrm)
-						st.set_uv(Vector2(v.x, v.z) * 0.25)
-						st.add_vertex(v)
-			var mi := MeshInstance3D.new()
-			mi.name = "Ground_%d_%d" % [cx, cz]
-			mi.mesh = st.commit()
-			mi.material_override = mat
-			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			holder.add_child(mi)
+	var chunk_m := 512.0
+	var cx0 := x_lo
+	while cx0 < x_hi:
+		var cz0 := z_lo
+		while cz0 < z_hi:
+			var cx1 := minf(cx0 + chunk_m, x_hi)
+			var cz1 := minf(cz0 + chunk_m, z_hi)
+			var centre := Vector3((cx0 + cx1) * 0.5, 0.0, (cz0 + cz1) * 0.5)
+			for lod in range(2):
+				var step := _cell * float(step_cells) * (1.0 if lod == 0 else 4.0)
+				var mi := MeshInstance3D.new()
+				mi.name = "Ground_%d_%d_%d" % [int(cx0), int(cz0), lod]
+				mi.position = centre # vertices are local to the chunk centre: distance culling measures from here
+				mi.mesh = _ground_chunk(cx0, cz0, cx1, cz1, step, centre)
+				mi.material_override = mat
+				mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+				if lod == 0:
+					mi.visibility_range_end = 1500.0
+				else:
+					mi.visibility_range_begin = 1500.0
+				holder.add_child(mi)
+			cz0 += chunk_m
+		cx0 += chunk_m
+
+
+static func _ground_chunk(x0: float, z0: float, x1: float, z1: float, step: float, centre: Vector3) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var nx := maxi(1, int(ceil((x1 - x0) / step)))
+	var nz := maxi(1, int(ceil((z1 - z0) / step)))
+	for j in range(nz):
+		for i in range(nx):
+			var xa := minf(x0 + float(i) * step, x1)
+			var za := minf(z0 + float(j) * step, z1)
+			var xb := minf(xa + step, x1)
+			var zb := minf(za + step, z1)
+			var p00 := Vector3(xa, _ground(xa, za) - 0.02, za)
+			var p10 := Vector3(xb, _ground(xb, za) - 0.02, za)
+			var p01 := Vector3(xa, _ground(xa, zb) - 0.02, zb)
+			var p11 := Vector3(xb, _ground(xb, zb) - 0.02, zb)
+			var nrm := (p01 - p00).cross(p10 - p00).normalized()
+			if nrm.y < 0.0:
+				nrm = -nrm
+			for v: Vector3 in [p00, p10, p11, p00, p11, p01]:
+				st.set_normal(nrm)
+				st.set_uv(Vector2(v.x, v.z) * 0.25)
+				st.add_vertex(v - centre)
+	return st.commit()
 
 
 # Ray / terrain intersection (for picking): march along the ray and refine. Returns null on a miss.

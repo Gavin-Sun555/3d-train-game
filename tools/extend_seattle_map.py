@@ -431,7 +431,8 @@ def build_street_graph(nodes, ways, base):
                         prev["divided"] = True
                     elif prev is None or (nm and not prev["name"]) or w > prev["width"]:
                         raw_edges[key] = {"a": key[0], "b": key[1], "name": nm, "width": w, "lf": lf, "lb": lb,
-                                          "length": elen, "pts": full, "cls": t.get("highway", "")}
+                                          "length": elen, "pts": full, "cls": t.get("highway", ""),
+                                          "bridge": bool(t.get("bridge")) and t.get("bridge") != "no"}
                     if nm:
                         jnodes[ja]["streets"].add(nm)
                         jnodes[jb]["streets"].add(nm)
@@ -530,6 +531,8 @@ def build_street_graph(nodes, ways, base):
             "length": round(elen, 1),
             "pts": [rnd(p) for p in pts],
         })
+        if ed.get("bridge"):
+            out_edges[-1]["bridge"] = True  # deck carried over the ground (freeway, canal ...): see Terrain decks
         next_eid += 1
     print(f"Streets: {len(out_nodes)} new junctions, {len(out_edges)} new edges, {len(j_to_base)} joined to v3 street ends "
           f"(of {sum(1 for j in jnodes if j['seam'])} border crossings)")
@@ -953,6 +956,8 @@ def lamps_and_crosswalks(new_edges, all_edges):
         pts = ed["pts"]
         w = ed["width"]
         roads.append({"name": ed["name"], "width": w, "lanes_f": ed["lanes_f"], "lanes_b": ed["lanes_b"], "layer": 0, "pts": pts})
+        if ed.get("bridge"):
+            roads[-1]["bridge"] = True
         p0, p1 = pts[0], pts[-1]
         L = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
         if L < 22.0:
@@ -1127,6 +1132,148 @@ def piers_of(ways, nodes):
 
 
 # ---------------------------------------------------------------------------------------------
+# 6. Freeways (I-5, I-90, SR-520, SR-99 / Aurora, ramps): drawn structures with real deck heights
+# ---------------------------------------------------------------------------------------------
+TERRAIN_BIN = os.path.join(ROOT, "data", "seattle_terrain.bin")
+TERRAIN_META = os.path.join(ROOT, "data", "seattle_terrain.json")
+
+
+class Ground:
+    def __init__(self):
+        import struct
+        with open(TERRAIN_META) as f:
+            m = json.load(f)
+        with open(TERRAIN_BIN, "rb") as f:
+            b = f.read()
+        self.x0, self.z0, self.cell, self.w, self.h = m["x0"], m["z0"], m["cell"], m["w"], m["h"]
+        self.hs = struct.unpack("<%dh" % (self.w * self.h), b[: self.w * self.h * 2])
+
+    def at(self, x, z):
+        fx = min(max((x - self.x0) / self.cell, 0.0), self.w - 1.001)
+        fz = min(max((z - self.z0) / self.cell, 0.0), self.h - 1.001)
+        ix, iz = int(fx), int(fz)
+        ux, uz = fx - ix, fz - iz
+        k = iz * self.w + ix
+        hs = self.hs
+        g = (hs[k] * (1 - ux) + hs[k + 1] * ux) * (1 - uz) + (hs[k + self.w] * (1 - ux) + hs[k + self.w + 1] * ux) * uz
+        return g * 0.1
+
+
+FREEWAY_CLASSES = {"motorway", "motorway_link", "trunk", "trunk_link"}
+
+
+def build_freeways(nodes, ways):
+    if not os.path.exists(TERRAIN_BIN):
+        print("Freeways: no terrain data, skipped")
+        return []
+    G = Ground()
+    fw = []  # (wid, ids, tags, bridge, layer)
+    for wid, (refs, t) in ways.items():
+        cls = t.get("highway", "")
+        if cls not in FREEWAY_CLASSES or t.get("tunnel") in ("yes", "building_passage") or t.get("area") == "yes":
+            continue
+        bridge = bool(t.get("bridge")) and t.get("bridge") != "no"
+        try:
+            layer = int(str(t.get("layer", "0")).split(";")[0])
+        except ValueError:
+            layer = 0
+        if layer < 0 and t.get("tunnel"):
+            continue
+        # surface trunk streets are part of the buildable street graph already
+        if cls == "trunk" and not bridge and layer in (0,):
+            continue
+        ids = [r for r in refs if r in nodes]
+        if len(ids) < 2 or not any(in_rect(nodes[i], BOUNDS, 60.0) for i in ids):
+            continue
+        fw.append((wid, ids, t, bridge, max(0, layer)))
+    # Heights: at-grade freeway nodes sit on the ground; a bridge spans between its ends (ground where it
+    # meets an at-grade carriageway) and keeps one clearance per layer above whatever is underneath
+    node_h = {}
+    for wid, ids, t, bridge, layer in fw:
+        if not bridge and layer == 0:
+            for i in ids:
+                node_h[i] = G.at(*nodes[i]) + 0.12
+    joint_h = {}
+    for wid, ids, t, bridge, layer in fw:
+        if bridge or layer > 0:
+            for i in (ids[0], ids[-1]):
+                if i not in node_h:
+                    p = nodes[i]
+                    joint_h[i] = max(joint_h.get(i, -1e9), G.at(*p) + 6.6 * max(1, layer))
+    out = []
+    for wid, ids, t, bridge, layer in fw:
+        pts = [nodes[i] for i in ids]
+        dense = [pts[0]]
+        for a, b in zip(pts, pts[1:]):
+            L = math.hypot(b[0] - a[0], b[1] - a[1])
+            n = max(1, int(math.ceil(L / 8.0)))
+            for k in range(1, n + 1):
+                dense.append((a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n))
+        cum = [0.0]
+        for a, b in zip(dense, dense[1:]):
+            cum.append(cum[-1] + math.hypot(b[0] - a[0], b[1] - a[1]))
+        L = cum[-1] or 1.0
+        nm = t.get("name") or t.get("ref") or ""
+        floating = "Floating" in nm or t.get("bridge:structure") == "floating"
+        if bridge or layer > 0:
+            ha = node_h.get(ids[0], joint_h.get(ids[0], G.at(*pts[0]) + 6.6))
+            hb = node_h.get(ids[-1], joint_h.get(ids[-1], G.at(*pts[-1]) + 6.6))
+            a_grade = ids[0] in node_h
+            b_grade = ids[-1] in node_h
+            clr = 6.6 * max(1, layer)
+            ys = []
+            for p, d in zip(dense, cum):
+                base = ha + (hb - ha) * d / L
+                ramp = 1.0
+                if a_grade:
+                    ramp = min(ramp, d / 70.0)
+                if b_grade:
+                    ramp = min(ramp, (L - d) / 70.0)
+                g = G.at(*p)
+                y = max(base, g + clr * max(0.0, min(1.0, ramp)))
+                if floating:
+                    y = min(y, max(g, 5.6) + 3.2) if ramp >= 1.0 else y
+                ys.append(y)
+        else:
+            ys = [G.at(*p) + 0.12 for p in dense]
+        # smooth the profile (elevation data is noisy at 8 m)
+        sm = []
+        for k in range(len(ys)):
+            lo, hi = max(0, k - 2), min(len(ys), k + 3)
+            sm.append(sum(ys[lo:hi]) / (hi - lo))
+        sm[0], sm[-1] = ys[0], ys[-1]
+        try:
+            lanes = int(str(t.get("lanes", "")).split(";")[0])
+        except ValueError:
+            lanes = 1 if t.get("highway", "").endswith("_link") else (3 if t.get("highway") == "motorway" else 2)
+        lanes = max(1, min(6, lanes))
+        oneway = t.get("oneway", "yes" if t.get("highway", "").startswith("motorway") else "no") in ("yes", "1", "-1")
+        width = lanes * 3.6 + (2.4 if oneway else 3.2) + (0 if oneway else 1.0)
+        structure = ""
+        if floating:
+            structure = "floating"
+        elif "Ship Canal" in nm or t.get("bridge:structure") == "truss" or (t.get("bridge:name") or "").startswith("George Washington"):
+            structure = "truss"
+        rec = {"pts": [[round(p[0], 2), round(p[1], 2), round(y, 2)] for p, y in zip(dense, sm)], "lanes": lanes,
+               "w": round(width, 1), "oneway": oneway, "bridge": bool(bridge or layer > 0), "kind": t.get("highway", ""),
+               "name": nm}
+        if structure:
+            rec["structure"] = structure
+        # pieces of <= ~240 m so map tiles can take them
+        P = rec["pts"]
+        start = 0
+        while start < len(P) - 1:
+            end = min(len(P) - 1, start + 30)
+            piece = dict(rec)
+            piece["pts"] = P[start:end + 1]
+            out.append(piece)
+            start = end
+    print(f"Freeways: {len(fw)} ways -> {len(out)} pieces "
+          f"({sum(1 for r in out if r['bridge'])} elevated, {sum(1 for r in out if r.get('structure') == 'truss')} truss, "
+          f"{sum(1 for r in out if r.get('structure') == 'floating')} floating)")
+    return out
+
+
 def main():
     with open(BASE, encoding="utf-8") as f:
         base = json.load(f)
@@ -1165,6 +1312,7 @@ def main():
     plazas = [{"name": nm, "kind": k, "pts": [rnd(p) for p in ring]} for nm, k, ring in named_parks
               if not in_rect(centroid(ring), R0) and in_rect(centroid(ring), BOUNDS) and len(ring) <= 400]
     piers = piers_of(ways, nodes)
+    freeways = build_freeways(nodes, ways)
 
     out = dict(base)
     out["bounds"] = [float(v) for v in BOUNDS]
@@ -1180,6 +1328,7 @@ def main():
     out["storefronts"] = base["storefronts"] + new_shops
     out["plazas"] = base["plazas"] + plazas
     out["piers"] = base["piers"] + piers
+    out["freeways"] = freeways
     with open(OUT, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, separators=(",", ":"))
     print(f"Wrote {OUT}: {os.path.getsize(OUT) / 1e6:.1f} MB — {len(out['graph_nodes'])} junctions, {len(out['graph_edges'])} edges, "

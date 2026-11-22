@@ -345,7 +345,7 @@ func _async_startup_load() -> void:
 	var preset: Dictionary = MAP_PRESETS["seattle"]
 	_current_map_key = "seattle"
 	_map_data = _read_json(str(preset["data_path"]))
-	Terrain.load_for("seattle", _map_data.get("areas", [])) # real ground (elevation data)
+	Terrain.load_for("seattle", _map_data.get("areas", []), _map_data.get("graph_edges", [])) # real ground (elevation data)
 	var bounds: Array = _map_data.get("bounds", [-520.0, -520.0, 520.0, 520.0])
 	_pan_limit_x = maxf(absf(float(bounds[0])), absf(float(bounds[2]))) + 80.0
 	_pan_limit_z = maxf(absf(float(bounds[1])), absf(float(bounds[3]))) + 80.0
@@ -431,7 +431,7 @@ func _load_map_world(map_key: String, use_starter: bool, seed_pax: bool) -> void
 	_current_map_key = next_key
 	if not same_city:
 		_map_data = _read_json(str(preset["data_path"]))
-		Terrain.load_for(next_key, _map_data.get("areas", [])) # real ground where the map has elevation data
+		Terrain.load_for(next_key, _map_data.get("areas", []), _map_data.get("graph_edges", [])) # real ground (elevation data)
 
 	var bounds: Array = _map_data.get("bounds", [-520.0, -520.0, 520.0, 520.0])
 	_pan_limit_x = maxf(absf(float(bounds[0])), absf(float(bounds[2]))) + 80.0
@@ -592,6 +592,7 @@ func _build_city_world() -> void:
 	if CityTiles.has_tiles(_map_data):
 		_city_tiles = CityTiles.new()
 		_city_tiles.name = "CityTiles"
+		_city_tiles.set_meta("on_terrain", true) # its tiles are put on the ground one by one as they stream in
 		_city_root.add_child(_city_tiles)
 		_city_tiles.on_tile_built = _on_city_tile_built
 		_city_tiles.setup(_effective_land_data(), {"building": _building_mat, "road": _road_mat, "globe": _globe_mat})
@@ -641,6 +642,8 @@ func _effective_land_data() -> Dictionary:
 			for p2: Vector2 in ed["pts"]:
 				pts.append([p2.x, p2.y])
 			roads.append({"name": ed["name"], "width": ed["width"], "lanes_f": ed.get("lanes_f", 1), "lanes_b": ed.get("lanes_b", 1), "layer": 0, "pts": pts})
+			if bool(ed.get("bridge", false)):
+				roads[roads.size() - 1]["bridge"] = true
 		d["roads"] = roads
 		# Zebra crossings: keep the map's where a street still runs, add them at the ends of new streets
 		var cws: Array = []

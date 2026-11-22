@@ -55,6 +55,14 @@ static func _road_mid(r: Dictionary) -> Vector2:
 	return (_pt(pts[0]) + _pt(pts[pts.size() - 1])) * 0.5
 
 
+static func _fw_mid(f: Dictionary) -> Vector2:
+	var pts: Array = f.get("pts", [])
+	if pts.is_empty():
+		return Vector2.ZERO
+	var m = pts[pts.size() / 2]
+	return Vector2(float(m[0]), float(m[1]))
+
+
 static func _tile_of(p: Vector2) -> Vector2i:
 	return Vector2i(int(floor(p.x / TILE)), int(floor(p.y / TILE)))
 
@@ -110,6 +118,11 @@ static func core_subset(map_data: Dictionary) -> Dictionary:
 		if cr.has_point(_poly_centre(pr.get("pts", []))):
 			piers.append(pr)
 	d["piers"] = piers
+	var fws: Array = []
+	for f: Dictionary in map_data.get("freeways", []):
+		if cr.has_point(_fw_mid(f)):
+			fws.append(f)
+	d["freeways"] = fws
 	return d
 
 
@@ -145,7 +158,7 @@ func _cut_tiles(map_data: Dictionary) -> Dictionary:
 	var get_t := func(key: Vector2i) -> Dictionary:
 		if not cuts.has(key):
 			cuts[key] = {"key": key, "buildings": [], "storefronts": [], "roads": [], "context": [], "crosswalks": [],
-				"streetlamps": [], "trees": [], "areas": [], "piers": [], "fills": []}
+				"streetlamps": [], "trees": [], "areas": [], "piers": [], "fills": [], "freeways": []}
 		return cuts[key]
 	# Buildings (local indices; storefronts follow their building)
 	var blds: Array = map_data.get("buildings", [])
@@ -257,6 +270,10 @@ func _cut_tiles(map_data: Dictionary) -> Dictionary:
 		var pc := _poly_centre(pr.get("pts", []))
 		if not cr.has_point(pc):
 			(get_t.call(_tile_of(pc))["piers"] as Array).append(pr)
+	for f: Dictionary in map_data.get("freeways", []):
+		var fm := _fw_mid(f)
+		if not cr.has_point(fm):
+			(get_t.call(_tile_of(fm))["freeways"] as Array).append(f)
 	# Water touching a tile: clearance only (no trees / benches / flower beds on lakes and reservoirs)
 	for a2: Dictionary in map_data.get("areas", []):
 		if str(a2.get("kind", "")) != "water":
@@ -287,7 +304,7 @@ static func _data_sig(td: Dictionary) -> int:
 		h = hash([h, _road_key(r), int(r.get("lanes_f", 1)), int(r.get("lanes_b", 1)), int(r.get("lv", 0))])
 	for r2: Dictionary in td["context"]:
 		h = hash([h, _road_key(r2)])
-	h = hash([h, (td["crosswalks"] as Array).size(), (td["storefronts"] as Array).size(), (td["streetlamps"] as Array).size(), (td["piers"] as Array).size(), (td["fills"] as Array).size()])
+	h = hash([h, (td["crosswalks"] as Array).size(), (td["storefronts"] as Array).size(), (td["streetlamps"] as Array).size(), (td["piers"] as Array).size(), (td["fills"] as Array).size(), (td["freeways"] as Array).size()])
 	return h
 
 
@@ -316,6 +333,9 @@ static func build_tile_node(td: Dictionary, mats: Dictionary) -> Node3D:
 	var roads: Array = td["roads"]
 	if not roads.is_empty():
 		CityBuilder._build_roads_and_curbs(root, roads + (td["context"] as Array), td["crosswalks"], mats["road"], roads.size())
+		FreewayBuilder.build_street_bridges(root, roads)
+	if not (td["freeways"] as Array).is_empty():
+		FreewayBuilder.build(root, td["freeways"], mats["road"])
 	var lights: Array = []
 	if not (td["streetlamps"] as Array).is_empty():
 		for l in CityBuilder._build_streetlamps(root, td["streetlamps"], mats["globe"]):
@@ -357,6 +377,12 @@ static func _apply_visibility_ranges(n: Node) -> void:
 					far = 300.0
 				elif nm in ["PierPiles", "PierEdgeBeams"]:
 					far = 260.0
+				elif nm in ["FreewayDecks", "FreewayConcrete", "FreewaySteel"]:
+					far = 2700.0
+				elif nm == "FreewayLines":
+					far = 600.0
+				elif nm == "StreetBridgeStructure":
+					far = 1500.0
 				gi.visibility_range_end = far
 				gi.visibility_range_end_margin = far * 0.06
 				gi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_DISABLED

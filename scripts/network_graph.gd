@@ -134,6 +134,8 @@ func load_from_map_data(map_data: Dictionary, use_starter: bool = true) -> void:
 			"length": elen,
 			"pts": pts2,
 		}
+		if bool(e_raw.get("bridge", false)):
+			edges[eid]["bridge"] = true # carried over the ground (overpass / canal bridge)
 		if adj.has(a):
 			adj[a].append({"to": b, "edge_id": eid, "length": elen})
 		if adj.has(b):
