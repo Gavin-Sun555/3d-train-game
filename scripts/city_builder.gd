@@ -651,7 +651,7 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 					inner.reverse()
 				var svcol := Color(0.70, 0.70, 0.68, (2.0 * 64.0 + float(b_idx % 60)) / 255.0)
 				b_idx += 1
-				_emit_stadium(st, roof_st, frame_st, poly, inner, h, svcol)
+				_emit_stadium(st, roof_st, frame_st, poly, inner, h, svcol, str(b.get("stadium_roof", "")))
 				any_geom = true
 				has_roofs = true
 				has_frames = true
@@ -726,6 +726,25 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 			_extrude_tier_with_3d_relief(st, frame_st, poly, 0.0, h, style, vcol, trim_c, true)
 			has_frames = true
 			any_geom = true
+
+		# Landmark detail: Collegiate Gothic halls / churches (steep slate roofs, buttresses, pinnacles, towers),
+		# King Street Station's campanile
+		var lm_k := str(b.get("lm", ""))
+		var roof_d: Dictionary = b.get("roof", {})
+		if not roof_d.is_empty():
+			var rcol := Color.from_string(str(b.get("roof_colour", "#4a5552")), Color(0.29, 0.33, 0.32))
+			_emit_roof(st, roof_st, roof_d, h + 0.3, vcol, rcol)
+			has_roofs = true
+			if lm_k in ["uw_gothic", "suzzallo", "church"]:
+				_emit_gothic(frame_st, poly, h, roof_d, trim_c.lightened(0.15))
+			if lm_k == "church" and float(roof_d.get("hl", 0.0)) > 9.0:
+				_emit_church_towers(st, roof_st, roof_d, h, bool(b.get("twin_towers", false)), vcol, rcol)
+		if lm_k == "campanile":
+			_emit_campanile(st, roof_st, frame_st, poly, vcol)
+			has_roofs = true
+		elif lm_k == "campanile_tower":
+			_emit_campanile(st, roof_st, frame_st, poly, vcol, h)
+			has_roofs = true
 
 		# Ground-floor shopfront fabric awnings batched into BuildingFrames3D (zero extra draw calls!)
 		if style == 1 and (b_idx % 2 == 0):
@@ -821,7 +840,9 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 
 # Stadium: precast outer facade up to the rim, raked seating from the rim down to the field edge, grass
 # field, and floodlight masts round the rim. The two rings are resampled to the same count to loft the bowl.
-static func _emit_stadium(st: SurfaceTool, bowl_st: SurfaceTool, frame_st: SurfaceTool, outer: PackedVector2Array, inner: PackedVector2Array, h: float, wcol: Color) -> void:
+static func _emit_stadium(st: SurfaceTool, bowl_st: SurfaceTool, frame_st: SurfaceTool, outer: PackedVector2Array, inner: PackedVector2Array, h: float, wcol: Color, roof_kind: String = "") -> void:
+	if roof_kind != "":
+		_emit_stadium_roof(bowl_st, frame_st, outer, h, roof_kind)
 	var rim := h
 	var u_acc := 0.0
 	for i in range(outer.size()):
@@ -903,6 +924,273 @@ static func _resample_ring(poly: PackedVector2Array, n: int) -> PackedVector2Arr
 	return out
 
 
+# Oriented box of a 2D outline: [centre, long axis, half length, half width]
+static func _obb2d(poly: PackedVector2Array) -> Array:
+	var best: Array = []
+	var best_a := 1e18
+	for i in range(poly.size()):
+		var e := poly[(i + 1) % poly.size()] - poly[i]
+		if e.length() < 0.5:
+			continue
+		var u := e.normalized()
+		var v := Vector2(-u.y, u.x)
+		var lo_u := 1e18
+		var hi_u := -1e18
+		var lo_v := 1e18
+		var hi_v := -1e18
+		for p in poly:
+			lo_u = minf(lo_u, p.dot(u))
+			hi_u = maxf(hi_u, p.dot(u))
+			lo_v = minf(lo_v, p.dot(v))
+			hi_v = maxf(hi_v, p.dot(v))
+		var a := (hi_u - lo_u) * (hi_v - lo_v)
+		if a < best_a:
+			best_a = a
+			var c := u * (lo_u + hi_u) * 0.5 + v * (lo_v + hi_v) * 0.5
+			if hi_u - lo_u >= hi_v - lo_v:
+				best = [c, u, (hi_u - lo_u) * 0.5, (hi_v - lo_v) * 0.5]
+			else:
+				best = [c, v, (hi_v - lo_v) * 0.5, (hi_u - lo_u) * 0.5]
+	return best
+
+
+# Stadium roofs: T-Mobile Park's retractable roof (three arched panels, parked to the east over the rail
+# yards), Lumen Field's two arch-supported canopies over the side stands, Husky Stadium's cantilevered canopies
+static func _emit_stadium_roof(rst: SurfaceTool, fst: SurfaceTool, outer: PackedVector2Array, rim: float, kind: String) -> void:
+	var ob := _obb2d(outer)
+	if ob.is_empty():
+		return
+	var c: Vector2 = ob[0]
+	var u: Vector2 = ob[1]
+	var hl: float = ob[2]
+	var hw: float = ob[3]
+	var v := Vector2(-u.y, u.x)
+	var steel := Color(0.56, 0.58, 0.60)
+	var membrane := Color(0.86, 0.87, 0.86)
+	if kind == "retractable":
+		# panels span north-south and slide east-west: park them east of the bowl
+		var ns := u if absf(u.y) > absf(u.x) else v
+		var ew := Vector2(-ns.y, ns.x)
+		if ew.x < 0.0:
+			ew = -ew
+		var span := (hl if ns == u else hw) + 12.0
+		var ext_e := 0.0
+		for p in outer:
+			ext_e = maxf(ext_e, (p - c).dot(ew))
+		var steps := 16
+		for k in range(3):
+			var pc := c + ew * (ext_e - 30.0 + float(k) * 22.0)
+			var top := rim + 42.0 - float(k) * 4.0
+			var half_w := 26.0
+			for i in range(steps):
+				var t0 := -1.0 + 2.0 * float(i) / float(steps)
+				var t1 := -1.0 + 2.0 * float(i + 1) / float(steps)
+				var y0 := rim + 6.0 + (top - rim - 6.0) * (1.0 - t0 * t0)
+				var y1 := rim + 6.0 + (top - rim - 6.0) * (1.0 - t1 * t1)
+				var a0 := pc + ns * (t0 * span)
+				var a1 := pc + ns * (t1 * span)
+				_roof_quad(rst, _v3(a0 - ew * half_w, y0), _v3(a1 - ew * half_w, y1), _v3(a1 + ew * half_w, y1), _v3(a0 + ew * half_w, y0), membrane.darkened(0.05 * float(k)))
+				for sd: float in [-1.0, 1.0]:
+					_beam3(fst, _v3(a0 + ew * (half_w * sd), y0 - 1.5), _v3(a1 + ew * (half_w * sd), y1 - 1.5), 1.6, steel)
+			# the bogies carrying each panel on its rails at both ends
+			for sd2: float in [-1.0, 1.0]:
+				var bp := pc + ns * (span * sd2)
+				_emit_colored_box(fst, Transform3D(Basis(Vector3.UP, atan2(ew.x, ew.y)), Vector3(bp.x, (rim + 6.0) * 0.5, bp.y)), Vector3(half_w * 2.0, rim + 6.0, 6.0), steel.darkened(0.1))
+		return
+	for sd3: float in [-1.0, 1.0]:
+		var steps2 := 18
+		for i in range(steps2):
+			var t0 := -0.82 + 1.64 * float(i) / float(steps2)
+			var t1 := -0.82 + 1.64 * float(i + 1) / float(steps2)
+			var o0 := c + u * (t0 * hl) + v * (sd3 * hw * 0.98)
+			var o1 := c + u * (t1 * hl) + v * (sd3 * hw * 0.98)
+			var i0 := c + u * (t0 * hl) + v * (sd3 * hw * 0.42)
+			var i1 := c + u * (t1 * hl) + v * (sd3 * hw * 0.42)
+			if kind == "arch_canopy":
+				var ya0 := rim + 10.0 + 10.0 * (1.0 - t0 * t0 / 0.67)
+				var ya1 := rim + 10.0 + 10.0 * (1.0 - t1 * t1 / 0.67)
+				_roof_quad(rst, _v3(o0, ya0), _v3(o1, ya1), _v3(i1, ya1 - 6.0), _v3(i0, ya0 - 6.0), membrane)
+				# the big arch along the canopy's top edge
+				var ar0 := rim + 14.0 + 26.0 * (1.0 - t0 * t0 / 0.67)
+				var ar1 := rim + 14.0 + 26.0 * (1.0 - t1 * t1 / 0.67)
+				_beam3(fst, _v3(o0.lerp(i0, 0.25), ar0), _v3(o1.lerp(i1, 0.25), ar1), 2.4, steel)
+				if i % 3 == 0:
+					_beam3(fst, _v3(o0.lerp(i0, 0.25), ar0), _v3(o0.lerp(i0, 0.25), ya0 - 1.0), 0.6, steel)
+			else:
+				_roof_quad(rst, _v3(o0, rim + 9.0), _v3(o1, rim + 9.0), _v3(i1, rim + 12.0), _v3(i0, rim + 12.0), membrane)
+				if i % 2 == 0:
+					_beam3(fst, _v3(o0, rim), _v3(i0, rim + 12.0), 0.7, steel)
+		if kind == "arch_canopy":
+			# arch feet
+			for e2: float in [-0.82, 0.82]:
+				var fp := c + u * (e2 * hl) + v * (sd3 * hw * 0.85)
+				_emit_colored_box(fst, Transform3D(Basis.IDENTITY, Vector3(fp.x, rim * 0.5 + 6.0, fp.y)), Vector3(3.0, rim + 12.0, 3.0), steel.darkened(0.15))
+
+
+static func _beam3(st: SurfaceTool, a: Vector3, b: Vector3, th: float, col: Color) -> void:
+	var d := b - a
+	var L := d.length()
+	if L < 0.05:
+		return
+	var fwd := d / L
+	var side := fwd.cross(Vector3.UP)
+	if side.length_squared() < 1e-4:
+		side = Vector3.RIGHT
+	side = side.normalized() * (th * 0.5)
+	var upv := side.cross(fwd).normalized() * (th * 0.5)
+	var cs: Array[Vector3] = [side + upv, -side + upv, -side - upv, side - upv]
+	for k in range(4):
+		var c0: Vector3 = cs[k]
+		var c1: Vector3 = cs[(k + 1) % 4]
+		_add_colored_quad(st, a + c0, a + c1, b + c1, b + c0, (c0 + c1).normalized(), col)
+
+
+# Collegiate Gothic: buttresses along the long walls, pinnacles at the corners, finials on the gable peaks
+static func _emit_gothic(fst: SurfaceTool, poly: PackedVector2Array, h: float, roof: Dictionary, stone: Color) -> void:
+	for i in range(poly.size()):
+		var p0 := poly[i]
+		var p1 := poly[(i + 1) % poly.size()]
+		var e := p1 - p0
+		var el := e.length()
+		if el < 7.0:
+			continue
+		var d := e / el
+		var nrm := Vector2(-d.y, d.x)
+		var n_b := int(floor(el / 6.5))
+		for k in range(1, n_b):
+			var bp := p0 + d * (el * float(k) / float(n_b)) + nrm * 0.45
+			_emit_colored_box(fst, Transform3D(Basis(Vector3.UP, atan2(d.x, d.y)), Vector3(bp.x, h * 0.45, bp.y)), Vector3(0.8, h * 0.9, 0.9), stone)
+			_emit_colored_box(fst, Transform3D(Basis(Vector3.UP, atan2(d.x, d.y)), Vector3(bp.x, h * 0.93, bp.y)), Vector3(0.55, h * 0.16, 0.6), stone.lightened(0.05))
+	# corner pinnacles where the outline turns outward
+	var ccw := not Geometry2D.is_polygon_clockwise(poly)
+	for i in range(poly.size()):
+		var a := poly[(i - 1 + poly.size()) % poly.size()]
+		var b := poly[i]
+		var c := poly[(i + 1) % poly.size()]
+		var cross := (b - a).cross(c - b)
+		if (cross > 0.0) != ccw or (b - a).length() < 3.0 or (c - b).length() < 3.0:
+			continue
+		_pinnacle(fst, b, h, 1.1, 4.0, stone)
+	# gable peak finials
+	var cc: Array = roof.get("c", [0.0, 0.0])
+	var cv := Vector2(float(cc[0]), float(cc[1]))
+	var ang := float(roof.get("a", 0.0))
+	var u := Vector2(cos(ang), sin(ang))
+	for sgn: float in [-1.0, 1.0]:
+		var gp := cv + u * (float(roof.get("hl", 4.0)) * sgn)
+		_pinnacle(fst, gp, h + float(roof.get("h", 3.0)), 0.7, 2.6, stone)
+
+
+static func _pinnacle(fst: SurfaceTool, p: Vector2, base_y: float, w: float, shaft: float, col: Color) -> void:
+	_emit_colored_box(fst, Transform3D(Basis.IDENTITY, Vector3(p.x, base_y + shaft * 0.5, p.y)), Vector3(w, shaft, w), col)
+	var top := Vector3(p.x, base_y + shaft + w * 2.6, p.y)
+	var hw := w * 0.55
+	var cs: Array[Vector3] = [Vector3(p.x - hw, base_y + shaft, p.y - hw), Vector3(p.x + hw, base_y + shaft, p.y - hw), Vector3(p.x + hw, base_y + shaft, p.y + hw), Vector3(p.x - hw, base_y + shaft, p.y + hw)]
+	for k in range(4):
+		var a: Vector3 = cs[k]
+		var b: Vector3 = cs[(k + 1) % 4]
+		var n := (b - a).cross(top - a).normalized()
+		for vv: Vector3 in [a, b, top]:
+			fst.set_color(col.lightened(0.05))
+			fst.set_normal(n)
+			fst.add_vertex(vv)
+
+
+# Church bell tower(s) at the gable end with a spire (twin towers for a cathedral)
+static func _emit_church_towers(st: SurfaceTool, rst: SurfaceTool, roof: Dictionary, h: float, twin: bool, wcol: Color, rcol: Color) -> void:
+	var cc: Array = roof.get("c", [0.0, 0.0])
+	var c := Vector2(float(cc[0]), float(cc[1]))
+	var ang := float(roof.get("a", 0.0))
+	var u := Vector2(cos(ang), sin(ang))
+	var v := Vector2(-u.y, u.x)
+	var hl := float(roof.get("hl", 6.0))
+	var hw := float(roof.get("hw", 4.0))
+	var ts := clampf(hw * (0.7 if twin else 0.9), 4.0, 9.0)
+	var ht := h * 1.6 + float(roof.get("h", 4.0)) + 6.0
+	var centres: Array[Vector2] = []
+	if twin:
+		centres.append(c + u * (hl - ts * 0.5) + v * (hw - ts * 0.5))
+		centres.append(c + u * (hl - ts * 0.5) - v * (hw - ts * 0.5))
+	else:
+		centres.append(c + u * (hl - ts * 0.5))
+	for tc: Vector2 in centres:
+		var sq := PackedVector2Array([tc + (-u - v) * ts * 0.5, tc + (u - v) * ts * 0.5, tc + (u + v) * ts * 0.5, tc + (-u + v) * ts * 0.5])
+		if Geometry2D.is_polygon_clockwise(sq):
+			sq.reverse()
+		_tower_walls(st, sq, 0.0, ht, wcol)
+		var apex := Vector3(tc.x, ht + ts * 2.4, tc.y)
+		for k in range(4):
+			_roof_tri(rst, _v3(sq[k], ht), _v3(sq[(k + 1) % 4], ht), apex, rcol)
+
+
+static func _tower_walls(st: SurfaceTool, sq: PackedVector2Array, y0: float, y1: float, wcol: Color) -> void:
+	var u_acc := 0.0
+	for k in range(sq.size()):
+		var p0 := sq[k]
+		var p1 := sq[(k + 1) % sq.size()]
+		var e := p1 - p0
+		var el := e.length()
+		var d := e / maxf(el, 0.001)
+		_emit_wall_quad(st, Vector3(p0.x, y0, p0.y), Vector3(p1.x, y0, p1.y), Vector3(p1.x, y1, p1.y), Vector3(p0.x, y1, p0.y), Vector3(-d.y, 0.0, d.x), u_acc, u_acc + el, y0, y1, wcol)
+		u_acc += el
+
+
+# King Street Station's clock tower (after St Mark's campanile in Venice): 74 m brick shaft, clock faces,
+# open belfry stage and a pyramid cap, at the station's north end
+static func _emit_campanile(st: SurfaceTool, rst: SurfaceTool, fst: SurfaceTool, poly: PackedVector2Array, wcol: Color, own_shaft_h: float = -1.0) -> void:
+	var north := poly[0]
+	var cen := Vector2.ZERO
+	for p in poly:
+		cen += p
+		if p.y < north.y:
+			north = p
+	cen /= float(poly.size())
+	var tc := north + (cen - north).normalized() * 7.0
+	var s := 8.5
+	var shaft := 58.0
+	if own_shaft_h > 0.0:
+		# the tower is already a building part (OSM 3D): crown its shaft
+		var ob := _obb2d(poly)
+		tc = cen
+		s = clampf(float(ob[3]) * 2.0 if not ob.is_empty() else 8.0, 5.0, 12.0)
+		shaft = own_shaft_h - 10.0
+	var sq := PackedVector2Array([tc + Vector2(-s, -s) * 0.5, tc + Vector2(s, -s) * 0.5, tc + Vector2(s, s) * 0.5, tc + Vector2(-s, s) * 0.5])
+	if Geometry2D.is_polygon_clockwise(sq):
+		sq.reverse()
+	if own_shaft_h <= 0.0:
+		_tower_walls(st, sq, 0.0, shaft, wcol)
+	var stone := Color(0.84, 0.80, 0.72)
+	_emit_colored_box(fst, Transform3D(Basis.IDENTITY, Vector3(tc.x, shaft + 0.6, tc.y)), Vector3(s + 1.2, 1.2, s + 1.2), stone)
+	# belfry stage: four corner piers
+	for cx: float in [-1.0, 1.0]:
+		for cz: float in [-1.0, 1.0]:
+			_emit_colored_box(fst, Transform3D(Basis.IDENTITY, Vector3(tc.x + cx * (s * 0.5 - 0.7), shaft + 5.0, tc.y + cz * (s * 0.5 - 0.7))), Vector3(1.4, 8.0, 1.4), stone)
+	_emit_colored_box(fst, Transform3D(Basis.IDENTITY, Vector3(tc.x, shaft + 9.6, tc.y)), Vector3(s + 0.8, 1.2, s + 0.8), stone)
+	var apex := Vector3(tc.x, shaft + 10.2 + 9.0, tc.y)
+	for k in range(4):
+		_roof_tri(rst, _v3(sq[k], shaft + 10.2), _v3(sq[(k + 1) % 4], shaft + 10.2), apex, Color(0.36, 0.42, 0.40))
+	# clock faces on all four sides
+	for k in range(4):
+		var a := sq[k]
+		var b := sq[(k + 1) % 4]
+		var mid := (a + b) * 0.5
+		var out := (mid - tc).normalized()
+		var fc := mid + out * 0.08
+		var along := (b - a).normalized()
+		var r := 2.4
+		var yc := shaft - 5.0
+		var prev := Vector3.ZERO
+		for q in range(17):
+			var t := TAU * float(q) / 16.0
+			var pt := Vector3(fc.x + along.x * cos(t) * r, yc + sin(t) * r, fc.y + along.y * cos(t) * r)
+			if q > 0:
+				for vv: Vector3 in [Vector3(fc.x, yc, fc.y), prev, pt]:
+					fst.set_color(Color(0.95, 0.94, 0.88))
+					fst.set_normal(Vector3(out.x, 0.0, out.y))
+					fst.add_vertex(vv)
+			prev = pt
+
+
 # House: plain siding walls up to the eave (flat cap when there is no pitched roof), then a gabled /
 # hipped / pyramidal / skillion roof over the footprint's oriented box (OSM roof:shape or estimated).
 static func _emit_house(st: SurfaceTool, roof_st: SurfaceTool, poly: PackedVector2Array, h: float, roof: Dictionary, wcol: Color, rcol: Color) -> void:
@@ -927,6 +1215,11 @@ static func _emit_house(st: SurfaceTool, roof_st: SurfaceTool, poly: PackedVecto
 				st.set_uv(Vector2.ZERO)
 				st.add_vertex(Vector3(rp.x, h, rp.y))
 		return
+	_emit_roof(st, roof_st, roof, h, wcol, rcol)
+
+
+# Pitched roof over a footprint's oriented box (house, Gothic hall, church), eaves at height h
+static func _emit_roof(st: SurfaceTool, roof_st: SurfaceTool, roof: Dictionary, h: float, wcol: Color, rcol: Color) -> void:
 	var cc: Array = roof.get("c", [0.0, 0.0])
 	var c := Vector2(float(cc[0]), float(cc[1]))
 	var ang := float(roof.get("a", 0.0))

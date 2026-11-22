@@ -314,6 +314,8 @@ static func drape_mesh(mesh: Mesh, xf: Transform3D = Transform3D.IDENTITY) -> Me
 	var inv := xf.affine_inverse()
 	for s in range(mesh.get_surface_count()):
 		var arr := mesh.surface_get_arrays(s)
+		if arr.is_empty() or arr[Mesh.ARRAY_VERTEX] == null:
+			continue # empty surface (e.g. a mesh freed / not yet filled): nothing to drape
 		var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
 		if ident:
 			arr[Mesh.ARRAY_VERTEX] = _lift_verts(verts)
@@ -328,7 +330,7 @@ static func drape_mesh(mesh: Mesh, xf: Transform3D = Transform3D.IDENTITY) -> Me
 		out.add_surface_from_arrays(prim, arr)
 		var mat := mesh.surface_get_material(s)
 		if mat != null:
-			out.surface_set_material(s, mat)
+			out.surface_set_material(out.get_surface_count() - 1, mat)
 	return out
 
 

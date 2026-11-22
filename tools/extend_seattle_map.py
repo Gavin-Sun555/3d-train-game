@@ -668,6 +668,72 @@ def roof_for(t, kind, pts, area, h):
             "hl": round(hl, 2), "hw": round(hw, 2)}
 
 
+# Landmark detail (scripts/city_builder.gd draws these): UW's Collegiate Gothic halls, churches, King Street
+# Station's campanile, stadium roofs
+UW_GOTHIC = {
+    "Suzzallo Library", "Allen Library", "Denny Hall", "Savery Hall", "Gowen Hall", "Raitt Hall", "Smith Hall",
+    "Miller Hall", "Thomson Hall", "Anderson Hall", "Johnson Hall", "Guggenheim Hall", "Gerberding Hall",
+    "Mary Gates Hall", "Parrington Hall", "Hutchinson Hall", "Architecture Hall", "Clark Hall", "Lewis Hall",
+    "Cunningham Hall", "Eagleson Hall", "Hansee Hall", "Music Building", "Art Building", "Condon Hall",
+    "Bagley Hall", "Padelford Hall", "Sieg Hall", "Kane Hall", "Henry Art Gallery", "Engineering Annex",
+}
+UW_GOTHIC_STRICT = {"Suzzallo Library", "Allen Library", "Denny Hall", "Savery Hall", "Gowen Hall", "Raitt Hall",
+                    "Smith Hall", "Miller Hall", "Thomson Hall", "Anderson Hall", "Johnson Hall", "Guggenheim Hall",
+                    "Gerberding Hall", "Mary Gates Hall", "Parrington Hall", "Hutchinson Hall", "Architecture Hall",
+                    "Clark Hall", "Lewis Hall", "Cunningham Hall", "Eagleson Hall", "Hansee Hall", "Music Building",
+                    "Art Building", "Engineering Annex"}
+STADIUM_ROOFS = {"T-Mobile Park": "retractable", "Lumen Field": "arch_canopy", "Husky Stadium": "cantilever"}
+
+
+def steep_roof(pts, area, pitch, min_ratio=0.55):
+    o = obb(pts)
+    if o is None:
+        return None
+    cx, cy, ang, hl, hw = o
+    if 4.0 * hl * hw <= 0 or abs(area) / (4.0 * hl * hw) < min_ratio or hw < 3.0:
+        return None
+    return {"shape": "gabled", "h": round(min(hw * pitch, 18.0), 2), "c": [round(cx, 2), round(cy, 2)], "a": round(ang, 4),
+            "hl": round(hl, 2), "hw": round(hw, 2)}
+
+
+def landmark_detail(b, t, pts, area, stadium_sites, part=False):
+    nm = t.get("name", "")
+    if nm in UW_GOTHIC_STRICT:
+        b["lm"] = "suzzallo" if nm == "Suzzallo Library" else "uw_gothic"
+        b["style"] = 1
+        b.setdefault("colour", "#9d7a5b")  # UW tan brick with cast-stone trim
+        rf = steep_roof(pts, area, 1.05 if nm == "Suzzallo Library" else 0.8, 0.4)
+        if rf is not None:
+            b["roof"] = rf
+            b.setdefault("roof_colour", "#4a5552")  # slate / weathered copper
+        return
+    kind = t.get("building", "")
+    if (kind in ("church", "cathedral", "chapel") or t.get("amenity") == "place_of_worship"
+            or "Church" in nm or "Cathedral" in nm) and area > 140:
+        b["lm"] = "church"
+        b["style"] = 1
+        if "Cathedral" in nm:
+            b["twin_towers"] = True
+        rf = steep_roof(pts, area, 0.95, 0.5)
+        if rf is not None:
+            b["roof"] = rf
+            b.setdefault("roof_colour", "#3e4442")
+        return
+    if nm == "King Street Station" and not part:  # (its OSM 3D parts already hold the real clock tower)
+        b["lm"] = "campanile"
+        b["style"] = 1
+        b.setdefault("colour", "#8f4f3c")
+        return
+    if b.get("kind") == "stadium" and "inner" in b:
+        c = centroid(pts)
+        for snm, ring in stadium_sites:
+            if point_in_poly(c[0], c[1], ring):
+                b["name"] = snm
+                if snm in STADIUM_ROOFS:
+                    b["stadium_roof"] = STADIUM_ROOFS[snm]
+                break
+
+
 def building_style(kind, h, area, t):
     mat = t.get("building:material", "")
     if kind in HOUSE_KINDS or kind == "houseboat" or (kind in ("yes", "residential") and area < 260 and h <= 10.0):
@@ -714,6 +780,16 @@ def build_buildings(nodes, ways, rels, base, road_grid):
         c = centroid(ring)
         part_grid.add(pi, c[0], c[1], c[0], c[1])
     part_cen = [centroid(r) for _, r in parts]
+
+    # named stadium sites (leisure=stadium): name the stadium bowl inside them
+    stadium_sites = []
+    for wid, (refs, t) in ways.items():
+        if t.get("leisure") == "stadium" and t.get("name") and len(refs) >= 4 and refs[0] == refs[-1]:
+            stadium_sites.append((t["name"], [nodes[r] for r in refs if r in nodes]))
+    for rid, (mem, t) in rels.items():
+        if t.get("leisure") == "stadium" and t.get("name"):
+            for ring in assemble_rings([m["ref"] for m in mem if m.get("type") == "way" and m.get("role") in ("outer", "")], nodes, ways):
+                stadium_sites.append((t["name"], ring))
 
     # --- outlines (tags, ring, hole) ---
     outlines = []
@@ -843,6 +919,13 @@ def build_buildings(nodes, ways, rels, base, road_grid):
                     pb["name"] = t["name"]
                     if t["name"] in LANDMARK_NAMES:
                         pb["lm"] = LANDMARK_NAMES[t["name"]]
+                if mh <= 0.5:
+                    landmark_detail(pb, t, ring, abs(poly_area(ring)), stadium_sites, part=True)
+                if t.get("name") == "King Street Station":
+                    pb["style"] = 1  # red brick (1906), not a glass tower because its campanile is 74 m tall
+                    pb["colour"] = "#8f4f3c"
+                    if ph > 50.0 and abs(poly_area(ring)) < 200.0:
+                        pb["lm"] = "campanile_tower"  # the real clock-tower part: gets belfry, cap and clock faces
                 out.append(pb)
             continue
         b = {"pts": [rnd(p) for p in pts], "h": round(h, 1), "kind": kind, "style": style}
@@ -857,7 +940,11 @@ def build_buildings(nodes, ways, rels, base, road_grid):
                 b[k_dst] = t[k_src]
         if b.get("name") in LANDMARK_NAMES:
             b["lm"] = LANDMARK_NAMES[b["name"]]
+        landmark_detail(b, t, pts, area, stadium_sites)
         out.append(b)
+    print(f"Buildings: {sum(1 for b in out if b.get('lm') in ('uw_gothic', 'suzzallo'))} UW Gothic, "
+          f"{sum(1 for b in out if b.get('lm') == 'church')} churches, "
+          f"{[b['name'] for b in out if b.get('stadium_roof')]} stadium roofs")
     print(f"Buildings: {len(out)} new ({sum(1 for b in out if 'roof' in b)} with pitched roofs, "
           f"{sum(1 for b in out if b['h'] >= 40)} >= 40 m, {len(used_parts)} 3D parts); "
           f"{len(replaced)} v3 ring buildings replaced by their 3D OSM version")
