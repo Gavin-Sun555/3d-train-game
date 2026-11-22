@@ -2980,12 +2980,33 @@ func _set_oriented_box_preview(mi: MeshInstance3D, pos: Vector3, fwd: Vector3, s
 	mi.material_override = _translucent_mat(col)
 
 
-static func _translucent_mat(col: Color) -> StandardMaterial3D:
-	var m := StandardMaterial3D.new()
-	m.albedo_color = col
-	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+# Build / plan overlays: translucent, unshaded, and pulled a little toward the camera in depth so they always
+# show over the street they highlight (on slopes the draped road surface can rise above a thin ground offset
+# between its vertices), while buildings in front still hide them.
+static var _overlay_shader: Shader = null
+
+static func _translucent_mat(col: Color) -> ShaderMaterial:
+	if _overlay_shader == null:
+		_overlay_shader = Shader.new()
+		_overlay_shader.code = """
+shader_type spatial;
+render_mode unshaded, cull_disabled, blend_mix, depth_draw_never, shadows_disabled;
+uniform vec4 col : source_color = vec4(0.2, 0.9, 0.5, 0.7);
+void vertex() {
+	vec4 vp = MODELVIEW_MATRIX * vec4(VERTEX, 1.0);
+	float d = length(vp.xyz);
+	// toward the eye by 1.5 m + 0.4 % of the distance (never past the near plane)
+	vp.xyz *= max(0.05, 1.0 - (1.5 + d * 0.004) / max(d, 0.001));
+	POSITION = PROJECTION_MATRIX * vp;
+}
+void fragment() {
+	ALBEDO = col.rgb;
+	ALPHA = col.a;
+}
+"""
+	var m := ShaderMaterial.new()
+	m.shader = _overlay_shader
+	m.set_shader_parameter("col", col)
 	return m
 
 
