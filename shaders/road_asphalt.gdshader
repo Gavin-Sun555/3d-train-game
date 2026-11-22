@@ -29,7 +29,7 @@ void vertex() {
 	// away in depth so things lying on it always win (never visibly moves the street itself)
 	vec4 vp = MODELVIEW_MATRIX * vec4(VERTEX, 1.0);
 	float d = length(vp.xyz);
-	vp.xyz *= 1.0 + (0.10 + d * 0.0004) / max(d, 0.001);
+	vp.xyz *= 1.0 + (0.12 + d * 0.0002) / max(d, 0.001);
 	POSITION = PROJECTION_MATRIX * vp;
 }
 

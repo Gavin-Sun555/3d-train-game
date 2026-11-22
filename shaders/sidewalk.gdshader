@@ -55,7 +55,7 @@ void vertex() {
 	// draped onto it never get pierced by its own (differently triangulated) slopes
 	vec4 vp = MODELVIEW_MATRIX * vec4(VERTEX, 1.0);
 	float d = length(vp.xyz);
-	vp.xyz *= 1.0 + (0.30 + d * 0.0010) / max(d, 0.001);
+	vp.xyz *= 1.0 + (0.35 + d * 0.0006) / max(d, 0.001);
 	POSITION = PROJECTION_MATRIX * vp;
 }
 

@@ -35,6 +35,12 @@ float waves(vec2 p, float t) {
 
 void vertex() {
 	v_world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	// Bottom layer like the bare ground (same depth push as sidewalk.gdshader): streets pushed back a little
+	// themselves (road_asphalt.gdshader) still win over the water where a low bridge deck crosses it
+	vec4 vp = MODELVIEW_MATRIX * vec4(VERTEX, 1.0);
+	float d = length(vp.xyz);
+	vp.xyz *= 1.0 + (0.35 + d * 0.0006) / max(d, 0.001);
+	POSITION = PROJECTION_MATRIX * vp;
 }
 
 void fragment() {
