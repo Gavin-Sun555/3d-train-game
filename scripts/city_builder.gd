@@ -325,7 +325,7 @@ static func _build_roads_and_curbs(
 		var dense: Array = []
 		for r0: Dictionary in roads:
 			var rd := r0.duplicate()
-			rd["pts"] = Terrain.densify(r0.get("pts", []), 10.0)
+			rd["pts"] = Terrain.densify_adaptive(r0.get("pts", []), 8.0, 2.0, 0.03)
 			dense.append(rd)
 		roads = dense
 	var road_st := SurfaceTool.new()
@@ -368,8 +368,22 @@ static func _build_roads_and_curbs(
 				continue
 			var dir := d / seg_len
 			var nrm := Vector2(-dir.y, dir.x) * hw
-			var a_ext := a - dir * minf(hw * 0.55, 2.6)
-			var b_ext := b + dir * minf(hw * 0.55, 2.6)
+			# Overlap past the ends closes the wedge gaps at junctions and bends; where the street runs straight
+			# on (points added by densifying) a tiny overlap is enough, and a long one would reach over the next
+			# span's slope and stand above the ground there
+			var ext := minf(hw * 0.55, 2.6)
+			var ext_a := ext
+			var ext_b := ext
+			if i > 0:
+				var pa := Vector2(float(raw_pts[i - 1][0]), float(raw_pts[i - 1][1]))
+				if pa.distance_to(a) > 0.1 and (a - pa).normalized().dot(dir) > 0.9986:
+					ext_a = 0.08
+			if i + 2 < raw_pts.size():
+				var pb := Vector2(float(raw_pts[i + 2][0]), float(raw_pts[i + 2][1]))
+				if pb.distance_to(b) > 0.1 and (pb - b).normalized().dot(dir) > 0.9986:
+					ext_b = 0.08
+			var a_ext := a - dir * ext_a
+			var b_ext := b + dir * ext_b
 			# Road quads overlap at junctions and polyline bends: give each a fixed, distinct height so the
 			# overlap always resolves the same way (exactly coplanar overlaps z-fight and flicker in motion)
 			y = y_base + float(road_level[road_i]) * 0.0015 + float(i % 2) * 0.0005
@@ -394,21 +408,41 @@ static func _build_roads_and_curbs(
 					bow = maxf(bow, absf((gl + gr) * 0.5 - gm))
 				if bow > 0.03:
 					strips = clampi(int(ceil(hw * 2.0 / 4.0)), 2, 7)
-			for k in range(strips):
-				var f0 := float(k) / float(strips)
-				var f1 := float(k + 1) / float(strips)
-				var w0 := v0.lerp(v1, f0)
-				var w1 := v0.lerp(v1, f1)
-				var w2 := v3.lerp(v2, f1)
-				var w3 := v3.lerp(v2, f0)
-				var u0 := lerpf(-1.0, 1.0, f0)
-				var u1 := lerpf(-1.0, 1.0, f1)
-				road_st.set_normal(Vector3.UP); road_st.set_uv(Vector2(u0, 0.0)); road_st.add_vertex(w0)
-				road_st.set_normal(Vector3.UP); road_st.set_uv(Vector2(u1, 0.0)); road_st.add_vertex(w1)
-				road_st.set_normal(Vector3.UP); road_st.set_uv(Vector2(u1, seg_len)); road_st.add_vertex(w2)
-				road_st.set_normal(Vector3.UP); road_st.set_uv(Vector2(u0, 0.0)); road_st.add_vertex(w0)
-				road_st.set_normal(Vector3.UP); road_st.set_uv(Vector2(u1, seg_len)); road_st.add_vertex(w2)
-				road_st.set_normal(Vector3.UP); road_st.set_uv(Vector2(u0, seg_len)); road_st.add_vertex(w3)
+			# Lengthwise the overlaps past the ends are pieces of their own on terrain, so the draped street
+			# bends exactly at the junction / bend point instead of spanning straight across it
+			var cuts: Array[float] = [0.0, 1.0]
+			if Terrain.active:
+				var tot := ext_a + seg_len + ext_b
+				cuts = [0.0]
+				if ext_a > 0.5:
+					cuts.append(ext_a / tot)
+				if ext_b > 0.5:
+					cuts.append((ext_a + seg_len) / tot)
+				cuts.append(1.0)
+			for c in range(cuts.size() - 1):
+				var t0 := cuts[c]
+				var t1 := cuts[c + 1]
+				var p0 := v0.lerp(v3, t0)
+				var p1 := v1.lerp(v2, t0)
+				var p2 := v1.lerp(v2, t1)
+				var p3 := v0.lerp(v3, t1)
+				for k in range(strips):
+					var f0 := float(k) / float(strips)
+					var f1 := float(k + 1) / float(strips)
+					var w0 := p0.lerp(p1, f0)
+					var w1 := p0.lerp(p1, f1)
+					var w2 := p3.lerp(p2, f1)
+					var w3 := p3.lerp(p2, f0)
+					var u0 := lerpf(-1.0, 1.0, f0)
+					var u1 := lerpf(-1.0, 1.0, f1)
+					var s0 := t0 * seg_len
+					var s1 := t1 * seg_len
+					road_st.set_normal(Vector3.UP); road_st.set_uv(Vector2(u0, s0)); road_st.add_vertex(w0)
+					road_st.set_normal(Vector3.UP); road_st.set_uv(Vector2(u1, s0)); road_st.add_vertex(w1)
+					road_st.set_normal(Vector3.UP); road_st.set_uv(Vector2(u1, s1)); road_st.add_vertex(w2)
+					road_st.set_normal(Vector3.UP); road_st.set_uv(Vector2(u0, s0)); road_st.add_vertex(w0)
+					road_st.set_normal(Vector3.UP); road_st.set_uv(Vector2(u1, s1)); road_st.add_vertex(w2)
+					road_st.set_normal(Vector3.UP); road_st.set_uv(Vector2(u0, s1)); road_st.add_vertex(w3)
 			has_road = true
 
 			# Lane markings from the real lane counts: yellow centre line(s) on two-way streets, white dashes

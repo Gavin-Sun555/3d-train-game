@@ -16,6 +16,10 @@ static var _h := 0
 static var _hs := PackedFloat32Array() # ground (bare earth), m
 static var _wl := PackedFloat32Array() # water surface where there is water, else -1e6
 static var _dk := PackedFloat32Array() # street bridge decks (overpasses, canal bridges), else -1e6
+# How far water / a deck lifts the surface above the ground at each node (>= 0). Interpolated bilinearly like
+# the ground, so surface() is continuous: streets and tracks draped with different vertex spacings then agree
+# at deck ends and shores (a nearest-cell step there put one above the other by up to metres)
+static var _lf := PackedFloat32Array()
 static var _rigid_max := 60.0
 
 
@@ -24,6 +28,7 @@ static func load_for(map_key: String, areas: Array, edges: Array = []) -> void:
 	_hs = PackedFloat32Array()
 	_wl = PackedFloat32Array()
 	_dk = PackedFloat32Array()
+	_lf = PackedFloat32Array()
 	var base := "res://data/%s_terrain" % map_key
 	if not FileAccess.file_exists(base + ".bin") or not FileAccess.file_exists(base + ".json"):
 		return
@@ -44,6 +49,9 @@ static func load_for(map_key: String, areas: Array, edges: Array = []) -> void:
 		_hs[i] = float(buf.decode_s16(i * 2)) * sc
 	_build_water(areas)
 	_build_decks(edges)
+	_lf.resize(_w * _h)
+	for i in range(_w * _h):
+		_lf[i] = maxf(0.0, maxf(_wl[i], _dk[i]) - _hs[i])
 	active = true
 
 
@@ -169,11 +177,15 @@ static func ground(x: float, z: float) -> float:
 static func surface(x: float, z: float) -> float:
 	if not active:
 		return 0.0
-	var g := _ground(x, z)
-	var fx := clampf((x - _x0) / _cell, 0.0, float(_w) - 1.0)
-	var fz := clampf((z - _z0) / _cell, 0.0, float(_h) - 1.0)
-	var k := int(round(fz)) * _w + int(round(fx))
-	return maxf(g, maxf(_wl[k], _dk[k]))
+	var fx := clampf((x - _x0) / _cell, 0.0, float(_w) - 1.001)
+	var fz := clampf((z - _z0) / _cell, 0.0, float(_h) - 1.001)
+	var ix := int(fx)
+	var iz := int(fz)
+	var ux := fx - float(ix)
+	var uz := fz - float(iz)
+	var k := iz * _w + ix
+	var g := lerpf(lerpf(_hs[k], _hs[k + 1], ux), lerpf(_hs[k + _w], _hs[k + _w + 1], ux), uz)
+	return g + lerpf(lerpf(_lf[k], _lf[k + 1], ux), lerpf(_lf[k + _w], _lf[k + _w + 1], ux), uz)
 
 
 static func surface_v(p: Vector3) -> float:
@@ -337,8 +349,7 @@ static func drape_mesh(mesh: Mesh, xf: Transform3D = Transform3D.IDENTITY) -> Me
 # Raise world-space vertices onto surface() (inlined bilinear lookup: this runs over millions of vertices)
 static func _lift_verts(verts: PackedVector3Array) -> PackedVector3Array:
 	var hs := _hs
-	var wl := _wl
-	var dk := _dk
+	var lf := _lf
 	var w := _w
 	var x0 := _x0
 	var z0 := _z0
@@ -355,8 +366,7 @@ static func _lift_verts(verts: PackedVector3Array) -> PackedVector3Array:
 		var uz := fz - float(iz)
 		var k := iz * w + ix
 		var g := (hs[k] * (1.0 - ux) + hs[k + 1] * ux) * (1.0 - uz) + (hs[k + w] * (1.0 - ux) + hs[k + w + 1] * ux) * uz
-		var kw := (iz + (1 if uz > 0.5 else 0)) * w + ix + (1 if ux > 0.5 else 0)
-		v.y += maxf(g, maxf(wl[kw], dk[kw]))
+		v.y += g + (lf[k] * (1.0 - ux) + lf[k + 1] * ux) * (1.0 - uz) + (lf[k + w] * (1.0 - ux) + lf[k + w + 1] * ux) * uz
 		verts[i] = v
 	return verts
 
@@ -375,6 +385,44 @@ static func densify(pts: Array, step: float) -> Array:
 			out.append([p.x, p.y])
 		out.append(pts[i + 1])
 	return out
+
+
+# Densify where the ground needs it: spans of at most max_step, halved (down to min_step) wherever the surface
+# under their middle strays more than tol from the straight line between their ends (draped strips then stay
+# within a few cm of the ground on curved slopes, without adding vertices on flat streets)
+static func densify_adaptive(pts: Array, max_step: float, min_step: float, tol: float) -> Array:
+	if not active or pts.size() < 2:
+		return pts
+	var out: Array = [pts[0]]
+	for i in range(pts.size() - 1):
+		var a := Vector2(float(pts[i][0]), float(pts[i][1]))
+		var b := Vector2(float(pts[i + 1][0]), float(pts[i + 1][1]))
+		var n := int(ceil(a.distance_to(b) / max_step))
+		var prev := a
+		for k in range(1, n + 1):
+			var q := a.lerp(b, float(k) / float(n))
+			_split_span(prev, q, surface(prev.x, prev.y), surface(q.x, q.y), min_step, tol, out)
+			if k < n:
+				out.append([q.x, q.y])
+			prev = q
+		out.append(pts[i + 1])
+	return out
+
+
+static func _split_span(a: Vector2, b: Vector2, ha: float, hb: float, min_step: float, tol: float, out: Array) -> void:
+	if a.distance_to(b) < min_step * 2.0:
+		return
+	var mid := (a + b) * 0.5
+	var hm := surface(mid.x, mid.y)
+	var q1 := a.lerp(b, 0.25)
+	var q3 := a.lerp(b, 0.75)
+	# the ground is bilinear on its cells: a kink can sit anywhere along the span, not just in the middle
+	var dev := maxf(absf(hm - (ha + hb) * 0.5), maxf(absf(surface(q1.x, q1.y) - lerpf(ha, hb, 0.25)), absf(surface(q3.x, q3.y) - lerpf(ha, hb, 0.75))))
+	if dev <= tol:
+		return
+	_split_span(a, mid, ha, hm, min_step, tol, out)
+	out.append([mid.x, mid.y])
+	_split_span(mid, b, hm, hb, min_step, tol, out)
 
 
 # Ground mesh: the terrain itself, in 512 m chunks (one node each, for culling), full 8 m detail up close and a
