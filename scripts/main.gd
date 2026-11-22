@@ -204,6 +204,17 @@ var _door_cam_yaw := 0.0
 var _door_cam_pitch := 0.0
 var _plan_target := Vector3(0.0, 0.0, 120.0)
 var _plan_height := 560.0
+var _plan_max_height := 1180.0 # grows with the map, so the whole city fits on screen
+# Whole-city overview (bird's-eye view zoomed far out): light model in place of the detailed city; no building
+const OVERVIEW_ON_H := 1500.0
+const OVERVIEW_OFF_H := 1300.0
+var _overview_on := false
+var _overview_root: Node3D = null
+var _overview_task := -1
+var _overview_result: Node3D = null
+var _overview_sig := ""
+var _overview_saved_far := 2800.0
+var _overview_toast_cd := 0.0
 var _snap_camera_next := true
 
 # Mouse / Trackpad drag & click state
@@ -349,6 +360,7 @@ func _async_startup_load() -> void:
 	var bounds: Array = _map_data.get("bounds", [-520.0, -520.0, 520.0, 520.0])
 	_pan_limit_x = maxf(absf(float(bounds[0])), absf(float(bounds[2]))) + 80.0
 	_pan_limit_z = maxf(absf(float(bounds[1])), absf(float(bounds[3]))) + 80.0
+	_plan_max_height = maxf(1180.0, maxf(float(bounds[2]) - float(bounds[0]), float(bounds[3]) - float(bounds[1])) * 0.78)
 	_plan_target = preset["default_target"] as Vector3
 	_plan_height = float(preset["default_height"])
 	_snap_camera_next = true
@@ -436,6 +448,7 @@ func _load_map_world(map_key: String, use_starter: bool, seed_pax: bool) -> void
 	var bounds: Array = _map_data.get("bounds", [-520.0, -520.0, 520.0, 520.0])
 	_pan_limit_x = maxf(absf(float(bounds[0])), absf(float(bounds[2]))) + 80.0
 	_pan_limit_z = maxf(absf(float(bounds[1])), absf(float(bounds[3]))) + 80.0
+	_plan_max_height = maxf(1180.0, maxf(float(bounds[2]) - float(bounds[0]), float(bounds[3]) - float(bounds[1])) * 0.78)
 
 	_plan_target = preset["default_target"] as Vector3
 	_plan_height = float(preset["default_height"])
@@ -2056,6 +2069,9 @@ func _put_tracks_on_terrain() -> void:
 
 
 func _update_build_hover_preview(screen_pos: Vector2) -> void:
+	if _overview_on:
+		_preview_mi.mesh = null
+		return
 	var xz_var = _screen_to_ground_xz(screen_pos)
 	if xz_var == null:
 		_preview_mi.mesh = null
@@ -2237,6 +2253,9 @@ func _update_build_hover_preview(screen_pos: Vector2) -> void:
 
 
 func _handle_map_left_click(screen_pos: Vector2) -> void:
+	if _overview_on and _game_mode != GameMode.RUN:
+		_show_toast("全城视图下不能建设 / 规划，放大后再操作")
+		return
 	var xz_var = _screen_to_ground_xz(screen_pos)
 	if xz_var == null:
 		return
@@ -2491,8 +2510,9 @@ func _process(delta: float) -> void:
 		if _reset_confirm_timer <= 0.0 and _btn_home_reset != null:
 			_btn_home_reset.text = "重新开始"
 
+	_update_city_overview()
 	# Outer map tiles stream in on a worker thread on every screen (home backdrop included)
-	if _city_tiles != null and _camera != null:
+	if _city_tiles != null and _camera != null and not _overview_on:
 		_city_tiles.focus = _camera.global_position
 		_city_tiles.step()
 
@@ -2706,9 +2726,99 @@ func _update_monorail(dt: float) -> void:
 		car.global_transform = TrackBuilder.sample_track_frame(_monorail_curve, cs, mlen, false)
 
 
+# ---------------------------------------------------------------------------------------------
+# Whole-city overview: past OVERVIEW_ON_H the bird's-eye view swaps the detailed city (façades, kerbs, trees,
+# furniture, streamed tiles, cars, pedestrians, shadows) for one light model of the whole map, so the player
+# can zoom out until the whole city is on screen. Building and planning are off while it shows.
+# ---------------------------------------------------------------------------------------------
+func _overview_wanted() -> bool:
+	if _camera == null or _in_home_menu:
+		return false
+	var bird := _game_mode != GameMode.RUN or _cam_mode == CamMode.BIRD or _transit_sim.trams.is_empty()
+	if not bird:
+		return false
+	return _plan_height > (OVERVIEW_OFF_H if _overview_on else OVERVIEW_ON_H)
+
+
+func _overview_signature() -> String:
+	return "%s|%s|%d|%d|%d" % [_current_map_key, str(_graph.land_edit_signature()), _graph.built_tracks.size(), _graph.stations.size(), hash(_graph.built_tracks.keys())]
+
+
+func _overview_snapshot() -> Dictionary:
+	var d := _effective_land_data()
+	var tracks: Array = []
+	for eid in _graph.built_tracks.keys():
+		if not _graph.edges.has(eid):
+			continue
+		var pts: Array = []
+		for p in _graph.edges[eid]["pts"]:
+			pts.append(p as Vector2)
+		tracks.append({"pts": pts, "mono": int(_graph.built_tracks[eid]) == TrackBuilder.BedStyle.MONORAIL})
+	var sts: Array = []
+	for st: Dictionary in _graph.stations.values():
+		var sp: Vector3 = st["pos"]
+		sts.append(Vector2(sp.x, sp.z))
+	return {"buildings": d.get("buildings", []), "roads": d.get("roads", []), "areas": d.get("areas", []), "freeways": d.get("freeways", []), "tracks": tracks, "stations": sts}
+
+
+func _overview_thread(snap: Dictionary) -> void:
+	_overview_result = CityOverview.build(snap)
+
+
+func _update_city_overview() -> void:
+	_overview_toast_cd = maxf(0.0, _overview_toast_cd - get_process_delta_time())
+	var want := _overview_wanted()
+	# (re)build in the background whenever it is wanted and the map, the streets or the network changed
+	if _overview_task >= 0 and WorkerThreadPool.is_task_completed(_overview_task):
+		WorkerThreadPool.wait_for_task_completion(_overview_task)
+		_overview_task = -1
+		if _overview_root != null:
+			_overview_root.queue_free()
+		_overview_root = _overview_result
+		_overview_result = null
+		_overview_root.visible = _overview_on
+		add_child(_overview_root)
+	var sig := _overview_signature()
+	if (want or _plan_height > OVERVIEW_ON_H * 0.7) and _overview_task < 0 and sig != _overview_sig and Terrain.active:
+		_overview_sig = sig
+		_overview_task = WorkerThreadPool.add_task(_overview_thread.bind(_overview_snapshot()), false, "city overview")
+	# switch only once there is something to show
+	if want and not _overview_on and _overview_root != null:
+		_set_overview(true)
+	elif not want and _overview_on:
+		_set_overview(false)
+	if _overview_on:
+		_traffic_sim.visible = false
+		_pax_sim.visible = false
+
+
+func _set_overview(on: bool) -> void:
+	_overview_on = on
+	if _overview_root != null:
+		_overview_root.visible = on
+	for c in _city_root.get_children():
+		if c is Node3D and c.name != "TerrainGround":
+			(c as Node3D).visible = not on
+	_track_root.visible = not on
+	if on:
+		_overview_saved_far = _camera.far
+		_camera.far = 16000.0
+		_sun.shadow_enabled = false
+		_preview_mi.mesh = null
+		if _game_mode != GameMode.RUN and _overview_toast_cd <= 0.0:
+			_show_toast("全城视图：放大后可以建设 / 规划")
+			_overview_toast_cd = 20.0
+	else:
+		_camera.far = _overview_saved_far
+		_sun.shadow_enabled = true
+		var run_vis := _game_mode == GameMode.RUN and not _in_home_menu
+		_traffic_sim.visible = run_vis
+		_pax_sim.visible = run_vis
+
+
 func _zoom_camera(step_dir: float) -> void:
 	if _game_mode != GameMode.RUN or _cam_mode == CamMode.BIRD:
-		_plan_height = clampf(_plan_height * (1.0 + step_dir * 0.13), 55.0, 1180.0)
+		_plan_height = clampf(_plan_height * (1.0 + step_dir * 0.13), 55.0, _plan_max_height)
 	elif _cam_mode == CamMode.CAB or _cam_mode == CamMode.INTERIOR:
 		_cab_fov = clampf(_cab_fov * (1.0 + step_dir * 0.12), 30.0, 92.0)
 	elif _cam_mode == CamMode.CHASE:
