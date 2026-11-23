@@ -1,0 +1,167 @@
+name: Release Pipeline
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.0.1)'
+        required: true
+        default: 'v0.0.1'
+
+permissions:
+  contents: write
+
+env:
+  GODOT_VERSION: 4.7.2-stable
+  GODOT_TEMPLATE_DIR: 4.7.2.stable
+
+jobs:
+  qualify:
+    name: Release Qualification Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Cache Godot binary
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/godot-bin
+          key: godot-linux-${{ env.GODOT_VERSION }}
+
+      - name: Install Godot ${{ env.GODOT_VERSION }}
+        run: |
+          mkdir -p ~/.cache/godot-bin
+          if [ ! -x ~/.cache/godot-bin/godot ]; then
+            curl -fsSL "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_linux.x86_64.zip" -o /tmp/godot.zip
+            unzip -o /tmp/godot.zip -d /tmp/godot-unpack
+            mv /tmp/godot-unpack/Godot_v${GODOT_VERSION}_linux.x86_64 ~/.cache/godot-bin/godot
+            chmod +x ~/.cache/godot-bin/godot
+          fi
+          echo "$HOME/.cache/godot-bin" >> "$GITHUB_PATH"
+
+      - name: Import resources & static script check
+        run: |
+          godot --headless --path . --import
+          out=$(godot --headless --path . --quit 2>&1)
+          echo "$out"
+          if echo "$out" | grep -q "SCRIPT ERROR:"; then
+            echo "Detected SCRIPT ERROR during static boot!"
+            exit 1
+          fi
+
+      - name: Run Release Qualification Test Suite
+        run: |
+          out=$(godot --headless --path . --script res://tests/release_qualification.gd 2>&1)
+          rc=$?
+          echo "$out"
+          if echo "$out" | grep -q "SCRIPT ERROR:"; then
+            echo "Detected SCRIPT ERROR during qualification!"
+            exit 1
+          fi
+          exit $rc
+
+  export-and-publish:
+    name: Export Cross-Platform Binaries & Publish Release
+    needs: qualify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve release tag & version
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          VER="${TAG#v}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VER}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Godot binary & export templates
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/godot-bin
+            ~/.local/share/godot/export_templates
+          key: godot-export-${{ env.GODOT_VERSION }}
+
+      - name: Install Godot & Export Templates (${{ env.GODOT_VERSION }})
+        run: |
+          mkdir -p ~/.cache/godot-bin
+          if [ ! -x ~/.cache/godot-bin/godot ]; then
+            curl -fsSL "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_linux.x86_64.zip" -o /tmp/godot.zip
+            unzip -o /tmp/godot.zip -d /tmp/godot-unpack
+            mv /tmp/godot-unpack/Godot_v${GODOT_VERSION}_linux.x86_64 ~/.cache/godot-bin/godot
+            chmod +x ~/.cache/godot-bin/godot
+          fi
+          echo "$HOME/.cache/godot-bin" >> "$GITHUB_PATH"
+
+          TDIR="$HOME/.local/share/godot/export_templates/${GODOT_TEMPLATE_DIR}"
+          if [ ! -d "$TDIR" ] || [ -z "$(ls -A "$TDIR" 2>/dev/null)" ]; then
+            mkdir -p "$TDIR"
+            curl -fsSL "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_export_templates.tpz" -o /tmp/templates.tpz
+            unzip -q -o /tmp/templates.tpz -d /tmp/templates-unpack
+            mv /tmp/templates-unpack/templates/* "$TDIR/"
+            rm -rf /tmp/templates.tpz /tmp/templates-unpack
+          fi
+
+      - name: Stamp version into export presets
+        run: |
+          VER="${{ steps.meta.outputs.version }}"
+          sed -i "s/application\/short_version=\"[^\"]*\"/application\/short_version=\"${VER}\"/" export_presets.cfg
+          sed -i "s/application\/version=\"[^\"]*\"/application\/version=\"${VER}\"/" export_presets.cfg
+          sed -i "s/application\/file_version=\"[^\"]*\"/application\/file_version=\"${VER}.0\"/" export_presets.cfg
+          sed -i "s/application\/product_version=\"[^\"]*\"/application\/product_version=\"${VER}.0\"/" export_presets.cfg
+
+      - name: Import resources
+        run: godot --headless --path . --import
+
+      - name: Export macOS, Windows, and Linux builds
+        run: |
+          VER="${{ steps.meta.outputs.version }}"
+          mkdir -p build/macos build/windows build/linux dist
+
+          godot --headless --path . --export-release "macOS" "build/macos/3DTrainGame.zip"
+          cp "build/macos/3DTrainGame.zip" "dist/3d-train-game-${VER}-macos-universal.zip"
+
+          godot --headless --path . --export-release "Windows Desktop" "build/windows/3DTrainGame.exe"
+          (cd build/windows && zip -q -r "../../dist/3d-train-game-${VER}-windows-x64.zip" .)
+
+          godot --headless --path . --export-release "Linux" "build/linux/3DTrainGame.x86_64"
+          chmod +x build/linux/3DTrainGame.x86_64
+          (cd build/linux && tar -czf "../../dist/3d-train-game-${VER}-linux-x64.tar.gz" .)
+
+          (cd dist && sha256sum * > SHA256SUMS.txt)
+          ls -lh dist/
+
+      - name: Publish GitHub Release ${{ steps.meta.outputs.tag }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: "3D Train Game ${{ steps.meta.outputs.tag }}"
+          generate_release_notes: true
+          body: |
+            ## 3D Train Game `${{ steps.meta.outputs.tag }}`
+
+            Standalone 3D streetcar, light rail & monorail simulation built with Godot 4.7.
+
+            ### Highlights
+            - **Transit Simulation & Fleet**: Up to 15 trams per line, express/local quad-island passing, headway pacing, manual unscheduled stop boarding, per-line AI mode groups (`No Default` / `Slow` / `Normal` / `Furious`), and two-pass terminal crossover interlocking.
+            - **Weather & Audio**: Sunny, Cloudy, and Rainy weather modes with GPU rain streaks, dynamic sky/fog/lighting, and stereo procedural rain ambience (with cab muffling).
+            - **Bilingual Localization**: Automatic Chinese / English detection from system locale with live in-game language switching.
+            - **Persistence & Performance**: Run-slot persistence for signal priority (TSP), line AI groups, terminal reservations, and weather; smooth startup/mode-switch loading with GPU & tile prewarming.
+
+            ### Downloads
+            - **macOS (Universal)**: `3d-train-game-${{ steps.meta.outputs.version }}-macos-universal.zip`
+            - **Windows (x64)**: `3d-train-game-${{ steps.meta.outputs.version }}-windows-x64.zip`
+            - **Linux (x64)**: `3d-train-game-${{ steps.meta.outputs.version }}-linux-x64.tar.gz`
+            - **Checksums**: `SHA256SUMS.txt`
+          files: |
+            dist/*

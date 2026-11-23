@@ -581,6 +581,8 @@ func _load_map_world(map_key: String, use_starter: bool, seed_pax: bool) -> void
 	var same_city := (_loaded_city_map_key == next_key and _city_root != null and _city_root.get_child_count() > 0 and not _map_data.is_empty())
 	_current_map_key = next_key
 	if not same_city:
+		if _city_tiles != null and is_instance_valid(_city_tiles):
+			_city_tiles.finish_pending()
 		_map_data = _read_json(str(preset["data_path"]))
 		Terrain.load_for(next_key, _map_data.get("areas", []), _map_data.get("graph_edges", [])) # real ground (elevation data)
 
@@ -594,6 +596,8 @@ func _load_map_world(map_key: String, use_starter: bool, seed_pax: bool) -> void
 	_snap_camera_next = true
 
 	_graph.load_from_map_data(_map_data, use_starter)
+	if _city_tiles != null and is_instance_valid(_city_tiles):
+		_city_tiles.finish_pending()
 	var grade_changed := Terrain.grade_for_tracks(_graph)
 	if not same_city or grade_changed:
 		_build_city_world()
@@ -1233,6 +1237,8 @@ func _async_enter_saved_world(
 
 	_set_startup_progress(36.0, L10n.t("正在整平轨道地势与纵断面坡度...", "Grading trackbeds & elevation..."))
 	await get_tree().process_frame
+	if _city_tiles != null and is_instance_valid(_city_tiles):
+		_city_tiles.finish_pending()
 	var grade_changed := Terrain.grade_for_tracks(_graph)
 	if grade_changed:
 		_set_startup_progress(46.0, L10n.t("正在按整平后地形重建城区地面、公园与道路...", "Rebuilding city ground, parks & roads..."))
@@ -1452,6 +1458,8 @@ func _apply_loaded_save_state(map_key: String, save_data: Dictionary) -> void:
 		_load_map_world(map_key, false, false)
 	var net: Dictionary = save_data.get("network", {})
 	_graph.import_state(net)
+	if _city_tiles != null and is_instance_valid(_city_tiles):
+		_city_tiles.finish_pending()
 	if Terrain.grade_for_tracks(_graph):
 		_build_city_world()
 	else:
@@ -2562,6 +2570,8 @@ func _screen_to_ground_xz(screen_pos: Vector2) -> Variant:
 func _put_tracks_on_terrain() -> void:
 	if not Terrain.active:
 		return
+	if _city_tiles != null and is_instance_valid(_city_tiles):
+		_city_tiles.finish_pending()
 	if Terrain.grade_for_tracks(_graph):
 		_refresh_land_layers(true, false)
 	Terrain.drape_subtree(_track_root)

@@ -1,6 +1,7 @@
 .godot/
 .DS_Store
 build/
+dist/
 *.import
 traingame3d
 tools/osm_cache/raw/

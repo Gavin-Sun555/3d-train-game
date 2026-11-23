@@ -468,14 +468,19 @@ static func water_level_of(poly: PackedVector2Array) -> float:
 
 
 static func _ground(x: float, z: float) -> float:
-	var fx := clampf((x - _x0) / _cell, 0.0, float(_w) - 1.001)
-	var fz := clampf((z - _z0) / _cell, 0.0, float(_h) - 1.001)
+	var hs := _hs
+	var w := _w
+	var h := _h
+	if not active or w < 2 or h < 2 or hs.size() < w * h:
+		return 0.0
+	var fx := clampf((x - _x0) / _cell, 0.0, float(w) - 1.001)
+	var fz := clampf((z - _z0) / _cell, 0.0, float(h) - 1.001)
 	var ix := int(fx)
 	var iz := int(fz)
 	var ux := fx - float(ix)
 	var uz := fz - float(iz)
-	var k := iz * _w + ix
-	return lerpf(lerpf(_hs[k], _hs[k + 1], ux), lerpf(_hs[k + _w], _hs[k + _w + 1], ux), uz)
+	var k := iz * w + ix
+	return lerpf(lerpf(hs[k], hs[k + 1], ux), lerpf(hs[k + w], hs[k + w + 1], ux), uz)
 
 
 # Bare ground height (0 on maps without terrain)
@@ -485,17 +490,21 @@ static func ground(x: float, z: float) -> float:
 
 # Height things stand on: the ground, or the water surface where there is water
 static func surface(x: float, z: float) -> float:
-	if not active:
+	var hs := _hs
+	var lf := _lf
+	var w := _w
+	var h := _h
+	if not active or w < 2 or h < 2 or hs.size() < w * h or lf.size() < w * h:
 		return 0.0
-	var fx := clampf((x - _x0) / _cell, 0.0, float(_w) - 1.001)
-	var fz := clampf((z - _z0) / _cell, 0.0, float(_h) - 1.001)
+	var fx := clampf((x - _x0) / _cell, 0.0, float(w) - 1.001)
+	var fz := clampf((z - _z0) / _cell, 0.0, float(h) - 1.001)
 	var ix := int(fx)
 	var iz := int(fz)
 	var ux := fx - float(ix)
 	var uz := fz - float(iz)
-	var k := iz * _w + ix
-	var g := lerpf(lerpf(_hs[k], _hs[k + 1], ux), lerpf(_hs[k + _w], _hs[k + _w + 1], ux), uz)
-	return g + lerpf(lerpf(_lf[k], _lf[k + 1], ux), lerpf(_lf[k + _w], _lf[k + _w + 1], ux), uz)
+	var k := iz * w + ix
+	var g := lerpf(lerpf(hs[k], hs[k + 1], ux), lerpf(hs[k + w], hs[k + w + 1], ux), uz)
+	return g + lerpf(lerpf(lf[k], lf[k + 1], ux), lerpf(lf[k + w], lf[k + w + 1], ux), uz)
 
 
 static func surface_v(p: Vector3) -> float:

@@ -1,7 +1,7 @@
 APP_NAME := traingame3d
 PROJECT_DIR := $(CURDIR)
 
-.PHONY: build run demo editor data check clean
+.PHONY: build run demo editor data check test clean
 
 ## build: 默认目标，仅生成数据、静态编译校验脚本与着色器并生成可执行启动器（不自动运行游戏）
 build: data/grid_city.json data/seattle_expanded.json data/tram_models.json
@@ -35,6 +35,10 @@ data:
 check:
 	godot --headless --path . --import
 	godot --headless --path . --quit
+
+## test: 运行发布准入自动化测试套件（Release Qualification）
+test: build
+	godot --headless --path . --script res://tests/release_qualification.gd
 
 ## clean: 清理编译产物
 clean:
