@@ -69,6 +69,44 @@ const BRANDS := {
 	"aveda": {"letters": true, "fg": Color(0.1, 0.1, 0.1), "frame": Color(0.6, 0.55, 0.45)},
 	"indochino": {"bg": Color(0.08, 0.08, 0.08), "fg": Color(1, 1, 1), "frame": Color(0.1, 0.1, 0.1)},
 	"tous les jours": {"bg": Color(0.95, 0.95, 0.93), "fg": Color(0.10, 0.30, 0.25), "frame": Color(0.2, 0.3, 0.25)},
+	# Authentic Jiaxing & Chinese urban commercial brands
+	"五芳斋粽子": {"bg": Color(0.68, 0.10, 0.10), "fg": Color(0.98, 0.85, 0.36), "frame": Color(0.32, 0.16, 0.10), "awning": Color(0.62, 0.11, 0.11)},
+	"五芳斋": {"bg": Color(0.68, 0.10, 0.10), "fg": Color(0.98, 0.85, 0.36), "frame": Color(0.32, 0.16, 0.10), "awning": Color(0.62, 0.11, 0.11)},
+	"文虎酱鸭": {"bg": Color(0.42, 0.16, 0.08), "fg": Color(0.98, 0.86, 0.44), "frame": Color(0.26, 0.14, 0.08)},
+	"真真老老": {"bg": Color(0.58, 0.12, 0.12), "fg": Color(0.97, 0.90, 0.65), "frame": Color(0.28, 0.14, 0.10)},
+	"瑞幸咖啡": {"bg": Color(0.05, 0.17, 0.48), "fg": Color(1, 1, 1), "frame": Color(0.08, 0.16, 0.36), "awning": Color(0.05, 0.17, 0.48)},
+	"星巴克咖啡": {"bg": Color(0.0, 0.38, 0.25), "fg": Color(1, 1, 1), "frame": Color(0.16, 0.12, 0.09), "awning": Color(0.0, 0.32, 0.21)},
+	"霸王茶姬": {"bg": Color(0.66, 0.14, 0.16), "fg": Color(0.98, 0.94, 0.84), "frame": Color(0.24, 0.12, 0.10), "awning": Color(0.62, 0.14, 0.15)},
+	"喜茶": {"bg": Color(0.08, 0.08, 0.09), "fg": Color(1, 1, 1), "frame": Color(0.14, 0.14, 0.15)},
+	"蜜雪冰城": {"bg": Color(0.86, 0.12, 0.14), "fg": Color(1, 1, 1), "frame": Color(0.94, 0.94, 0.94)},
+	"肯德基": {"bg": Color(0.78, 0.08, 0.12), "fg": Color(1, 1, 1), "frame": Color(0.16, 0.16, 0.18)},
+	"麦当劳": {"bg": Color(0.80, 0.08, 0.08), "fg": Color(1.0, 0.80, 0.08), "frame": Color(0.18, 0.18, 0.18)},
+	"老娘舅": {"bg": Color(0.76, 0.18, 0.12), "fg": Color(1.0, 0.95, 0.82), "frame": Color(0.24, 0.16, 0.12)},
+	"外婆家": {"bg": Color(0.18, 0.16, 0.14), "fg": Color(0.96, 0.88, 0.68), "frame": Color(0.22, 0.18, 0.15)},
+	"海底捞火锅": {"bg": Color(0.74, 0.08, 0.10), "fg": Color(1, 1, 1), "frame": Color(0.18, 0.14, 0.14)},
+	"全家便利店": {"bg": Color(0.96, 0.96, 0.96), "fg": Color(0.0, 0.56, 0.28), "frame": Color(0.0, 0.48, 0.78)},
+	"罗森便利店": {"bg": Color(0.04, 0.42, 0.76), "fg": Color(1, 1, 1), "frame": Color(0.92, 0.93, 0.95)},
+	"盒马鲜生": {"bg": Color(0.02, 0.52, 0.84), "fg": Color(1, 1, 1), "frame": Color(0.12, 0.26, 0.40)},
+	"新华书店": {"bg": Color(0.76, 0.10, 0.12), "fg": Color(1, 1, 1), "frame": Color(0.24, 0.22, 0.22)},
+	"工商银行": {"bg": Color(0.76, 0.06, 0.12), "fg": Color(1, 1, 1), "frame": Color(0.26, 0.26, 0.28)},
+	"建设银行": {"bg": Color(0.04, 0.24, 0.58), "fg": Color(1, 1, 1), "frame": Color(0.24, 0.26, 0.30)},
+	"中国银行": {"bg": Color(0.66, 0.08, 0.14), "fg": Color(1, 1, 1), "frame": Color(0.26, 0.25, 0.26)},
+	"农业银行": {"bg": Color(0.02, 0.48, 0.36), "fg": Color(1, 1, 1), "frame": Color(0.20, 0.28, 0.25)},
+	"招商银行": {"bg": Color(0.82, 0.12, 0.14), "fg": Color(1, 1, 1), "frame": Color(0.25, 0.25, 0.27)},
+	"嘉兴银行": {"bg": Color(0.06, 0.32, 0.62), "fg": Color(0.98, 0.90, 0.50), "frame": Color(0.22, 0.25, 0.30)},
+	"华为授权体验店": {"bg": Color(0.10, 0.10, 0.11), "fg": Color(1, 1, 1), "frame": Color(0.76, 0.10, 0.12)},
+	"小米之家": {"bg": Color(0.96, 0.42, 0.06), "fg": Color(1, 1, 1), "frame": Color(0.22, 0.22, 0.24)},
+	"中国移动": {"bg": Color(0.02, 0.50, 0.80), "fg": Color(1, 1, 1), "frame": Color(0.20, 0.24, 0.28)},
+	"中国电信": {"bg": Color(0.06, 0.32, 0.68), "fg": Color(1, 1, 1), "frame": Color(0.22, 0.24, 0.28)},
+	"老百姓大药房": {"bg": Color(0.08, 0.54, 0.26), "fg": Color(1, 1, 1), "frame": Color(0.92, 0.93, 0.92)},
+	"海王星辰药房": {"bg": Color(0.06, 0.44, 0.68), "fg": Color(1, 1, 1), "frame": Color(0.90, 0.92, 0.94)},
+	"戴梦得购物中心": {"bg": Color(0.14, 0.16, 0.24), "fg": Color(0.96, 0.84, 0.42), "frame": Color(0.24, 0.24, 0.28)},
+	"八佰伴购物中心": {"bg": Color(0.12, 0.20, 0.36), "fg": Color(0.98, 0.92, 0.72), "frame": Color(0.20, 0.22, 0.26)},
+	"万达广场": {"bg": Color(0.06, 0.28, 0.58), "fg": Color(1, 1, 1), "frame": Color(0.20, 0.24, 0.30)},
+	"旭辉广场": {"bg": Color(0.74, 0.24, 0.12), "fg": Color(1, 1, 1), "frame": Color(0.24, 0.22, 0.22)},
+	"南湖茶楼": {"bg": Color(0.20, 0.14, 0.10), "fg": Color(0.96, 0.86, 0.52), "frame": Color(0.28, 0.18, 0.12), "awning": Color(0.46, 0.16, 0.12)},
+	"月河茶馆": {"bg": Color(0.18, 0.14, 0.11), "fg": Color(0.95, 0.86, 0.56), "frame": Color(0.26, 0.18, 0.12), "awning": Color(0.42, 0.16, 0.12)},
+	"禾城老面馆": {"bg": Color(0.32, 0.16, 0.10), "fg": Color(0.98, 0.90, 0.64), "frame": Color(0.24, 0.15, 0.10), "awning": Color(0.52, 0.18, 0.12)},
 }
 
 # Fallback palettes by shop category: [bg, fg, frame, awning]
@@ -336,15 +374,18 @@ static func _make_label(txt: String, col: Color, letters: bool) -> Label3D:
 	l.modulate = col
 	l.double_sided = false
 	l.shaded = letters
-	l.visibility_range_end = 95.0
+	l.visibility_range_end = 135.0
 	l.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	l.render_priority = 1
 	return l
 
 
 static func _fit_label(l: Label3D, txt: String, max_w: float, max_h: float) -> void:
-	var chars := maxf(3.0, float(txt.length()))
-	var px_w := max_w / (chars * float(l.font_size) * 0.60)
+	var eff_chars := 0.0
+	for i in range(txt.length()):
+		eff_chars += 1.05 if txt.unicode_at(i) >= 0x2E80 else 0.60
+	eff_chars = maxf(2.2, eff_chars)
+	var px_w := max_w / (eff_chars * float(l.font_size))
 	var px_h := max_h / (float(l.font_size) * 1.05)
 	l.pixel_size = minf(px_w, px_h)
 

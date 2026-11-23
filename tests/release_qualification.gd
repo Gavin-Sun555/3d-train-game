@@ -260,6 +260,22 @@ func _run() -> void:
 		jx_hsr != null and jx_yanyu != null and jx_mem != null and jx_sta != null and jx_rail != null,
 		"All bespoke Jiaxing 3D landmarks & heavy railways built (HSR South Sta., Yanyu Tower, Memorial Hall, Forest Station, Heavy Railways)"
 	)
+	var jx_gov: Node = jx_lm.get_node_or_null("JiaxingMunicipalGovernment") if jx_lm != null else null
+	var jx_no1: Node = jx_lm.get_node_or_null("JiaxingNo1HighSchool") if jx_lm != null else null
+	var jx_yuehe: Node = jx_lm.get_node_or_null("YueheHistoricQuarter") if jx_lm != null else null
+	var jx_zicheng: Node = jx_lm.get_node_or_null("ZichengHistoricSitePark") if jx_lm != null else null
+	var jx_cp: Node = jx_lm.get_node_or_null("JiaxingCentralParkLandmark") if jx_lm != null else null
+	var jx_haogu: Node = jx_lm.get_node_or_null("NanhuHaoguPagoda") if jx_lm != null else null
+	var jx_tiandi: Node = jx_lm.get_node_or_null("NanhuTiandiDistrict") if jx_lm != null else null
+	var jx_ap: Node = jx_lm.get_node_or_null("JiaxingNanhuAirport") if jx_lm != null else null
+	_check(
+		jx_gov != null and jx_no1 != null and jx_yuehe != null and jx_zicheng != null and jx_cp != null and jx_haogu != null and jx_tiandi != null and jx_ap != null,
+		"All iconic Jiaxing civic/scenic landmarks & Nanhu Airport built (Gov, No.1 High School, Yuehe, Zicheng, Central Park, Haogu Pagoda, Nanhu Tiandi, Airport)"
+	)
+	_check(
+		(m._map_data.get("freeways", []) as Array).size() >= 300 and (m._map_data.get("storefronts", []) as Array).size() >= 3500,
+		"Inner Ring + Airport Expressway (%d viaduct pieces) & authentic Jiaxing storefronts (%d shops)" % [(m._map_data.get("freeways", []) as Array).size(), (m._map_data.get("storefronts", []) as Array).size()]
+	)
 	_check(
 		jx_water != null and jx_island != null and jx_seawall != null,
 		"Nanhu Lake, Huancheng Moat water layer, Lake Heart Island turf & stone seawall built"

@@ -44,6 +44,14 @@ static func build(snap: Dictionary) -> Node3D:
 		if poly.size() < 3:
 			continue
 		_triangulate_flat(flat, poly, y_off, col)
+	# airport runways & taxiways (e.g. Jiaxing Nanhu Airport Runway 12/30)
+	var ap_lm: Dictionary = (snap.get("landmarks", {}) as Dictionary).get("jiaxing_airport", {})
+	if not ap_lm.is_empty():
+		var rwy: Array = ap_lm.get("runway", [])
+		if rwy.size() >= 2:
+			_ribbon(flat, rwy, 54.0, 0.95, Color(0.22, 0.24, 0.27))
+		for tw: Array in ap_lm.get("taxiways", []):
+			_ribbon(flat, tw, 24.0, 0.90, Color(0.28, 0.30, 0.33))
 	# heavy railways (conventional rail + elevated high-speed rail corridors)
 	for rw: Dictionary in snap.get("railways", []):
 		var is_hsr := str(rw.get("kind", "")) == "hsr"

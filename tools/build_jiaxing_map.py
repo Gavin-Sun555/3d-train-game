@@ -72,26 +72,45 @@ QINGFENG_CORRIDOR = rect_ll(30.6945, 120.7936, 30.7264, 120.7992)
 SOUTH_STA_PRECINCT = rect_ll(30.6888, 120.7905, 30.6968, 120.8012)
 # Extended HSR railway track corridor (~1.6km WSW and ~1.5km ENE past Jiaxing South Station along real 沪昆高速线)
 HSR_RAIL_RECT = rect_ll(30.6830, 120.7775, 30.7025, 120.8125)
+# Airport Expressway (机场快速路) focused diagonal corridor from MAIN_W to Jiaxing Nanhu Airport Terminal
+AIRPORT_CORRIDOR_PTS = [
+    (-3750.0, 1266.0),
+    (-5250.0, 1510.0),
+    (-6870.0, 2520.0),
+    (-9450.0, 4120.0),
+    (-9442.0, 5316.0),
+]
+AIRPORT_CORRIDOR_HALF_W = 240.0
+# Jiaxing Nanhu Airport precinct (terminal, ATC tower, cargo hangars, taxiways & 3400m Runway 12/30)
+AIRPORT_PRECINCT = (-10250.0, 4800.0, -6800.0, 7020.0)
 
 ACTIVE_RECTS = [MAIN_RECT, CHANGSHUI_CORRIDOR, QINGFENG_CORRIDOR, SOUTH_STA_PRECINCT]
-_ALL_BOUNDS_RECTS = ACTIVE_RECTS + [HSR_RAIL_RECT]
+_ALL_BOUNDS_RECTS = ACTIVE_RECTS + [HSR_RAIL_RECT, AIRPORT_PRECINCT]
 BOUNDS = (
-    round(min(r[0] for r in _ALL_BOUNDS_RECTS) - 40.0),
-    round(min(r[1] for r in _ALL_BOUNDS_RECTS) - 40.0),
-    round(max(r[2] for r in _ALL_BOUNDS_RECTS) + 40.0),
-    round(max(r[3] for r in _ALL_BOUNDS_RECTS) + 40.0),
+    round(min(r[0] for r in _ALL_BOUNDS_RECTS) - 80.0),
+    round(min(r[1] for r in _ALL_BOUNDS_RECTS) - 80.0),
+    round(max(r[2] for r in _ALL_BOUNDS_RECTS) + 80.0),
+    round(max(r[3] for r in _ALL_BOUNDS_RECTS) + 80.0),
 )
-# Core built immediately on load (centered on Nanhu Lake & Old City); outer city + HSR corridor stream via CityTiles
+# Core built immediately on load (centered on Nanhu Lake & Old City); outer city + HSR/Airport corridors stream via CityTiles
 CORE_BOUNDS = [-1250.0, -1250.0, 1250.0, 1250.0]
 
-# Key real-world landmark coordinates (projected)
+# Key real-world landmark coordinates (projected from verified OSM elements)
 NANHU_ORIGIN = proj(30.7568, 120.7557)
 YANYU_POS = proj(30.75750, 120.75586)
-MEMORIAL_POS = proj(30.74986, 120.75693)
-# Centered directly on real OSM Jiaxing Railway Station platforms & 沪昆线 tracks
-JIAXING_STA_POS = (710.0, -1265.0)
-BOTANICAL_POS = proj(30.71740, 120.76420)
-SOUTH_STA_POS = proj(30.69275, 120.79580)
+HAOGU_PAGODA_POS = (-96.0, -89.0)         # 壕股塔 (Nanhu west/north shore)
+HUIJINGYUAN_POS = (830.0, 56.0)           # 会景园码头 (Nanhu east shore)
+NANHU_TIANDI_POS = (798.0, -347.0)        # 南湖天地 (Nanhu NE lakeside commercial heritage)
+MEMORIAL_POS = proj(30.74986, 120.75693)  # 南湖革命纪念馆
+GOV_POS = (-95.0, 610.0)                  # 嘉兴市人民政府
+JIAXING_NO1_POS = (1756.0, 1430.0)        # 嘉兴市第一中学
+YUEHE_POS = (-605.0, -2065.0)             # 月河历史街区
+ZICHENG_POS = (-306.0, -816.0)            # 子城遗址公园 · 谯楼
+CENTRAL_PARK_POS = (1075.0, 3045.0)       # 嘉兴中央公园
+JIAXING_STA_POS = (710.0, -1265.0)        # 嘉兴火车站 (centered on 沪昆线 platforms)
+BOTANICAL_POS = proj(30.71740, 120.76420) # 嘉兴植物园温室
+SOUTH_STA_POS = proj(30.69275, 120.79580) # 嘉兴南站 (高铁枢纽)
+AIRPORT_TERM_POS = (-9442.0, 5316.0)      # 嘉兴南湖机场航站楼 (IATA: JNH / ICAO: ZSJX)
 OLD_CITY_CENTER = proj(30.7655, 120.7460)
 
 
@@ -99,10 +118,27 @@ def in_rect(p, r, pad=0.0):
     return r[0] - pad <= p[0] <= r[2] + pad and r[1] - pad <= p[1] <= r[3] + pad
 
 
+def in_airport_corridor(p, pad=0.0):
+    lim = AIRPORT_CORRIDOR_HALF_W + pad
+    px, py = p[0], p[1]
+    for a, b in zip(AIRPORT_CORRIDOR_PTS, AIRPORT_CORRIDOR_PTS[1:]):
+        if seg_dist(px, py, a[0], a[1], b[0], b[1])[0] <= lim:
+            return True
+    return False
+
+
+def in_airport_precinct(p, pad=0.0):
+    return in_rect(p, AIRPORT_PRECINCT, pad)
+
+
 def in_active(p, pad=0.0):
     for r in ACTIVE_RECTS:
         if in_rect(p, r, pad):
             return True
+    if in_airport_corridor(p, pad):
+        return True
+    if in_airport_precinct(p, pad):
+        return True
     return False
 
 
@@ -302,6 +338,8 @@ def normalize_road_name(raw_name, pts, cls):
         return "长水路"
     if abs(cx - qf_x) < 180.0 and dy > dx * 1.2 and cls in ("primary", "secondary", "tertiary", "residential"):
         return "庆丰路"
+    if cx < -3750.0 and cy > 1100.0 and in_airport_corridor((cx, cy), 40.0):
+        return "机场快速路辅道"
     return raw_name or "嘉兴支路"
 
 
@@ -316,7 +354,12 @@ def build_street_graph(nodes, ways, water_grid):
         layer = str(t.get("layer", "0")).split(";")[0]
         is_bridge = bool(t.get("bridge")) and t.get("bridge") != "no"
         is_tunnel = bool(t.get("tunnel")) and t.get("tunnel") != "no"
-        # Skip elevated Inner Ring Expressway viaduct decks from the surface buildable street graph
+        pts_ids = [r for r in refs if r in nodes]
+        if len(pts_ids) < 2:
+            continue
+        # Keep surface roads inside Airport Corridor (even trunk surface carriageways) while skipping high viaducts
+        in_ap_corr = any(in_airport_corridor(nodes[r], 40.0) for r in pts_ids)
+        # Skip elevated Inner Ring Expressway & Airport Expressway viaduct decks from the surface buildable street graph
         if cls == "trunk" and (is_bridge or layer not in ("0", "") or "快速路" in t.get("name", "")):
             continue
         # Keep real-life railway underpass tunnels (tunnel=yes / layer=-1) and overpass bridges (layer=1/2)
@@ -324,11 +367,12 @@ def build_street_graph(nodes, ways, water_grid):
             continue
         if is_bridge and layer not in ("0", "1", "2", ""):
             continue
+        # Inside Airport Precinct, keep ONLY roads near the terminal approach (not airside perimeter service roads)
+        if any(in_airport_precinct(nodes[r]) for r in pts_ids) and not in_ap_corr:
+            if not any(math.hypot(nodes[r][0] - AIRPORT_TERM_POS[0], nodes[r][1] - AIRPORT_TERM_POS[1]) < 480.0 for r in pts_ids):
+                continue
 
-        pts_ids = [r for r in refs if r in nodes]
-        if len(pts_ids) < 2:
-            continue
-        # Clip polyline to ACTIVE_RECTS (with 45m margin so corridor intersections stay intact)
+        # Clip polyline to ACTIVE_RECTS + Airport Corridor (with 45m margin so corridor intersections stay intact)
         cur = []
         for r in pts_ids:
             p = nodes[r]
@@ -464,7 +508,48 @@ def build_street_graph(nodes, ways, water_grid):
         comps.append(comp)
     main_comp = max(comps, key=len) if comps else set()
 
-    # Check if Jiaxing South Station precinct is in main_comp; if not, stitch nearest pair!
+    # Ensure a continuous buildable surface boulevard (机场大道 / 机场快速路辅道) connects MAIN_W -> Airport Terminal!
+    ap_nodes = []
+    if main_comp:
+        # Find closest existing main_comp node near the Airport Expressway entrance (-3750, 1266)
+        start_j = min(main_comp, key=lambda j: math.hypot(jnodes[j]["pos"][0] - (-3750.0), jnodes[j]["pos"][1] - 1266.0))
+        ap_waypoints = [
+            (-4550.0, 1390.0), (-5350.0, 1550.0), (-6150.0, 2060.0), (-6950.0, 2570.0),
+            (-7800.0, 3100.0), (-8650.0, 3620.0), (-9450.0, 4130.0), (-9448.0, 4700.0), (-9450.0, 5205.0),
+        ]
+        prev_j = start_j
+        for wi, wp in enumerate(ap_waypoints):
+            nj = len(jnodes)
+            jnodes.append({"pos": wp, "streets": {"机场快速路辅道" if wi < 7 else "嘉兴机场大道"}})
+            main_comp.add(nj)
+            pa, pb = jnodes[prev_j]["pos"], wp
+            elen = math.hypot(pb[0] - pa[0], pb[1] - pa[1])
+            key = (min(prev_j, nj), max(prev_j, nj))
+            pts_e = [pa, pb] if prev_j < nj else [pb, pa]
+            raw_edges[key] = {
+                "a": key[0], "b": key[1], "name": "机场快速路辅道" if wi < 7 else "嘉兴机场大道",
+                "width": 16.0, "lf": 2, "lb": 2, "divided": True, "length": elen, "pts": pts_e,
+                "cls": "primary", "bridge": False, "tunnel": False,
+            }
+            prev_j = nj
+        # Stitch any nearby Airport Terminal OSM road component into the terminal node
+        for comp in comps:
+            if comp is main_comp:
+                continue
+            if any(math.hypot(jnodes[j]["pos"][0] - AIRPORT_TERM_POS[0], jnodes[j]["pos"][1] - AIRPORT_TERM_POS[1]) < 420.0 for j in comp):
+                cj = min(comp, key=lambda j: math.hypot(jnodes[j]["pos"][0] - jnodes[prev_j]["pos"][0], jnodes[j]["pos"][1] - jnodes[prev_j]["pos"][1]))
+                pa, pb = jnodes[prev_j]["pos"], jnodes[cj]["pos"]
+                elen = math.hypot(pb[0] - pa[0], pb[1] - pa[1])
+                if elen >= 6.0:
+                    key = (min(prev_j, cj), max(prev_j, cj))
+                    pts_e = [pa, pb] if prev_j < cj else [pb, pa]
+                    raw_edges[key] = {
+                        "a": key[0], "b": key[1], "name": "嘉兴机场航站楼引道",
+                        "width": 14.0, "lf": 2, "lb": 2, "divided": False, "length": elen, "pts": pts_e,
+                        "cls": "secondary", "bridge": False, "tunnel": False,
+                    }
+                main_comp.update(comp)
+
     j_ids = {}
     out_nodes = []
     for j in sorted(main_comp):
@@ -658,11 +743,18 @@ def build_areas(nodes, ways, rels):
     for k, ring, nm in raw_other:
         emit_clipped(ring, k, nm)
 
-    # Ensure Jiaxing South Station plaza area is nicely paved
+    # Ensure Jiaxing South Station plaza area is nicely paved & Jiaxing Airport infield is manicured grass
     sx, sy = SOUTH_STA_POS
     sta_plaza = [(sx - 130, sy - 115), (sx + 130, sy - 115), (sx + 130, sy + 70), (sx - 130, sy + 70)]
     areas.append({"kind": "plaza", "pts": [rnd(p) for p in sta_plaza]})
     park_polys.append(sta_plaza)
+    ap_grass = [
+        (AIRPORT_PRECINCT[0], AIRPORT_PRECINCT[1]),
+        (AIRPORT_PRECINCT[2], AIRPORT_PRECINCT[1]),
+        (AIRPORT_PRECINCT[2], AIRPORT_PRECINCT[3]),
+        (AIRPORT_PRECINCT[0], AIRPORT_PRECINCT[3]),
+    ]
+    areas.append({"kind": "grass", "pts": [rnd(p) for p in ap_grass]})
 
     print(f"Areas: {len(areas)} total ({len(water_polys)} water pieces, {len(raw_islands)} lake islands, {len(park_polys)} parks/plazas, {len(landuse_zones)} landuse zones)")
     return areas, water_polys, park_polys, named_plazas, landuse_zones, raw_islands
@@ -870,10 +962,48 @@ def build_rail_crossings(graph_edges, railways):
 
 
 # ---------------------------------------------------------------------------------------------
-# 3. Elevated Inner Ring Expressway Viaducts (嘉兴内环快速路)
+# 3. Elevated Inner Ring Expressway Viaducts (嘉兴内环快速路全环) + Airport Expressway (机场快速路)
 # ---------------------------------------------------------------------------------------------
+INNER_RING_NAMES = ("中环北路", "中环东路", "中环南路", "中环西路")
+
+
 def build_freeways(nodes, ways):
     out = []
+    existing_viaduct_grid = Grid(60.0)
+
+    def emit_viaduct(pts, lanes, oneway, y_deck, cls, nm, is_link=False):
+        if len(pts) < 2:
+            return
+        dense = [pts[0]]
+        for a, b in zip(pts, pts[1:]):
+            L = math.hypot(b[0] - a[0], b[1] - a[1])
+            n = max(1, int(math.ceil(L / 12.0)))
+            for k in range(1, n + 1):
+                dense.append((a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n))
+        w = lanes * 3.5 + (2.2 if oneway else 3.2)
+        ys = []
+        for idx in range(len(dense)):
+            if is_link:
+                frac = float(idx) / max(1.0, float(len(dense) - 1))
+                ys.append(0.18 + (y_deck - 0.18) * min(1.0, min(frac * 2.2, (1.0 - frac) * 2.2) + 0.25))
+            else:
+                ys.append(y_deck)
+        P = [[round(p[0], 2), round(p[1], 2), round(y, 2)] for p, y in zip(dense, ys)]
+        start = 0
+        while start < len(P) - 1:
+            end = min(len(P) - 1, start + 26)
+            out.append({
+                "pts": P[start:end + 1],
+                "lanes": lanes,
+                "w": round(w, 1),
+                "oneway": oneway,
+                "bridge": True,
+                "kind": cls,
+                "name": nm,
+            })
+            start = end
+
+    # Pass A: Real OSM elevated expressways (内环快速路, 机场快速路, ramps & interchange flyovers)
     for wid, (refs, t) in ways.items():
         cls = t.get("highway", "")
         if cls not in ("motorway", "motorway_link", "trunk", "trunk_link"):
@@ -886,26 +1016,26 @@ def build_freeways(nodes, ways):
         except ValueError:
             layer = 0
         nm = t.get("name") or t.get("ref") or ""
-        # Keep elevated viaducts (Inner Ring Expressway / 快速路) & ramps inside ACTIVE_RECTS
         if cls == "trunk" and not is_bridge and layer <= 0 and "快速路" not in nm:
             continue
         ids = [r for r in refs if r in nodes]
         if len(ids) < 2:
             continue
         pts = [nodes[i] for i in ids]
-        if not any(in_active(p, 20.0) for p in pts):
+        if not any(in_active(p, 25.0) for p in pts):
             continue
-        pts = [p for p in pts if in_active(p, 50.0)]
-        if len(pts) < 2:
-            continue
-        dense = [pts[0]]
-        for a, b in zip(pts, pts[1:]):
-            L = math.hypot(b[0] - a[0], b[1] - a[1])
-            n = max(1, int(math.ceil(L / 10.0)))
-            for k in range(1, n + 1):
-                dense.append((a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n))
-        elevated = is_bridge or layer > 0 or ("快速路" in nm) or cls.startswith("motorway")
-        y_deck = 6.8 * max(1, layer) if elevated else 0.14
+        # Keep only segments inside active city/corridors
+        runs = []
+        cur = []
+        for p in pts:
+            if in_active(p, 60.0):
+                cur.append(p)
+            else:
+                if len(cur) >= 2:
+                    runs.append(cur)
+                cur = []
+        if len(cur) >= 2:
+            runs.append(cur)
         is_link = cls.endswith("_link")
         try:
             lanes = int(str(t.get("lanes", "")).split(";")[0])
@@ -913,30 +1043,44 @@ def build_freeways(nodes, ways):
             lanes = 1 if is_link else 3
         lanes = max(1, min(4, lanes))
         oneway = t.get("oneway", "yes") in ("yes", "1", "-1")
-        w = lanes * 3.5 + (2.2 if oneway else 3.2)
-        ys = []
-        for idx in range(len(dense)):
-            if is_link and elevated:
-                # Smooth ramp transition on link ends
-                frac = float(idx) / max(1.0, float(len(dense) - 1))
-                ys.append(0.15 + (y_deck - 0.15) * min(1.0, min(frac * 2.2, (1.0 - frac) * 2.2) + 0.25))
-            else:
-                ys.append(y_deck)
-        P = [[round(p[0], 2), round(p[1], 2), round(y, 2)] for p, y in zip(dense, ys)]
-        start = 0
-        while start < len(P) - 1:
-            end = min(len(P) - 1, start + 26)
-            out.append({
-                "pts": P[start:end + 1],
-                "lanes": lanes,
-                "w": round(w, 1),
-                "oneway": oneway,
-                "bridge": elevated,
-                "kind": cls,
-                "name": nm or "嘉兴内环快速路",
-            })
-            start = end
-    print(f"Freeways (Inner Ring Viaduct): {len(out)} pieces")
+        y_deck = 7.4 + 2.4 * max(0, min(2, layer - 1))
+        for run in runs:
+            emit_viaduct(run, lanes, oneway, y_deck, cls, nm or "嘉兴内环快速路", is_link=is_link)
+            for a, b in zip(run, run[1:]):
+                existing_viaduct_grid.add((a[0], a[1], b[0], b[1]),
+                                          min(a[0], b[0]) - 28, min(a[1], b[1]) - 28,
+                                          max(a[0], b[0]) + 28, max(a[1], b[1]) + 28)
+
+    # Pass B: Complete all 4 sides of 嘉兴内环快速路 elevated viaduct directly above 中环北/东/南/西路!
+    ring_added = 0
+    for wid, (refs, t) in ways.items():
+        if t.get("highway") != "primary":
+            continue
+        nm = t.get("name", "")
+        if not any(rn in nm for rn in INNER_RING_NAMES):
+            continue
+        if t.get("tunnel") in ("yes", "building_passage"):
+            continue
+        ids = [r for r in refs if r in nodes]
+        if len(ids) < 2:
+            continue
+        pts = [nodes[i] for i in ids if in_rect(nodes[i], MAIN_RECT, 40.0)]
+        if len(pts) < 2:
+            continue
+        # Skip pieces where OSM already provides a dedicated 内环快速路 viaduct right overhead
+        mid = pts[len(pts) // 2]
+        already = False
+        for (ax, ay, bx, by) in existing_viaduct_grid.query(mid[0] - 26, mid[1] - 26, mid[0] + 26, mid[1] + 26):
+            if seg_dist(mid[0], mid[1], ax, ay, bx, by)[0] < 24.0:
+                already = True
+                break
+        if already:
+            continue
+        oneway = t.get("oneway", "no") in ("yes", "1", "-1")
+        emit_viaduct(pts, 3 if oneway else 4, oneway, 7.4, "trunk", f"嘉兴内环快速路（{nm}）", is_link=False)
+        ring_added += 1
+
+    print(f"Freeways (Inner Ring Viaduct + Airport Expressway): {len(out)} pieces (+{ring_added} Inner Ring completions)")
     return out
 
 
@@ -989,14 +1133,26 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
     lm_zones = [
         (SOUTH_STA_POS, 195.0, "jiaxing_south_station"),
         (YANYU_POS, 52.0, "yanyu_tower"),
-        (MEMORIAL_POS, 82.0, "nanhu_memorial"),
+        (HAOGU_PAGODA_POS, 42.0, "haogu_pagoda"),
+        (HUIJINGYUAN_POS, 46.0, "huijingyuan"),
+        (NANHU_TIANDI_POS, 115.0, "nanhu_tiandi"),
+        (MEMORIAL_POS, 105.0, "nanhu_memorial"),
+        (GOV_POS, 125.0, "jiaxing_gov"),
+        (JIAXING_NO1_POS, 155.0, "jiaxing_no1_school"),
+        (YUEHE_POS, 118.0, "yuehe_quarter"),
+        (ZICHENG_POS, 78.0, "zicheng_park"),
+        (CENTRAL_PARK_POS, 92.0, "central_park"),
         (JIAXING_STA_POS, 155.0, "jiaxing_station"),
-        (BOTANICAL_POS, 32.0, "botanical_conservatory"),
+        (BOTANICAL_POS, 36.0, "botanical_conservatory"),
+        (AIRPORT_TERM_POS, 260.0, "jiaxing_airport"),
     ]
 
     def can_place(pts, bb, allow_in_park=False):
         cen = centroid(pts)
         if not in_active(cen):
+            return False
+        # Never place synthetic residential/commercial blocks inside the Airport airside precinct
+        if not allow_in_park and in_airport_precinct(cen):
             return False
         for lpos, lrad, _ in lm_zones:
             if math.hypot(cen[0] - lpos[0], cen[1] - lpos[1]) < lrad:
@@ -1377,6 +1533,9 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
                     ok = False
                     break
         if ok:
+            if in_airport_precinct((tx, ty)) and math.hypot(tx - AIRPORT_TERM_POS[0], ty - AIRPORT_TERM_POS[1]) > 240.0:
+                ok = False
+        if ok:
             for ob in bld_grid.query(tx, ty, tx, ty):
                 if point_in_poly(tx, ty, ob[4]):
                     ok = False
@@ -1385,57 +1544,137 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
             seen_t.add(c)
             d_trees.append(rnd((tx, ty)))
 
-    # Storefronts: real OSM POIs + tasteful Chinese street-front shops along main commercial/arterial streets!
+    # Storefronts: real OSM POIs first + rich authentic Jiaxing & Chinese street-front commercial brands!
     SHOPS_ZH = [
-        ("五芳斋粽子", "restaurant"), ("江南茶社", "cafe"), ("嘉兴便利店", "convenience"),
-        ("新华书店", "books"), ("瑞幸咖啡", "cafe"), ("老娘舅", "fast_food"),
-        ("禾城面馆", "restaurant"), ("海王星辰药房", "pharmacy"), ("烘焙工坊", "bakery"),
-        ("工商银行", "bank"), ("鲜果超市", "supermarket"), ("南湖茶楼", "cafe"),
-        ("中国电信", "mobile_phone"), ("喜茶", "cafe"), ("肯德基", "fast_food"),
+        ("五芳斋粽子", "restaurant"), ("文虎酱鸭", "restaurant"), ("真真老老", "restaurant"),
+        ("瑞幸咖啡", "cafe"), ("星巴克咖啡", "cafe"), ("霸王茶姬", "cafe"), ("喜茶", "cafe"),
+        ("蜜雪冰城", "cafe"), ("肯德基", "fast_food"), ("麦当劳", "fast_food"),
+        ("老娘舅", "fast_food"), ("外婆家", "restaurant"), ("海底捞火锅", "restaurant"),
+        ("全家便利店", "convenience"), ("罗森便利店", "convenience"), ("盒马鲜生", "supermarket"),
+        ("新华书店", "books"), ("工商银行", "bank"), ("建设银行", "bank"), ("中国银行", "bank"),
+        ("农业银行", "bank"), ("招商银行", "bank"), ("嘉兴银行", "bank"),
+        ("华为授权体验店", "mobile_phone"), ("小米之家", "mobile_phone"),
+        ("中国移动", "mobile_phone"), ("中国电信", "mobile_phone"),
+        ("老百姓大药房", "pharmacy"), ("海王星辰药房", "pharmacy"),
+        ("南湖茶楼", "cafe"), ("月河茶馆", "cafe"), ("禾城老面馆", "restaurant"),
+    ]
+    YUEHE_SHOPS = [
+        ("五芳斋粽子", "restaurant"), ("月河茶馆", "cafe"), ("文虎酱鸭", "restaurant"),
+        ("真真老老", "restaurant"), ("南湖茶楼", "cafe"), ("禾城老面馆", "restaurant"),
     ]
     rng = random.Random(20260522)
     storefronts = []
+    used_b_edges = set()
+
+    # Pass 1: Real OSM commercial POI nodes snapped to nearest street-facing building facade
+    for nid, t in poi_nodes.items():
+        if nid not in osm_nodes:
+            continue
+        nm = t.get("name", "").strip()
+        if not nm or len(nm) > 16:
+            continue
+        skind = t.get("shop") or t.get("amenity") or ""
+        if skind not in ("restaurant", "cafe", "fast_food", "bakery", "convenience", "supermarket", "bank", "pharmacy", "books", "clothes", "mall", "mobile_phone", "yes"):
+            continue
+        px, py = osm_nodes[nid]
+        if not in_active((px, py)):
+            continue
+        best_bi = -1
+        best_d = 38.0
+        for bi_cand in range(len(blds)):
+            b = blds[bi_cand]
+            if b["h"] < 6.0 or len(b["pts"]) < 3:
+                continue
+            bc = centroid(b["pts"])
+            dd = math.hypot(bc[0] - px, bc[1] - py)
+            if dd < best_d:
+                best_d = dd
+                best_bi = bi_cand
+        if best_bi < 0:
+            continue
+        poly = blds[best_bi]["pts"]
+        ccw = poly_area(poly) > 0.0
+        for ei in range(len(poly)):
+            if (best_bi, ei) in used_b_edges:
+                continue
+            a, c = poly[ei], poly[(ei + 1) % len(poly)]
+            el = math.hypot(c[0] - a[0], c[1] - a[1])
+            if el < 5.5:
+                continue
+            nx, ny = ((c[1] - a[1]) / el, -(c[0] - a[0]) / el) if ccw else (-(c[1] - a[1]) / el, (c[0] - a[0]) / el)
+            mx, my = (a[0] + c[0]) * 0.5, (a[1] + c[1]) * 0.5
+            rd_min = 1e9
+            for (rax, ray, rbx, rby, hw) in road_grid.query(mx - 22, my - 22, mx + 22, my + 22):
+                rd_min = min(rd_min, seg_dist(mx, my, rax, ray, rbx, rby)[0] - hw)
+            if rd_min <= 14.0:
+                ux, uy = (c[0] - a[0]) / el, (c[1] - a[1]) / el
+                sw = min(7.8, el - 1.0)
+                lo = (el - sw) * 0.5
+                hi = lo + sw
+                storefronts.append({
+                    "b": best_bi,
+                    "p0": [round(a[0] + ux * lo, 2), round(a[1] + uy * lo, 2)],
+                    "p1": [round(a[0] + ux * hi, 2), round(a[1] + uy * hi, 2)],
+                    "n": [round(nx, 4), round(ny, 4)],
+                    "name": nm,
+                    "kind": skind if skind != "yes" else "restaurant",
+                    "brand": nm,
+                })
+                used_b_edges.add((best_bi, ei))
+                break
+
+    # Pass 2: High-density lively street-front retail along downtown avenues, malls, Old City & transit corridors
     for bi, b in enumerate(blds):
         if b["h"] < 6.0 or len(b["pts"]) < 3:
             continue
-        if len(storefronts) >= 2600:
+        if len(storefronts) >= 4400:
             break
-        # Place lively ground-floor shops on street-facing commercial / mixed-use edges
         cen = centroid(b["pts"])
         dist_center = math.hypot(cen[0] - OLD_CITY_CENTER[0], cen[1] - OLD_CITY_CENTER[1])
         dist_nanhu = math.hypot(cen[0] - NANHU_ORIGIN[0], cen[1] - NANHU_ORIGIN[1])
         dist_hsr = math.hypot(cen[0] - SOUTH_STA_POS[0], cen[1] - SOUTH_STA_POS[1])
-        if min(dist_center, dist_nanhu, dist_hsr) > 2600.0 and rng.random() > 0.25:
-            continue
-        if rng.random() > 0.34:
+        dist_yuehe = math.hypot(cen[0] - YUEHE_POS[0], cen[1] - YUEHE_POS[1])
+        in_core_comm = min(dist_center, dist_nanhu) < 1900.0 or dist_hsr < 750.0
+        prob = 0.62 if in_core_comm else 0.36
+        if rng.random() > prob:
             continue
         poly = b["pts"]
         ccw = poly_area(poly) > 0.0
         for ei in range(len(poly)):
+            if (bi, ei) in used_b_edges:
+                continue
             a, c = poly[ei], poly[(ei + 1) % len(poly)]
             el = math.hypot(c[0] - a[0], c[1] - a[1])
-            if el < 6.5:
+            if el < 6.0:
                 continue
             nx, ny = ((c[1] - a[1]) / el, -(c[0] - a[0]) / el) if ccw else (-(c[1] - a[1]) / el, (c[0] - a[0]) / el)
             mx, my = (a[0] + c[0]) * 0.5, (a[1] + c[1]) * 0.5
             best_d = 1e9
             for (rax, ray, rbx, rby, hw) in road_grid.query(mx - 22, my - 22, mx + 22, my + 22):
                 best_d = min(best_d, seg_dist(mx, my, rax, ray, rbx, rby)[0] - hw)
-            if best_d <= 12.0:
+            if best_d <= 12.5:
                 ux, uy = (c[0] - a[0]) / el, (c[1] - a[1]) / el
-                sw = min(7.2, el - 1.2)
-                lo = (el - sw) * 0.5
-                hi = lo + sw
-                sname, skind = rng.choice(SHOPS_ZH)
-                storefronts.append({
-                    "b": bi,
-                    "p0": [round(a[0] + ux * lo, 2), round(a[1] + uy * lo, 2)],
-                    "p1": [round(a[0] + ux * hi, 2), round(a[1] + uy * hi, 2)],
-                    "n": [round(nx, 4), round(ny, 4)],
-                    "name": sname,
-                    "kind": skind,
-                    "brand": "",
-                })
+                # Wide street-facing facades get 2 adjacent shops side by side just like real Chinese commercial streets!
+                n_shops = 2 if (el >= 16.5 and in_core_comm) else 1
+                for si in range(n_shops):
+                    seg_a = (el / n_shops) * si + 0.5
+                    seg_b = (el / n_shops) * (si + 1) - 0.5
+                    sw = min(7.6, seg_b - seg_a)
+                    if sw < 4.2:
+                        continue
+                    lo = (seg_a + seg_b - sw) * 0.5
+                    hi = lo + sw
+                    sname, skind = rng.choice(YUEHE_SHOPS if dist_yuehe < 480.0 else SHOPS_ZH)
+                    storefronts.append({
+                        "b": bi,
+                        "p0": [round(a[0] + ux * lo, 2), round(a[1] + uy * lo, 2)],
+                        "p1": [round(a[0] + ux * hi, 2), round(a[1] + uy * hi, 2)],
+                        "n": [round(nx, 4), round(ny, 4)],
+                        "name": sname,
+                        "kind": skind,
+                        "brand": sname,
+                    })
+                used_b_edges.add((bi, ei))
                 break
 
     print(f"Street furniture: {len(d_cws)} crosswalks, {len(d_lamps)} lamps, {len(d_trees)} trees, {len(storefronts)} storefronts")
@@ -1682,12 +1921,51 @@ def main():
         {"pos": rnd(proj(30.7730, 120.7495)), "angle": 0.12, "span": 32.0},   # 环城北路桥
     ]
 
+    # Extract real OSM Jiaxing Nanhu Airport (嘉兴南湖机场) runway 12/30 & main taxiways
+    ap_runway = [[-10101.0, 5712.0], [-6909.0, 6893.0]]
+    ap_taxiways = []
+    for wid, (refs, t) in ways.items():
+        aw = t.get("aeroway", "")
+        if aw == "runway" and t.get("ref") == "12/30":
+            rpts = [nodes[r] for r in refs if r in nodes]
+            if len(rpts) >= 2:
+                ap_runway = [rnd(rpts[0]), rnd(rpts[-1])]
+        elif aw == "taxiway" and t.get("ref") in ("B", "C", "D", "F", "G", "H", "K", "B1", "B2", "B3", "C1", "C2", "D1", "D2"):
+            tpts = [nodes[r] for r in refs if r in nodes]
+            if len(tpts) >= 2 and all(in_airport_precinct(p, 120.0) for p in tpts):
+                ap_taxiways.append([rnd(p) for p in tpts])
+    rwy_angle = -math.atan2(ap_runway[1][1] - ap_runway[0][1], ap_runway[1][0] - ap_runway[0][0])
+
+    # Iconic Jiaxing commercial district & landmark mall rooftop / plaza signboards at real OSM coordinates
+    commercial_signs = [
+        {"name": "五芳斋 · 嘉兴总店", "sub": "百年老字号", "pos": rnd((-250.1, -1168.3)), "angle": 0.0, "color": [0.76, 0.12, 0.12]},
+        {"name": "戴梦得购物中心", "sub": "DAIMOND PLAZA", "pos": rnd((-722.1, -879.4)), "angle": 0.0, "color": [0.16, 0.20, 0.34]},
+        {"name": "旭 辉 广 场", "sub": "CIFI MALL", "pos": rnd((-947.0, -896.5)), "angle": 0.0, "color": [0.80, 0.26, 0.14]},
+        {"name": "嘉兴万达广场", "sub": "WANDA PLAZA", "pos": rnd((-3645.8, -16.9)), "angle": 1.57, "color": [0.08, 0.32, 0.64]},
+        {"name": "八佰伴购物中心", "sub": "YAOHAN PLAZA", "pos": rnd((-2154.0, 2170.0)), "angle": 0.0, "color": [0.14, 0.22, 0.38]},
+    ]
+
     landmarks = {
         "jiaxing_south_station": {"pos": rnd(SOUTH_STA_POS), "angle": round(hsr_angle, 4)},
         "yanyu_tower": {"pos": rnd(YANYU_POS), "island_pts": island_pts},
+        "haogu_pagoda": {"pos": rnd(HAOGU_PAGODA_POS)},
+        "huijingyuan": {"pos": rnd(HUIJINGYUAN_POS)},
+        "nanhu_tiandi": {"pos": rnd(NANHU_TIANDI_POS)},
         "nanhu_memorial": {"pos": rnd(MEMORIAL_POS), "angle": 0.08},
+        "jiaxing_gov": {"pos": rnd(GOV_POS), "angle": 0.04},
+        "jiaxing_no1_school": {"pos": rnd(JIAXING_NO1_POS), "angle": 0.02},
+        "yuehe_quarter": {"pos": rnd(YUEHE_POS), "angle": 0.14},
+        "zicheng_park": {"pos": rnd(ZICHENG_POS), "angle": 0.05},
+        "central_park": {"pos": rnd(CENTRAL_PARK_POS), "angle": 0.0},
         "jiaxing_station": {"pos": rnd(JIAXING_STA_POS), "angle": round(jx_angle, 4)},
         "botanical_conservatory": {"pos": rnd(BOTANICAL_POS)},
+        "jiaxing_airport": {
+            "pos": rnd(AIRPORT_TERM_POS),
+            "angle": round(rwy_angle, 4),
+            "runway": ap_runway,
+            "taxiways": ap_taxiways,
+        },
+        "commercial_signs": commercial_signs,
         "canal_bridges": canal_bridges,
         "rail_crossings": rail_crossings,
     }

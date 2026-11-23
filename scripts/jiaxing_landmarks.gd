@@ -41,6 +41,7 @@ static func build(parent: Node3D, map_data: Dictionary, lights: Array) -> void:
 	if lm.has("botanical_conservatory"):
 		var bc: Dictionary = lm["botanical_conservatory"]
 		_botanical_conservatory(root, _p(bc["pos"]), lights)
+	JiaxingCivicLandmarks.build(root, lm, lights)
 	var bridges: Array = lm.get("canal_bridges", [])
 	for br in bridges:
 		if br is Dictionary:
@@ -497,26 +498,36 @@ static func _nanhu_memorial_hall(parent: Node3D, center: Vector3, angle: float, 
 	for si in range(6):
 		_add_box(mh, Vector3(68.0, 0.52, 1.4), Vector3(0.0, 0.26 + float(si) * 0.52, -23.5 - float(5 - si) * 1.25), granite)
 
-	# Iconic "工"-shaped symmetrical main palace & wings
-	_add_box(mh, Vector3(96.0, 17.5, 42.0), Vector3(0.0, 11.9, 4.0), red_sandstone)
-	# Recessed central entrance glass hall
-	_add_box(mh, Vector3(52.0, 14.2, 4.0), Vector3(0.0, 10.3, -16.5), glass_dark)
-	# Grand 14-column cream-limestone colonnade across the north facade
+	# Iconic "工"-shaped symmetrical main palace (North wing + Central hall + South wing!)
+	_add_box(mh, Vector3(106.0, 17.5, 22.0), Vector3(0.0, 11.9, -10.0), red_sandstone)
+	_add_box(mh, Vector3(58.0, 19.2, 26.0), Vector3(0.0, 12.8, 8.0), red_sandstone)
+	_add_box(mh, Vector3(106.0, 17.5, 22.0), Vector3(0.0, 11.9, 26.0), red_sandstone)
+	# Recessed central entrance glass halls on both north & south facades
+	_add_box(mh, Vector3(52.0, 14.2, 4.0), Vector3(0.0, 10.3, -20.5), glass_dark)
+	_add_box(mh, Vector3(52.0, 14.2, 4.0), Vector3(0.0, 10.3, 36.5), glass_dark)
+	# Grand 14-column cream-limestone colonnades across BOTH north & south facades
 	for ci in range(-6, 7):
-		var cx := float(ci) * 6.8
-		_add_box(mh, Vector3(1.65, 16.5, 1.85), Vector3(cx, 11.4, -20.5), cream_stone)
-		_add_box(mh, Vector3(2.2, 1.0, 2.3), Vector3(cx, 3.6, -20.5), cream_stone)
-		_add_box(mh, Vector3(2.2, 0.9, 2.3), Vector3(cx, 19.6, -20.5), cream_stone)
-	# Monumental stepped entablature & overhang roof
-	_add_box(mh, Vector3(106.0, 2.8, 52.0), Vector3(0.0, 21.5, 3.0), cream_stone)
-	_add_box(mh, Vector3(110.0, 1.2, 55.0), Vector3(0.0, 23.4, 3.0), red_sandstone)
+		var cx := float(ci) * 7.6
+		for cz: float in [-23.5, 39.5]:
+			_add_box(mh, Vector3(1.65, 16.5, 1.85), Vector3(cx, 11.4, cz), cream_stone)
+			_add_box(mh, Vector3(2.2, 1.0, 2.3), Vector3(cx, 3.6, cz), cream_stone)
+			_add_box(mh, Vector3(2.2, 0.9, 2.3), Vector3(cx, 19.6, cz), cream_stone)
+	# Monumental stepped entablature & overhang roof crowning the "工"-shaped hall
+	_add_box(mh, Vector3(114.0, 2.8, 28.0), Vector3(0.0, 21.5, -10.0), cream_stone)
+	_add_box(mh, Vector3(118.0, 1.2, 30.0), Vector3(0.0, 23.4, -10.0), red_sandstone)
+	_add_box(mh, Vector3(64.0, 3.0, 28.0), Vector3(0.0, 22.6, 8.0), cream_stone)
+	_add_box(mh, Vector3(114.0, 2.8, 28.0), Vector3(0.0, 21.5, 26.0), cream_stone)
+	_add_box(mh, Vector3(118.0, 1.2, 30.0), Vector3(0.0, 23.4, 26.0), red_sandstone)
 	# Gold emblem & plaque
-	_add_cyl(mh, 2.4, 2.4, 0.45, Vector3(0.0, 21.6, -23.2), gold_emblem, 18, Vector3(PI * 0.5, 0.0, 0.0))
-	_add_sign_label(mh, "南 湖 革 命 纪 念 馆", Vector3(0.0, 17.4, -23.3), PI, 88, 0.028, Color(0.96, 0.84, 0.34))
+	_add_cyl(mh, 2.4, 2.4, 0.45, Vector3(0.0, 21.6, -25.4), gold_emblem, 18, Vector3(PI * 0.5, 0.0, 0.0))
+	_add_sign_label(mh, "南 湖 革 命 纪 念 馆", Vector3(0.0, 17.4, -25.5), PI, 88, 0.028, Color(0.96, 0.84, 0.34))
 
-	# Ceremonial flagpole in north plaza
-	_add_cyl(mh, 0.14, 0.24, 24.0, Vector3(0.0, 12.0, -39.0), _mat(Color(0.85, 0.87, 0.90), 0.25, 0.8), 10)
-	_add_box(mh, Vector3(4.2, 2.6, 0.1), Vector3(2.1, 22.3, -39.0), _mat(Color(0.86, 0.12, 0.12), 0.6))
+	# Ceremonial north reflecting pool, twin red-granite historical relief walls & flagpole
+	_add_box(mh, Vector3(38.0, 0.25, 14.0), Vector3(0.0, 0.14, -46.0), _mat(Color(0.14, 0.40, 0.52), 0.12, 0.22), 0.0, 0.0, 0.0, false)
+	for rx: float in [-34.0, 34.0]:
+		_add_box(mh, Vector3(18.0, 4.2, 1.6), Vector3(rx, 2.1, -46.0), red_sandstone)
+	_add_cyl(mh, 0.14, 0.24, 26.0, Vector3(0.0, 13.0, -58.0), _mat(Color(0.85, 0.87, 0.90), 0.25, 0.8), 10)
+	_add_box(mh, Vector3(4.4, 2.8, 0.1), Vector3(2.2, 24.0, -58.0), _mat(Color(0.86, 0.12, 0.12), 0.6))
 
 	var pl := OmniLight3D.new()
 	pl.position = Vector3(0.0, 15.0, -28.0)

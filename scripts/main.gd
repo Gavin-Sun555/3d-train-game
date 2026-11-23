@@ -3323,6 +3323,7 @@ func _overview_snapshot() -> Dictionary:
 		"areas": d.get("areas", []),
 		"freeways": d.get("freeways", []),
 		"railways": d.get("railways", []),
+		"landmarks": d.get("landmarks", {}),
 		"tracks": tracks,
 		"stations": sts,
 	}
