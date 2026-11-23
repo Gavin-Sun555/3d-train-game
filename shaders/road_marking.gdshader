@@ -11,7 +11,7 @@ uniform float rough_val = 0.82;
 void vertex() {
 	vec4 vp = MODELVIEW_MATRIX * vec4(VERTEX, 1.0);
 	float d = length(vp.xyz);
-	vp.xyz *= 1.0 + (0.09 + d * 0.00015) / max(d, 0.001);
+	vp.xyz *= 1.0 + (0.07 + d * 0.00020) / max(d, 0.001);
 	POSITION = PROJECTION_MATRIX * vp;
 }
 

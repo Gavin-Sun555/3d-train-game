@@ -40,7 +40,7 @@ void vertex() {
 	// while staying behind islands (0.14), streets/bridges (road_asphalt 0.12) and tracks (0.0).
 	vec4 vp = MODELVIEW_MATRIX * vec4(VERTEX, 1.0);
 	float d = length(vp.xyz);
-	vp.xyz *= 1.0 + (0.20 + d * 0.00035) / max(d, 0.001);
+	vp.xyz *= 1.0 + (0.17 + d * 0.00075) / max(d, 0.001);
 	POSITION = PROJECTION_MATRIX * vp;
 }
 

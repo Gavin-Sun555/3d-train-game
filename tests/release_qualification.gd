@@ -361,6 +361,137 @@ func _run() -> void:
 		"Jiaxing Tram T1 runs 180s with traffic cleanly & zero deadlocks (min dist %.0fm, max %.0fm, max stop %.1fs)" % [jx_min_d, jx_max_d, max_stuck_jx]
 	)
 
+	# ------------------------------------------------------------------
+	# GATE 8: 3D Underground / Ground / Elevated Light Rail & Monorail + Lake Zoom Fix
+	# ------------------------------------------------------------------
+	print("\n[Gate 8] 3D Underground / Ground / Elevated Light Rail & Monorail + Lake Zoom Fix")
+	var base_mi := m._city_root.get_node_or_null("UrbanSidewalkBase") as MeshInstance3D
+	var base_pm := base_mi.mesh as PlaneMesh if base_mi != null else null
+	_check(
+		base_pm != null and base_pm.subdivide_width >= 16 and base_pm.subdivide_depth >= 16,
+		"UrbanSidewalkBase subdivided (%dx%d) so zoomed-in Nanhu Lake never gets clipped by ground slab" % [base_pm.subdivide_width if base_pm != null else 0, base_pm.subdivide_depth if base_pm != null else 0]
+	)
+
+	# 8a. Build a full 3D mixed-elevation Light Rail line: G(0m) -> L1(+7.2m) -> G(0m) -> B1(-10.0m)
+	var lr_pts: Array[Vector2] = [
+		Vector2(-260.0, 220.0),
+		Vector2(-100.0, 220.0), # G -> L1 ramp (160m, 4.5%)
+		Vector2(80.0, 220.0),   # L1 elevated station span (180m)
+		Vector2(240.0, 220.0),  # L1 -> G ramp (160m, 4.5%)
+		Vector2(440.0, 220.0),  # G -> B1 tunnel portal ramp (200m, 5.0%)
+		Vector2(660.0, 220.0),  # B1 underground station + crossover span (220m)
+	]
+	var lr_elevs: Array[float] = [0.0, 7.2, 7.2, 0.0, -10.0, -10.0]
+	var lr_nids: Array[int] = []
+	for li in range(lr_pts.size()):
+		var rn := jx_graph.node_for_point_3d(lr_pts[li], lr_elevs[li], 2.0, 0, false)
+		lr_nids.append(int(rn["nid"]))
+	var lr_eids: Array[int] = []
+	for li in range(lr_pts.size() - 1):
+		var le := jx_graph.add_3d_rail_edge(lr_nids[li], lr_nids[li + 1], NetworkGraph.TrackMode.DOUBLE, TrackBuilder.BedStyle.STONE_SLAB, lr_elevs[li], lr_elevs[li + 1])
+		lr_eids.append(le)
+	var st_lr_elev := jx_graph.add_station_on_edge(lr_eids[1], 0.5, 0, "南湖高架站", NetworkGraph.StationKind.ISLAND, 27.0)
+	var st_lr_ug := jx_graph.add_station_on_edge(lr_eids[4], 0.72, 0, "南湖地下站", NetworkGraph.StationKind.ISLAND, 27.0)
+	jx_graph.set_crossover_on_edge(lr_eids[4], NetworkGraph.CrossoverType.DOUBLE, 0.22)
+	var lr_lid := jx_graph.create_line([st_lr_elev, st_lr_ug], "siemens-s700", 1, 2, "立体轻轨测试线")
+
+	# 8b. Build a multi-level Monorail line: L1(+7.2m) -> L2(+13.8m) -> B1(-10.0m underground monorail!)
+	var mr_pts: Array[Vector2] = [
+		Vector2(0.0, -240.0),
+		Vector2(0.0, -80.0),   # L1 elevated station span (160m)
+		Vector2(0.0, 80.0),    # L1 -> L2 ramp (160m, 4.1%)
+		Vector2(0.0, 260.0),   # L2 crosses right over L1 light rail at y=+13.8m!
+		Vector2(0.0, 580.0),   # L2 -> B1 ramp (320m, 7.4% <= 8.5% monorail limit)
+		Vector2(0.0, 780.0),   # B1 underground monorail station span (200m)
+	]
+	var mr_elevs: Array[float] = [7.2, 7.2, 13.8, 13.8, -10.0, -10.0]
+	var mr_nids: Array[int] = []
+	for mi_i in range(mr_pts.size()):
+		var rn_m := jx_graph.node_for_point_3d(mr_pts[mi_i], mr_elevs[mi_i], 2.0, 1, false)
+		mr_nids.append(int(rn_m["nid"]))
+	var mr_eids: Array[int] = []
+	for mi_i in range(mr_pts.size() - 1):
+		var me := jx_graph.add_3d_rail_edge(mr_nids[mi_i], mr_nids[mi_i + 1], NetworkGraph.TrackMode.DOUBLE, TrackBuilder.BedStyle.MONORAIL, mr_elevs[mi_i], mr_elevs[mi_i + 1])
+		mr_eids.append(me)
+	var st_mr_l1 := jx_graph.add_station_on_edge(mr_eids[0], 0.5, 0, "单轨高架站", NetworkGraph.StationKind.ISLAND, 27.0)
+	var st_mr_ug := jx_graph.add_station_on_edge(mr_eids[4], 0.5, 0, "单轨地下站", NetworkGraph.StationKind.ISLAND, 27.0)
+	var mr_lid := jx_graph.create_line([st_mr_l1, st_mr_ug], "seattle-alweg-red", 1, 2, "立体单轨测试线")
+
+	# 8c. Stacked corridor test: lay a B1 (-10.0m) subway directly underneath an existing ground Tram T1 street!
+	var ground_eid := -1
+	for ge: int in jx_graph.built_tracks.keys():
+		if not bool(jx_graph.edges[ge].get("rail_3d", false)) and absf(jx_graph.get_edge_elev_pair(ge).x) < 0.2:
+			ground_eid = ge
+			break
+	var stacked_eid := jx_graph.lay_track_along_street(ground_eid, TrackBuilder.BedStyle.STONE_SLAB, NetworkGraph.TrackMode.DOUBLE, -10.0, -10.0) if ground_eid >= 0 else -1
+	_check(
+		lr_lid > 0 and mr_lid > 0 and stacked_eid >= 0 and stacked_eid != ground_eid and jx_graph.built_tracks.has(ground_eid) and jx_graph.is_edge_underground(stacked_eid),
+		"3D Light Rail (lid=%d), 3D Monorail (lid=%d) & Stacked B1-under-Ground corridor (e=%d under %d) created cleanly" % [lr_lid, mr_lid, stacked_eid, ground_eid]
+	)
+
+	# Rebuild 3D meshes, stations, portals & fleet
+	m._rebuild_tracks_and_operations(true, false)
+	await process_frame
+	var tr_root: Node = m._track_root
+	var has_viad: bool = tr_root.get_node_or_null("ElevatedViaducts") != null
+	var has_vpier: bool = tr_root.get_node_or_null("ElevatedViaductPiers") != null
+	var has_barr: bool = tr_root.get_node_or_null("ViaductNoiseBarriers") != null
+	var has_twall: bool = tr_root.get_node_or_null("UndergroundTunnelWalls") != null
+	var has_troof: bool = tr_root.get_node_or_null("UndergroundTunnelRoofs") != null
+	var has_tled: bool = tr_root.get_node_or_null("UndergroundTunnelLEDs") != null
+	var has_mbeam: bool = tr_root.get_node_or_null("MonorailGuidewayBeams") != null
+	var has_mpier: bool = tr_root.get_node_or_null("MonorailPiers") != null
+	var ug_st_node: Node = tr_root.get_node_or_null("Station_%d" % st_lr_ug)
+	var has_ug_roof: bool = ug_st_node != null and ug_st_node.get_node_or_null("UndergroundStationRoof") != null
+	var has_ug_kiosk: bool = ug_st_node != null and ug_st_node.get_node_or_null("SurfaceEntranceKiosk") != null
+	var n_portals := (jx_graph.get_meta("portal_cutouts", []) as Array).size()
+	_check(
+		has_viad and has_vpier and has_barr and has_twall and has_troof and has_tled and has_mbeam and has_mpier and has_ug_roof and has_ug_kiosk and n_portals > 0,
+		"3D structures built (viaduct/piers/barriers/tunnels/roofs/LEDs/monorail/kiosk + %d portal cutouts)" % n_portals
+	)
+
+	# Test Underground X-Ray View toggle (U)
+	m._set_underground_view(true)
+	var t_roof_n := tr_root.get_node_or_null("UndergroundTunnelRoofs") as Node3D
+	var st_roof_n := ug_st_node.get_node_or_null("UndergroundStationRoof") as Node3D if ug_st_node != null else null
+	var bp_n := m._blueprint_root as Node3D
+	var ug_on_ok: bool = (not (m._city_root as Node3D).visible) and (bp_n != null and bp_n.visible) and (t_roof_n != null and not t_roof_n.visible) and (st_roof_n != null and not st_roof_n.visible)
+	m._set_underground_view(false)
+	var ug_off_ok: bool = (m._city_root as Node3D).visible and (bp_n != null and not bp_n.visible) and (t_roof_n != null and t_roof_n.visible)
+	_check(ug_on_ok and ug_off_ok, "Underground X-Ray View (U) cleanly toggles city/blueprint & tunnel/station cutaway roofs")
+
+	# Simulate 3D Light Rail & 3D Monorail trains traversing elevated, ramps & underground tunnels!
+	var lr_min_y := 1e9; var lr_max_y := -1e9
+	var mr_min_y := 1e9; var mr_max_y := -1e9
+	var ev3 := {}
+	for _s3 in range(900): # 90s @ 0.1s
+		ev3 = jx_tsim.step_all_trams(0.1, jx_graph, m._pax_sim, m._traffic_sim, m._sound)
+		if not ev3.is_empty():
+			break
+		for tr3: Dictionary in jx_tsim.trams:
+			var y3 := (((tr3["tram_info"]["sections"] as Array)[0]) as Node3D).global_position.y
+			if int(tr3.get("line_id", -1)) == lr_lid:
+				lr_min_y = minf(lr_min_y, y3); lr_max_y = maxf(lr_max_y, y3)
+			elif int(tr3.get("line_id", -1)) == mr_lid:
+				mr_min_y = minf(mr_min_y, y3); mr_max_y = maxf(mr_max_y, y3)
+	_check(
+		ev3.is_empty() and lr_max_y > 6.5 and lr_min_y < -8.0 and mr_max_y > 12.5 and mr_min_y < -8.0,
+		"3D trains traverse elevated/ramps/tunnels smoothly with zero incidents (LR y=[%.1f..%.1f]m, Mono y=[%.1f..%.1f]m)" % [lr_min_y, lr_max_y, mr_min_y, mr_max_y]
+	)
+
+	# Save/Load round-trip check for 3D elevations, stacked edges, ramps & underground stations
+	var saved_3d := jx_graph.export_state()
+	var g_reload := NetworkGraph.new()
+	g_reload.load_from_map_data(m._map_data, false)
+	g_reload.import_state(saved_3d)
+	var ep_lr_ug := g_reload.get_edge_elev_pair(lr_eids[4])
+	var ep_mr_l2 := g_reload.get_edge_elev_pair(mr_eids[2])
+	var ep_stkd := g_reload.get_edge_elev_pair(stacked_eid)
+	_check(
+		absf(ep_lr_ug.x + 10.0) < 0.05 and absf(ep_mr_l2.x - 13.8) < 0.05 and absf(ep_stkd.x + 10.0) < 0.05 and g_reload.lines.has(lr_lid) and g_reload.lines.has(mr_lid),
+		"3D elevation save/load round-trip preserves ramps, L2 (+13.8m), B1 (-10.0m), stacked corridor & lines"
+	)
+
 	_finish(m)
 
 

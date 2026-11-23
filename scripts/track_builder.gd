@@ -101,18 +101,20 @@ static func _is_cusp_point(p_prev: Vector3, p_curr: Vector3, p_next: Vector3) ->
 # always ride exactly on the rails that are drawn (edge curves, junction connector arcs, crossovers).
 # ---------------------------------------------------------------------------------------------
 
-static func built_edges_at_node(graph: NetworkGraph, nid: int, sys: int = -1) -> Array:
+static func built_edges_at_node(graph: NetworkGraph, nid: int, sys: int = -1, elev_y: float = NAN) -> Array:
 	var out: Array = []
 	for nb: Dictionary in graph.adj.get(nid, []):
 		var eid := int(nb["edge_id"])
 		if graph.built_tracks.has(eid) and not out.has(eid) and (sys < 0 or edge_system(graph, eid) == sys):
+			if not is_nan(elev_y) and absf(graph.get_edge_elev_at_node(eid, nid) - elev_y) > NetworkGraph.ELEV_CONNECT_TOL:
+				continue
 			out.append(eid)
 	return out
 
 
 # {bare: bool (trimmed + connector arcs), trim: float, edges: Array}
-static func node_track_info(graph: NetworkGraph, nid: int, sys: int = 0) -> Dictionary:
-	var elist := built_edges_at_node(graph, nid, sys)
+static func node_track_info(graph: NetworkGraph, nid: int, sys: int = 0, elev_y: float = NAN) -> Dictionary:
+	var elist := built_edges_at_node(graph, nid, sys, elev_y)
 	var is_bare := _is_bare_junction_node(graph, nid, elist)
 	var has_sep_change := false
 	if elist.size() == 2:
@@ -142,10 +144,14 @@ static func edge_track_geom(graph: NetworkGraph, eid: int) -> Dictionary:
 	var na_id := int(ed["a"])
 	var nb_id := int(ed["b"])
 	var e_sys := edge_system(graph, eid)
-	var info_a := node_track_info(graph, na_id, e_sys)
-	var info_b := node_track_info(graph, nb_id, e_sys)
-	var is_bare_a := bool(info_a["bare"]) or ((graph.adj.get(na_id, []) as Array).size() >= 3)
-	var is_bare_b := bool(info_b["bare"]) or ((graph.adj.get(nb_id, []) as Array).size() >= 3)
+	var ya := graph.get_edge_elev_at_node(eid, na_id)
+	var yb := graph.get_edge_elev_at_node(eid, nb_id)
+	var info_a := node_track_info(graph, na_id, e_sys, ya)
+	var info_b := node_track_info(graph, nb_id, e_sys, yb)
+	var is_3d_a := absf(ya) > 0.6
+	var is_3d_b := absf(yb) > 0.6
+	var is_bare_a := bool(info_a["bare"]) or (not is_3d_a and (graph.adj.get(na_id, []) as Array).size() >= 3)
+	var is_bare_b := bool(info_b["bare"]) or (not is_3d_b and (graph.adj.get(nb_id, []) as Array).size() >= 3)
 	var s_start := minf(float(info_a["trim"]), clen * 0.44) if is_bare_a else 0.0
 	var s_end := maxf(clen - minf(float(info_b["trim"]), clen * 0.44), s_start + 1.0) if is_bare_b else clen
 	var is_double := graph.is_multi_track(eid)
@@ -331,8 +337,9 @@ static func build_track_clearance_index(graph: NetworkGraph) -> Dictionary:
 		var ss := float(g["s_start"])
 		while ss <= float(g["s_end"]) + 0.001:
 			var tf := sample_track_frame(c, minf(ss, float(g["s_end"])), clen, false)
-			for off_c: float in geom_track_offsets(g, ss):
-				_clear_add(grid, tf.origin + tf.basis.x * off_c)
+			if tf.origin.y >= -1.8 and tf.origin.y <= 4.2:
+				for off_c: float in geom_track_offsets(g, ss):
+					_clear_add(grid, tf.origin + tf.basis.x * off_c)
 			ss += 0.5
 		var xo := edge_crossover_span(graph, eid, g)
 		if not xo.is_empty():
@@ -340,6 +347,8 @@ static func build_track_clearance_index(graph: NetworkGraph) -> Dictionary:
 				var u := float(xk) / 40.0
 				var sx := lerpf(float(xo["s_mid"]) - float(xo["x_half"]), float(xo["s_mid"]) + float(xo["x_half"]), u)
 				var tf2 := sample_track_frame(c, sx, clen, false)
+				if tf2.origin.y < -1.8 or tf2.origin.y > 4.2:
+					continue
 				var herm := 3.0 * u * u - 2.0 * u * u * u
 				var sep := geom_sep_at(g, sx)
 				for xd: float in [-1.0, 1.0]:
@@ -374,8 +383,10 @@ static func build_track_clearance_index(graph: NetworkGraph) -> Dictionary:
 		for ia in range(el.size()):
 			for ib in range(ia + 1, el.size()):
 				var ea := int(el[ia]); var eb := int(el[ib])
-				if not geoms.has(ea) or not geoms.has(eb):
+				if not geoms.has(ea) or not geoms.has(eb) or not graph.edges_connect_at_node(ea, eb, nid):
 					continue
+				if absf(graph.get_edge_elev_at_node(ea, nid)) > 3.5:
+					continue # elevated / underground connectors do not clear ground trees or curbs
 				var ga: Dictionary = geoms[ea]; var gb: Dictionary = geoms[eb]
 				var ea_is_a := int(graph.edges[ea]["a"]) == nid
 				var eb_is_a := int(graph.edges[eb]["a"]) == nid
@@ -951,9 +962,43 @@ static func _edge_smooth_curve(graph: NetworkGraph, eid: int) -> Curve3D:
 	var pts2: Array = _edge_pts(graph, eid)
 	if pts2.size() < 2:
 		return null
+	var ep := graph.get_edge_elev_pair(eid)
+	var ya := ep.x
+	var yb := ep.y
+	var is_ramp := absf(ya - yb) > 0.05
+	# Compute cumulative 2D distance along pts2 and densify sloped ramps so the Hermite S-curve is silky smooth
+	var work_pts: Array[Vector2] = []
+	var cum_d: Array[float] = [0.0]
+	var total_2d := 0.0
+	for i in range(pts2.size()):
+		var p2: Vector2 = pts2[i]
+		if i > 0:
+			total_2d += (pts2[i - 1] as Vector2).distance_to(p2)
+			cum_d.append(total_2d)
+	if is_ramp and pts2.size() < 12 and total_2d > 10.0:
+		var sub_n := clampi(int(ceil(total_2d / 14.0)), 10, 24)
+		for k in range(sub_n + 1):
+			var target_d := total_2d * float(k) / float(sub_n)
+			var seg_i := 0
+			while seg_i < cum_d.size() - 2 and cum_d[seg_i + 1] < target_d:
+				seg_i += 1
+			var d0 := cum_d[seg_i]
+			var d1 := cum_d[seg_i + 1]
+			var lt := clampf((target_d - d0) / maxf(d1 - d0, 0.001), 0.0, 1.0)
+			work_pts.append((pts2[seg_i] as Vector2).lerp(pts2[seg_i + 1] as Vector2, lt))
+	else:
+		for p2: Vector2 in pts2:
+			work_pts.append(p2)
+	var cum_w: Array[float] = [0.0]
+	var tot_w := 0.0
+	for i in range(1, work_pts.size()):
+		tot_w += work_pts[i - 1].distance_to(work_pts[i])
+		cum_w.append(tot_w)
 	var raw3: Array = []
-	for p2: Vector2 in pts2:
-		raw3.append([p2.x, 0.0, p2.y])
+	for i in range(work_pts.size()):
+		var frac := cum_w[i] / maxf(tot_w, 0.001)
+		var y_i := NetworkGraph.hermite_elev(ya, yb, frac)
+		raw3.append([work_pts[i].x, y_i, work_pts[i].y])
 	var c := create_smooth_curve(raw3, false)
 	var n := c.point_count
 	if n < 2:
@@ -961,9 +1006,10 @@ static func _edge_smooth_curve(graph: NetworkGraph, eid: int) -> Curve3D:
 	var e_sys := edge_system(graph, eid)
 	for end_i in range(2):
 		var nid := int(ed["a"]) if end_i == 0 else int(ed["b"])
-		if (graph.adj.get(nid, []) as Array).size() >= 3:
+		var end_y := ya if end_i == 0 else yb
+		if absf(end_y) <= 0.6 and (graph.adj.get(nid, []) as Array).size() >= 3:
 			continue
-		var info := node_track_info(graph, nid, e_sys)
+		var info := node_track_info(graph, nid, e_sys, end_y)
 		if bool(info["bare"]):
 			continue
 		var el: Array = info["edges"]
@@ -1226,6 +1272,15 @@ static func rail_top_for_style(style: int) -> float:
 	return VIGNOLE_RAIL_TOP if is_vignole_style(style) else EMBED_RAIL_TOP
 
 
+# Local vertical offset added on top of the 3D track curve Y (which already carries elevation `ya..yb`!).
+static func local_rail_top_offset(style: int, rel_y: float = 0.0) -> float:
+	if is_monorail_style(style):
+		return -EMBED_RAIL_TOP # beam top sits at curve.y - EMBED_RAIL_TOP; car bogie adds +EMBED_RAIL_TOP -> exact curve.y
+	if absf(rel_y) >= 0.4:
+		return 0.0 # elevated viaduct & underground tunnel use ballastless concrete slab track flush with curve.y
+	return (VIGNOLE_RAIL_TOP - EMBED_RAIL_TOP) if is_vignole_style(style) else 0.0
+
+
 static func sample_track_frame(curve: Curve3D, s: float, total_len: float, closed_loop: bool) -> Transform3D:
 	var s0 := fposmod(s, total_len) if closed_loop else clampf(s, 0.0, total_len)
 	var ds := 0.35
@@ -1270,6 +1325,7 @@ static func build_network_tracks_and_stations(
 	var clear_idx := build_track_clearance_index(graph)
 	graph.set_meta("track_clear_idx", clear_idx)
 	graph.set_meta("station_bays", [])
+	graph.set_meta("portal_cutouts", [])
 	if graph.built_tracks.is_empty():
 		return {"stations": station_views, "lights": station_lights}
 
@@ -1282,6 +1338,16 @@ static func build_network_tracks_and_stations(
 	var dark_rail_st := SurfaceTool.new(); dark_rail_st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var bright_rail_st := SurfaceTool.new(); bright_rail_st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var wire_st := SurfaceTool.new(); wire_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# 3D Elevated viaduct & underground tunnel batched builders
+	var viaduct_st := SurfaceTool.new(); viaduct_st.begin(Mesh.PRIMITIVE_TRIANGLES); var has_viaduct := false
+	var viaduct_pier_st := SurfaceTool.new(); viaduct_pier_st.begin(Mesh.PRIMITIVE_TRIANGLES); var has_viaduct_pier := false
+	var barrier_st := SurfaceTool.new(); barrier_st.begin(Mesh.PRIMITIVE_TRIANGLES); var has_barrier := false
+	var tunnel_wall_st := SurfaceTool.new(); tunnel_wall_st.begin(Mesh.PRIMITIVE_TRIANGLES); var has_tunnel := false
+	var tunnel_roof_st := SurfaceTool.new(); tunnel_roof_st.begin(Mesh.PRIMITIVE_TRIANGLES); var has_tunnel_roof := false
+	var tunnel_led_st := SurfaceTool.new(); tunnel_led_st.begin(Mesh.PRIMITIVE_TRIANGLES); var has_tunnel_led := false
+	var portal_cutouts: Array[Dictionary] = []
+	var placed_viaduct_piers: Array[Vector2] = []
 
 	var sleeper_tfs: Array[Transform3D] = []
 	var clip_tfs: Array[Transform3D] = []
@@ -1381,11 +1447,13 @@ static func build_network_tracks_and_stations(
 
 		var vignole := is_vignole_style(eff_seg_st)
 		edge_eff_vignole[eid] = vignole
+		var portal_emitted := false
 		for i in range(frames.size() - 1):
 			var f0 := frames[i]
 			var f1 := frames[i + 1]
 			var s0 := s_vals[i]
 			var s1 := s_vals[i + 1]
+			var ym := (f0.origin.y + f1.origin.y) * 0.5
 			# Double track spreads apart on tight curves (car-body overhang clearance), see edge_track_geom().
 			# sep_* is the OUTERMOST track (bed edges, kerbs); offs* lists every track (four-track: 4 of them).
 			var sep := geom_outer_sep_at(geom, (s0 + s1) * 0.5)
@@ -1393,8 +1461,46 @@ static func build_network_tracks_and_stations(
 			var sep_f1 := geom_outer_sep_at(geom, s1)
 			var offs0 := geom_track_offsets(geom, s0)
 			var offs1 := geom_track_offsets(geom, s1)
+			var local_vig := vignole and absf(ym) < 0.4
 
-			if eff_seg_st == BedStyle.GRASS_VIGNOLE:
+			if ym > 0.6:
+				# Elevated Light Rail Precast Concrete Box-Girder Viaduct + Acoustic Noise Barriers + Ballastless Slab
+				_emit_elevated_viaduct_seg(viaduct_st, barrier_st, stone_st, f0, f1, sep_f0, sep_f1)
+				has_viaduct = true
+				has_barrier = true
+				has_stone = true
+			elif ym < -0.10:
+				# Underground Light Rail Tunnel or Open-Cut U-Trough Ramp
+				var w_slab0: Array[Vector2] = [
+					Vector2(-1.45 - sep_f0, -0.02), Vector2(-1.42 - sep_f0, 0.048),
+					Vector2(1.42 + sep_f0, 0.048), Vector2(1.45 + sep_f0, -0.02),
+				]
+				var w_slab1: Array[Vector2] = [
+					Vector2(-1.45 - sep_f1, -0.02), Vector2(-1.42 - sep_f1, 0.048),
+					Vector2(1.42 + sep_f1, 0.048), Vector2(1.45 + sep_f1, -0.02),
+				]
+				_extrude_open_profile_2(stone_st, f0, f1, w_slab0, w_slab1)
+				has_stone = true
+				if ym > -4.35:
+					# Open-cut concrete U-trough retaining walls rising to street level (+0.55m above ground)
+					_emit_utrough_seg(tunnel_wall_st, f0, f1, sep_f0, sep_f1, false)
+					has_tunnel = true
+					if (i % 3 == 0):
+						var fw2 := Vector2(-f0.basis.z.x, -f0.basis.z.z).normalized()
+						var mid_xz := Vector2((f0.origin.x + f1.origin.x) * 0.5, (f0.origin.z + f1.origin.z) * 0.5)
+						portal_cutouts.append({"pos": mid_xz, "fwd": fw2, "hl": 3.4, "hw": sep + 2.35})
+					if not portal_emitted and minf(f0.origin.y, f1.origin.y) <= -4.15:
+						portal_emitted = true
+						var f_port := f1 if f1.origin.y < f0.origin.y else f0
+						_emit_tunnel_portal_headwall(tunnel_wall_st, tunnel_led_st, f_port, sep, false)
+						has_tunnel_led = true
+				else:
+					# Full enclosed underground concrete box tunnel (roof separated for X-Ray cutaway!)
+					_emit_tunnel_seg(tunnel_wall_st, tunnel_roof_st, tunnel_led_st, f0, f1, sep_f0, sep_f1, s0, false)
+					has_tunnel = true
+					has_tunnel_roof = true
+					has_tunnel_led = true
+			elif eff_seg_st == BedStyle.GRASS_VIGNOLE:
 				for li in range(offs0.size()):
 					var gf0 := f0; gf0.origin += f0.basis.x * offs0[li]
 					var gf1 := f1; gf1.origin += f1.basis.x * offs1[li]
@@ -1466,7 +1572,44 @@ static func build_network_tracks_and_stations(
 			for li in range(offs0.size()):
 				var sf0 := f0; sf0.origin += f0.basis.x * offs0[li]
 				var sf1 := f1; sf1.origin += f1.basis.x * offs1[li]
-				_emit_rail_pair_and_wire(dark_rail_st, bright_rail_st, wire_st, sf0, sf1, vignole)
+				_emit_rail_pair_and_wire(dark_rail_st, bright_rail_st, wire_st, sf0, sf1, local_vig)
+
+		# Elevated Light Rail Viaduct Piers every ~28m (clear of intersections & cross streets)
+		if graph.edge_has_elevated_part(eid):
+			var ps_v := s_start + 8.0
+			while ps_v < s_end - 5.0:
+				var placed_here := false
+				for shift_v: float in [0.0, 4.5, -4.5, 9.0, -9.0]:
+					var cand_v := ps_v + shift_v
+					if cand_v < s_start + 4.0 or cand_v > s_end - 4.0:
+						continue
+					var pf_v := sample_track_frame(curve, cand_v, clen, false)
+					if pf_v.origin.y < 2.1:
+						continue
+					var p2_v := Vector2(pf_v.origin.x, pf_v.origin.z)
+					var fw2_v := Vector2(-pf_v.basis.z.x, -pf_v.basis.z.z).normalized()
+					if _is_mono_pier_clear(graph, p2_v, eid, fw2_v, placed_viaduct_piers, 12.0):
+						var sep_v := geom_outer_sep_at(geom, cand_v)
+						_emit_viaduct_pier(viaduct_pier_st, pf_v, sep_v, graph.is_quad(eid))
+						placed_viaduct_piers.append(p2_v)
+						has_viaduct_pier = true
+						placed_here = true
+						break
+				if not placed_here:
+					# Fallback: still drop a pier on long bridges over lakes/open land if no road intersection blocks it
+					var pf_fb := sample_track_frame(curve, ps_v, clen, false)
+					if pf_fb.origin.y >= 2.1:
+						var p2_fb := Vector2(pf_fb.origin.x, pf_fb.origin.z)
+						var too_close := false
+						for ep_v: Vector2 in placed_viaduct_piers:
+							if p2_fb.distance_squared_to(ep_v) < 144.0:
+								too_close = true
+								break
+						if not too_close:
+							_emit_viaduct_pier(viaduct_pier_st, pf_fb, geom_outer_sep_at(geom, ps_v), graph.is_quad(eid))
+							placed_viaduct_piers.append(p2_fb)
+							has_viaduct_pier = true
+				ps_v += 28.0
 
 		# Build Single or Double (Scissors) Crossover rails in the middle of double-track edge!
 		var xover_type := int(graph.crossovers.get(eid, NetworkGraph.CrossoverType.NONE))
@@ -1524,12 +1667,16 @@ static func build_network_tracks_and_stations(
 				xo_box.visibility_range_end = 240.0
 				parent.add_child(xo_box)
 
-		# Sleepers, Pandrol clips & ROW bollards on Vignole edges
+		# Sleepers, Pandrol clips & ROW bollards on ground Vignole edges
 		if vignole:
 			var slp_s := s_start + 0.35
 			var slp_idx := 0
 			while slp_s < s_end - 0.2:
 				var tf_s := sample_track_frame(curve, slp_s, clen, false)
+				if absf(tf_s.origin.y) >= 0.4:
+					slp_s += 0.68
+					slp_idx += 1
+					continue
 				var sep := geom_outer_sep_at(geom, slp_s)
 				var track_offsets := geom_track_offsets(geom, slp_s)
 				for t_off: float in track_offsets:
@@ -1556,10 +1703,14 @@ static func build_network_tracks_and_stations(
 				slp_s += 0.68
 				slp_idx += 1
 
-		# Catenary poles every 28m along each built edge
+		# Catenary poles every 28m along each built edge (surface & viaduct; underground uses ceiling conductor rail)
 		var pole_s := s_start + 6.0
 		while pole_s < s_end - 4.0:
 			var tf_p := sample_track_frame(curve, pole_s, clen, false)
+			if tf_p.origin.y < -0.6:
+				pole_s += 28.0
+				continue
+			var on_viaduct := tf_p.origin.y > 0.6
 			var sep := geom_outer_sep_at(geom, pole_s)
 			var side := -1.0
 			var near_stn_pole := false
@@ -1573,14 +1724,14 @@ static func build_network_tracks_and_stations(
 				continue
 			var m_tf := tf_p
 			m_tf.origin += tf_p.basis.x * (side * (2.18 + sep)) + tf_p.basis.y * 2.65
-			var m_ok := track_clearance_dist(clear_idx, Vector2(m_tf.origin.x, m_tf.origin.z)) >= MAST_CLEARANCE_M
+			var m_ok := on_viaduct or track_clearance_dist(clear_idx, Vector2(m_tf.origin.x, m_tf.origin.z)) >= MAST_CLEARANCE_M
 			if m_ok:
 				mast_tfs.append(m_tf)
 			if is_double:
 				# Opposite side mast + twin cantilever arms on double track!
 				var m_tf2 := tf_p
 				m_tf2.origin += tf_p.basis.x * (-side * (2.18 + sep)) + tf_p.basis.y * 2.65
-				if track_clearance_dist(clear_idx, Vector2(m_tf2.origin.x, m_tf2.origin.z)) >= MAST_CLEARANCE_M:
+				if on_viaduct or track_clearance_dist(clear_idx, Vector2(m_tf2.origin.x, m_tf2.origin.z)) >= MAST_CLEARANCE_M:
 					mast_tfs.append(m_tf2)
 				elif not m_ok:
 					pole_s += 28.0
@@ -1612,7 +1763,7 @@ static func build_network_tracks_and_stations(
 			for idx_b in range(idx_a + 1, e_list.size()):
 				var ea := int(e_list[idx_a])
 				var eb := int(e_list[idx_b])
-				if not edge_end_frames.has(ea) or not edge_end_frames.has(eb):
+				if not edge_end_frames.has(ea) or not edge_end_frames.has(eb) or not graph.edges_connect_at_node(ea, eb, nid):
 					continue
 				var ea_is_a := (int(graph.edges[ea]["a"]) == nid)
 				var eb_is_a := (int(graph.edges[eb]["a"]) == nid)
@@ -1675,7 +1826,19 @@ static func build_network_tracks_and_stations(
 						var jf1 := sample_track_frame(j_curve, s_jk1, jlen, false)
 						jf0.origin += j_lift
 						jf1.origin += j_lift
-						if keep_grass:
+						var jy := (jf0.origin.y + jf1.origin.y) * 0.5
+						if jy > 0.6:
+							_emit_elevated_viaduct_seg(viaduct_st, barrier_st, stone_st, jf0, jf1, 0.0, 0.0, false)
+							has_viaduct = true
+							has_stone = true
+						elif jy < -0.4:
+							_extrude_open_profile(stone_st, jf0, jf1, stone_prof)
+							has_stone = true
+							if jy < -4.0:
+								_emit_tunnel_seg(tunnel_wall_st, tunnel_roof_st, tunnel_led_st, jf0, jf1, 0.0, 0.0, s_jk0, false)
+								has_tunnel = true
+								has_tunnel_roof = true
+						elif keep_grass:
 							var turf_y := 0.076 if vig_j else 0.068
 							_emit_turf_quad(grass_st, jf0, jf1, s_jk0, s_jk1, 1.38, turf_y)
 							has_grass = true
@@ -1688,7 +1851,7 @@ static func build_network_tracks_and_stations(
 						elif is_bare_junc:
 							_extrude_open_profile(stone_st, jf0, jf1, stone_prof)
 							has_stone = true
-						_emit_rail_pair_and_wire(dark_rail_st, bright_rail_st, wire_st, jf0, jf1, vig_j)
+						_emit_rail_pair_and_wire(dark_rail_st, bright_rail_st, wire_st, jf0, jf1, vig_j and absf(jy) < 0.4)
 					if keep_grass and vig_j:
 						var js_slp := 0.34
 						while js_slp < jlen - 0.15:
@@ -1723,6 +1886,24 @@ static func build_network_tracks_and_stations(
 		_commit_mesh(parent, "TrackEdgeCurbs", curb_st, Color(0.70, 0.69, 0.66), 0.80, 0.0, false)
 	if has_ballast:
 		_commit_mesh(parent, "BallastTrackBed", bal_st, Color(0.40, 0.39, 0.37), 0.94, 0.0, false)
+	if has_viaduct:
+		_commit_mesh(parent, "ElevatedViaducts", viaduct_st, Color(0.76, 0.75, 0.72), 0.80, 0.0, true)
+	if has_viaduct_pier:
+		_commit_mesh(parent, "ElevatedViaductPiers", viaduct_pier_st, Color(0.71, 0.70, 0.67), 0.86, 0.0, true)
+	if has_barrier:
+		barrier_st.generate_normals()
+		var bar_mi := MeshInstance3D.new()
+		bar_mi.name = "ViaductNoiseBarriers"
+		bar_mi.mesh = barrier_st.commit()
+		var bar_mat := StandardMaterial3D.new()
+		bar_mat.albedo_color = Color(0.68, 0.82, 0.88, 0.42)
+		bar_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		bar_mat.roughness = 0.14
+		bar_mat.metallic = 0.12
+		bar_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		bar_mi.material_override = bar_mat
+		bar_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		parent.add_child(bar_mi)
 
 	_commit_mesh(parent, "RailWebFootAndGrooves", dark_rail_st, Color(0.09, 0.085, 0.08), 0.90, 0.05, false)
 
@@ -1798,7 +1979,12 @@ static func build_network_tracks_and_stations(
 			sep_st = NetworkGraph.QUAD_LOCAL_HALF_SEP # fallback if geom missing
 		var st_fwd := (st_d["fwd"] as Vector3).normalized()
 		var st_right := st_fwd.cross(Vector3.UP).normalized()
-		var rtop := rail_top_for_style(bst)
+		var st_elev_y := (st_d["pos"] as Vector3).y
+		# Keep station anchor projected onto ground y=0 so elevated piers/stairs & underground surface kiosks
+		# always sit accurately on ground (and Terrain.drape_subtree shifts the whole assembly cleanly)
+		st_d["pos"] = Vector3((st_d["pos"] as Vector3).x, 0.0, (st_d["pos"] as Vector3).z)
+		st_d["elev_y"] = st_elev_y
+		var rtop := st_elev_y + EMBED_RAIL_TOP + local_rail_top_offset(bst, st_elev_y)
 		if quad_e and int(st_d["side"]) == 0:
 			# Four-track twin islands: one centered between the express and local track of each direction
 			var centre: Vector3 = st_d["pos"]
@@ -1840,8 +2026,8 @@ static func build_network_tracks_and_stations(
 			}
 		var sview := StationBuilder.build_detailed_station(parent, st_d, rtop, cjk_font, station_lights)
 		station_views[sid] = sview
-		# Side platforms take the motor lane: cut the kerb back into a tapered bay so traffic shifts outward
-		if int(st_d["side"]) != 0 and not is_monorail_style(bst) and not quad_e:
+		# Side platforms take the motor lane: cut the kerb back into a tapered bay only on ground-level streets
+		if int(st_d["side"]) != 0 and not is_monorail_style(bst) and not quad_e and absf(st_elev_y) < 1.5:
 			bays.append(station_bay(graph, st_d, sep_st))
 	graph.set_meta("station_bays", bays)
 	var st_curves := {}
@@ -1851,7 +2037,32 @@ static func build_network_tracks_and_stations(
 			st_curves[sid_c] = sv_c["curve_spec"]
 	graph.set_meta("station_curve_specs", st_curves)
 	_build_buffer_stops(parent, graph, station_lights)
-	_build_monorail_guideways(parent, graph)
+	var mono_ug := _build_monorail_guideways(parent, graph, tunnel_wall_st, tunnel_roof_st, tunnel_led_st, portal_cutouts)
+	if bool(mono_ug.get("tunnel", false)):
+		has_tunnel = true
+	if bool(mono_ug.get("roof", false)):
+		has_tunnel_roof = true
+	if bool(mono_ug.get("led", false)):
+		has_tunnel_led = true
+	if has_tunnel:
+		_commit_mesh(parent, "UndergroundTunnelWalls", tunnel_wall_st, Color(0.36, 0.37, 0.39), 0.88, 0.0, false)
+	if has_tunnel_roof:
+		_commit_mesh(parent, "UndergroundTunnelRoofs", tunnel_roof_st, Color(0.28, 0.30, 0.33), 0.90, 0.0, false)
+	if has_tunnel_led:
+		tunnel_led_st.generate_normals()
+		var led_mi := MeshInstance3D.new()
+		led_mi.name = "UndergroundTunnelLEDs"
+		led_mi.mesh = tunnel_led_st.commit()
+		var led_mat := StandardMaterial3D.new()
+		led_mat.albedo_color = Color(0.95, 0.97, 1.0)
+		led_mat.emission_enabled = true
+		led_mat.emission = Color(0.92, 0.95, 1.0)
+		led_mat.emission_energy_multiplier = 2.6
+		led_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		led_mi.material_override = led_mat
+		led_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		parent.add_child(led_mi)
+	graph.set_meta("portal_cutouts", portal_cutouts)
 	_build_tram_switches(parent, graph)
 
 	return {
@@ -2473,22 +2684,21 @@ static func _build_buffer_stops(parent: Node3D, graph: NetworkGraph, lights: Arr
 			if bool(g["is_double"]):
 				var sp := geom_sep_at(g, s_rail)
 				lanes = [-sp, sp]
-			var y0 := rail_top_for_style(int(graph.built_tracks[eid]))
-			var mono := is_monorail_style(int(graph.built_tracks[eid]))
-			if mono:
-				y0 = MONORAIL_BEAM_TOP - EMBED_RAIL_TOP
+			var bst_buf := int(graph.built_tracks[eid])
+			var mono := is_monorail_style(bst_buf)
+			var y0 := -EMBED_RAIL_TOP if mono else (EMBED_RAIL_TOP + local_rail_top_offset(bst_buf, tf_end.origin.y))
 			for lat_x: float in lanes:
 				# Run-out: rails / beam from the old end to the buffer (frames ordered along the travel direction)
 				var fa := tf_end if at_b else tf_x
 				var fb := tf_x if at_b else tf_end
 				if mono:
-					var top := MONORAIL_BEAM_TOP - EMBED_RAIL_TOP
+					var top := -EMBED_RAIL_TOP
 					_mono_beam_segment(x_beam, x_prail, fa, fb, lat_x, lat_x, top, top - MONO_BEAM_D, MONO_BEAM_W * 0.5)
 					has_x_beam = true
 				else:
 					var fa2 := fa; fa2.origin += fa.basis.x * lat_x
 					var fb2 := fb; fb2.origin += fb.basis.x * lat_x
-					_emit_rail_pair_and_wire(x_dark, x_bright, x_wire, fa2, fb2, is_vignole_style(int(graph.built_tracks[eid])))
+					_emit_rail_pair_and_wire(x_dark, x_bright, x_wire, fa2, fb2, is_vignole_style(bst_buf) and absf(tf_end.origin.y) < 0.4)
 					has_x_rail = true
 			for lat: float in lanes:
 				var pos := tf.origin + tf.basis.x * lat + Vector3.UP * y0
@@ -2748,8 +2958,16 @@ static func _build_tram_switches(parent: Node3D, graph: NetworkGraph) -> void:
 	graph.set_meta("monorail_switches", lst)
 
 
-static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> void:
+static func _build_monorail_guideways(
+	parent: Node3D,
+	graph: NetworkGraph,
+	tunnel_wall_st: SurfaceTool = null,
+	tunnel_roof_st: SurfaceTool = null,
+	tunnel_led_st: SurfaceTool = null,
+	portal_cutouts: Array[Dictionary] = []
+) -> Dictionary:
 	graph.set_meta("monorail_switches", [])
+	var ug_flags := {"tunnel": false, "roof": false, "led": false}
 	var beam_st := SurfaceTool.new()
 	beam_st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var rail_st := SurfaceTool.new()
@@ -2758,10 +2976,12 @@ static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> vo
 	pier_st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var switch_nodes: Array = []
 	var switch_setup: Array = []
-	var top := MONORAIL_BEAM_TOP - EMBED_RAIL_TOP
+	# Curve Y already carries exact elevation (L1 +7.2m, L2 +13.8m, ramps, B1/B2 underground), so beam offsets are relative!
+	var top := -EMBED_RAIL_TOP
 	var bot := top - MONO_BEAM_D
 	var hw := MONO_BEAM_W * 0.5
 	var any := false
+	var has_piers := false
 	var geoms := {}
 	var placed_piers: Array[Vector2] = []
 	for eid: int in graph.built_tracks.keys():
@@ -2795,6 +3015,7 @@ static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> vo
 			for sc: float in [float(pt["s_mid"]) - float(pt["x_half"]), float(pt["s_mid"]), float(pt["s_mid"]) + float(pt["x_half"])]:
 				cuts.append(sc)
 		cuts.sort()
+		var mono_portal_emitted := false
 		for k in range(cuts.size() - 1):
 			var sa := cuts[k]
 			var sb := cuts[k + 1]
@@ -2802,6 +3023,27 @@ static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> vo
 				continue
 			var fa := sample_track_frame(c, sa, clen, false)
 			var fb := sample_track_frame(c, sb, clen, false)
+			var ym := (fa.origin.y + fb.origin.y) * 0.5
+			if tunnel_wall_st != null and ym < -0.10:
+				var sep_m0 := geom_sep_at(g, sa) if bool(g["is_double"]) else 0.0
+				var sep_m1 := geom_sep_at(g, sb) if bool(g["is_double"]) else 0.0
+				if ym > -4.65:
+					_emit_utrough_seg(tunnel_wall_st, fa, fb, sep_m0, sep_m1, true)
+					ug_flags["tunnel"] = true
+					if (k % 3 == 0):
+						var fw2m := Vector2(-fa.basis.z.x, -fa.basis.z.z).normalized()
+						var mid_xzm := Vector2((fa.origin.x + fb.origin.x) * 0.5, (fa.origin.z + fb.origin.z) * 0.5)
+						portal_cutouts.append({"pos": mid_xzm, "fwd": fw2m, "hl": 3.4, "hw": sep_m0 + 2.65})
+					if not mono_portal_emitted and minf(fa.origin.y, fb.origin.y) <= -4.40:
+						mono_portal_emitted = true
+						var f_pm := fb if fb.origin.y < fa.origin.y else fa
+						_emit_tunnel_portal_headwall(tunnel_wall_st, tunnel_led_st, f_pm, sep_m0, true)
+						ug_flags["led"] = true
+				else:
+					_emit_tunnel_seg(tunnel_wall_st, tunnel_roof_st, tunnel_led_st, fa, fb, sep_m0, sep_m1, sa, true)
+					ug_flags["tunnel"] = true
+					ug_flags["roof"] = true
+					ug_flags["led"] = true
 			for ln: float in lanes:
 				var movable := false
 				for pt: Dictionary in parts:
@@ -2818,7 +3060,7 @@ static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> vo
 				var la := ln * geom_sep_at(g, sa)
 				var lb := ln * geom_sep_at(g, sb)
 				_mono_beam_segment(beam_st, rail_st, fa, fb, la, lb, top, bot, hw)
-		# T-piers every ~28m in the median — strictly under the actual beam(s) and CLEAR of intersections & crosswalks!
+		# T-piers every ~28m under elevated guideways — strictly CLEAR of intersections & crosswalks!
 		var ps := s0 + 9.0
 		while ps < s1 - 5.5:
 			if xo.is_empty() or ps < gap0 - 4.5 or ps > gap1 + 4.5:
@@ -2829,12 +3071,15 @@ static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> vo
 					if not xo.is_empty() and cand_s >= gap0 - 4.5 and cand_s <= gap1 + 4.5:
 						continue
 					var pf := sample_track_frame(c, cand_s, clen, false)
+					if pf.origin.y + bot < 1.2:
+						break # underground or low ramp: no tall street pier
 					var p2 := Vector2(pf.origin.x, pf.origin.z)
 					var fw2 := Vector2(-pf.basis.z.x, -pf.basis.z.z).normalized()
 					if _is_mono_pier_clear(graph, p2, eid, fw2, placed_piers, 13.0):
 						var sep := geom_sep_at(g, cand_s) if bool(g["is_double"]) else 0.0
-						_mono_pier(pier_st, pf, sep, bot)
+						_mono_pier(pier_st, pf, sep, pf.origin.y + bot)
 						placed_piers.append(p2)
+						has_piers = true
 						break
 			ps += 28.0
 		# Monorail crossover = an articulated moving-beam switch: the anchored guideway's beam over this span
@@ -2878,18 +3123,21 @@ static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> vo
 		if not parts.is_empty():
 			for se: float in cap_s:
 				var pf := sample_track_frame(c, se, clen, false)
+				if pf.origin.y + bot < 1.2:
+					continue
 				var p2 := Vector2(pf.origin.x, pf.origin.z)
 				var fw2 := Vector2(-pf.basis.z.x, -pf.basis.z.z).normalized()
 				if _is_mono_pier_clear(graph, p2, eid, fw2, placed_piers, 6.0):
 					var sep_sw := geom_sep_at(g, se) if bool(g["is_double"]) else 0.0
-					_mono_pier(pier_st, pf, sep_sw, bot)
+					_mono_pier(pier_st, pf, sep_sw, pf.origin.y + bot)
 					var mb := pf
 					mb.origin += Vector3.UP * (bot - 0.75)
 					_mono_box(pier_st, mb, Vector3(2.0 * sep_sw + 1.2, 0.5, 2.2))
 					placed_piers.append(p2)
+					has_piers = true
 	if not any:
-		return
-	# Junction connectors between monorail edges (same rule as the route compiler)
+		return ug_flags
+	# Junction connectors between monorail edges (same elevation & system only!)
 	for nid: int in graph.nodes.keys():
 		var info := node_track_info(graph, nid, 1)
 		var el: Array = info["edges"]
@@ -2899,7 +3147,7 @@ static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> vo
 			for ib in range(ia + 1, el.size()):
 				var ea := int(el[ia])
 				var eb := int(el[ib])
-				if not geoms.has(ea) or not geoms.has(eb):
+				if not geoms.has(ea) or not geoms.has(eb) or not graph.edges_connect_at_node(ea, eb, nid):
 					continue
 				var ga: Dictionary = geoms[ea]
 				var gb: Dictionary = geoms[eb]
@@ -2933,8 +3181,6 @@ static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> vo
 						var f := sample_track_frame(jc, jl * float(k) / float(jn), jl, false)
 						_mono_beam_segment(beam_st, rail_st, prev_f, f, 0.0, 0.0, top, bot, hw)
 						prev_f = f
-				# Do NOT drop a junction pier at s_a (it sits on the crosswalk/intersection with sep=0 between beams!)
-				# Adjacent mid-block piers cleanly support the beam span across intersections.
 	beam_st.generate_normals()
 	var bm := StandardMaterial3D.new()
 	bm.albedo_color = Color(0.80, 0.79, 0.76)
@@ -2959,15 +3205,17 @@ static func _build_monorail_guideways(parent: Node3D, graph: NetworkGraph) -> vo
 		parent.add_child(sw_node)
 		sw_node.call("setup", item[1], item[2], item[3], item[4], bm, rm)
 	graph.set_meta("monorail_switches", switch_nodes)
-	pier_st.generate_normals()
-	var pm := StandardMaterial3D.new()
-	pm.albedo_color = Color(0.74, 0.73, 0.70)
-	pm.roughness = 0.85
-	var pier_mi := MeshInstance3D.new()
-	pier_mi.name = "MonorailPiers"
-	pier_mi.mesh = pier_st.commit()
-	pier_mi.material_override = pm
-	parent.add_child(pier_mi)
+	if has_piers:
+		pier_st.generate_normals()
+		var pm := StandardMaterial3D.new()
+		pm.albedo_color = Color(0.74, 0.73, 0.70)
+		pm.roughness = 0.85
+		var pier_mi := MeshInstance3D.new()
+		pier_mi.name = "MonorailPiers"
+		pier_mi.mesh = pier_st.commit()
+		pier_mi.material_override = pm
+		parent.add_child(pier_mi)
+	return ug_flags
 
 
 static func _mono_beam_segment(beam_st: SurfaceTool, rail_st: SurfaceTool, fa: Transform3D, fb: Transform3D, la: float, lb: float, top: float, bot: float, hw: float) -> void:
@@ -3050,10 +3298,14 @@ static func _is_mono_pier_clear(
 	return true
 
 
-static func _mono_pier(st: SurfaceTool, f: Transform3D, sep: float, bot: float) -> void:
+static func _mono_pier(st: SurfaceTool, f: Transform3D, sep: float, bot_h: float) -> void:
+	if bot_h < 0.8:
+		return
 	var r := f.basis.x.normalized()
-	var fw := -f.basis.z.normalized()
-	var o := f.origin
+	var fw := Vector3(-f.basis.z.x, 0.0, -f.basis.z.z).normalized()
+	if fw.length_squared() < 0.01:
+		fw = Vector3.FORWARD
+	var o := Vector3(f.origin.x, 0.0, f.origin.z)
 	var box := func(cx: float, cy: float, sx: float, sy: float, sz: float) -> void:
 		var cc := o + r * cx + Vector3.UP * cy
 		var hx := r * (sx * 0.5)
@@ -3063,12 +3315,213 @@ static func _mono_pier(st: SurfaceTool, f: Transform3D, sep: float, bot: float) 
 		for fc: Array in [[0, 1, 2, 3], [5, 4, 7, 6], [4, 0, 3, 7], [1, 5, 6, 2], [3, 2, 6, 7]]:
 			for idx: int in [0, 1, 2, 0, 2, 3]:
 				st.add_vertex(v[fc[idx]])
-	box.call(0.0, bot * 0.5, 1.3, bot, 1.3)
-	box.call(0.0, 0.25, 1.9, 0.5, 1.9)
+	box.call(0.0, bot_h * 0.5, 1.35, bot_h, 1.35)
+	box.call(0.0, 0.25, 1.95, 0.5, 1.95)
 	if sep > 0.1:
-		box.call(0.0, bot - 0.35, sep * 2.0 + 1.6, 0.7, 1.4)
+		box.call(0.0, bot_h - 0.35, sep * 2.0 + 1.6, 0.7, 1.45)
 	else:
-		box.call(0.0, bot - 0.3, 1.8, 0.6, 1.4)
+		box.call(0.0, bot_h - 0.3, 1.85, 0.6, 1.45)
+
+
+# ---------------------------------------------------------------------------------------------
+# 3D Elevated Light Rail Viaduct, Piers, Underground Tunnels, U-Troughs & Tunnel Portals
+# ---------------------------------------------------------------------------------------------
+
+static func _emit_elevated_viaduct_seg(
+	viaduct_st: SurfaceTool,
+	barrier_st: SurfaceTool,
+	stone_st: SurfaceTool,
+	f0: Transform3D,
+	f1: Transform3D,
+	sep0: float,
+	sep1: float,
+	with_barriers: bool = true
+) -> void:
+	# Trapezoidal precast concrete box-girder + outer concrete parapet walls
+	var w0 := sep0 + 2.35
+	var w1 := sep1 + 2.35
+	var b0 := maxf(1.3, w0 - 1.15)
+	var b1 := maxf(1.3, w1 - 1.15)
+	var prof0: Array[Vector2] = [
+		Vector2(-w0, 0.85), Vector2(-w0 + 0.28, 0.85), Vector2(-w0 + 0.28, 0.0),
+		Vector2(w0 - 0.28, 0.0), Vector2(w0 - 0.28, 0.85), Vector2(w0, 0.85),
+		Vector2(w0, -0.32), Vector2(b0, -1.35), Vector2(-b0, -1.35), Vector2(-w0, -0.32),
+		Vector2(-w0, 0.85),
+	]
+	var prof1: Array[Vector2] = [
+		Vector2(-w1, 0.85), Vector2(-w1 + 0.28, 0.85), Vector2(-w1 + 0.28, 0.0),
+		Vector2(w1 - 0.28, 0.0), Vector2(w1 - 0.28, 0.85), Vector2(w1, 0.85),
+		Vector2(w1, -0.32), Vector2(b1, -1.35), Vector2(-b1, -1.35), Vector2(-w1, -0.32),
+		Vector2(-w1, 0.85),
+	]
+	_extrude_open_profile_2(viaduct_st, f0, f1, prof0, prof1)
+	# Ballastless concrete track slab on top of viaduct deck
+	var sl0: Array[Vector2] = [
+		Vector2(-1.42 - sep0, 0.01), Vector2(-1.38 - sep0, 0.048),
+		Vector2(1.38 + sep0, 0.048), Vector2(1.42 + sep0, 0.01),
+	]
+	var sl1: Array[Vector2] = [
+		Vector2(-1.42 - sep1, 0.01), Vector2(-1.38 - sep1, 0.048),
+		Vector2(1.38 + sep1, 0.048), Vector2(1.42 + sep1, 0.01),
+	]
+	_extrude_open_profile_2(stone_st, f0, f1, sl0, sl1)
+	# Sleek translucent acoustic noise barriers along both outer edges
+	if with_barriers:
+		for sd: float in [-1.0, 1.0]:
+			var x0 := sd * (w0 - 0.14)
+			var x1 := sd * (w1 - 0.14)
+			var bp0: Array[Vector2] = [Vector2(x0, 0.85), Vector2(x0, 2.08)]
+			var bp1: Array[Vector2] = [Vector2(x1, 0.85), Vector2(x1, 2.08)]
+			_extrude_open_profile_2(barrier_st, f0, f1, bp0, bp1)
+
+
+static func _emit_viaduct_pier(st: SurfaceTool, f: Transform3D, sep: float, is_quad: bool) -> void:
+	var pier_top := f.origin.y - 1.32
+	if pier_top < 0.8:
+		return
+	var r := f.basis.x.normalized()
+	var fw := Vector3(-f.basis.z.x, 0.0, -f.basis.z.z).normalized()
+	if fw.length_squared() < 0.01:
+		fw = Vector3.FORWARD
+	var o := Vector3(f.origin.x, 0.0, f.origin.z)
+	var box := func(cx: float, cy: float, sx: float, sy: float, sz: float) -> void:
+		var cc := o + r * cx + Vector3.UP * cy
+		var hx := r * (sx * 0.5)
+		var hy := Vector3.UP * (sy * 0.5)
+		var hz := fw * (sz * 0.5)
+		var v := [cc - hx - hy - hz, cc + hx - hy - hz, cc + hx + hy - hz, cc - hx + hy - hz, cc - hx - hy + hz, cc + hx - hy + hz, cc + hx + hy + hz, cc - hx + hy + hz]
+		for fc: Array in [[0, 1, 2, 3], [5, 4, 7, 6], [4, 0, 3, 7], [1, 5, 6, 2], [3, 2, 6, 7]]:
+			for idx: int in [0, 1, 2, 0, 2, 3]:
+				st.add_vertex(v[fc[idx]])
+	var cap_w := sep * 2.0 + 3.6
+	if is_quad or sep > 3.5:
+		# Twin-column portal pier for wide 4-track / island-widened viaducts
+		var col_x := maxf(2.6, sep * 0.82)
+		for cs: float in [-1.0, 1.0]:
+			box.call(cs * col_x, pier_top * 0.5, 1.45, pier_top, 1.55)
+			box.call(cs * col_x, 0.25, 2.1, 0.5, 2.2)
+		box.call(0.0, pier_top - 0.55, cap_w, 1.1, 1.85)
+	else:
+		# Sculpted central T-pier for single & double-track light rail viaducts
+		var col_w := 1.85 if sep > 0.5 else 1.45
+		box.call(0.0, pier_top * 0.5, col_w, pier_top, 1.55)
+		box.call(0.0, 0.28, col_w + 0.7, 0.56, 2.2)
+		box.call(0.0, pier_top - 0.50, cap_w, 1.0, 1.85)
+
+
+static func _emit_tunnel_seg(
+	wall_st: SurfaceTool,
+	roof_st: SurfaceTool,
+	led_st: SurfaceTool,
+	f0: Transform3D,
+	f1: Transform3D,
+	sep0: float,
+	sep1: float,
+	s0: float,
+	is_mono: bool
+) -> void:
+	var hw0 := sep0 + (2.75 if is_mono else 2.55)
+	var hw1 := sep1 + (2.75 if is_mono else 2.55)
+	var floor_y := -1.68 if is_mono else -0.18
+	var walk_y := -0.45 if is_mono else 0.72
+	var ceil_y := 4.45 if is_mono else 5.25
+	# Concrete tunnel floor, emergency evacuation walkways & side lining walls (always visible!)
+	var w_prof0: Array[Vector2] = [
+		Vector2(-hw0, ceil_y), Vector2(-hw0, walk_y), Vector2(-hw0 + 0.62, walk_y),
+		Vector2(-hw0 + 0.62, floor_y), Vector2(hw0 - 0.62, floor_y),
+		Vector2(hw0 - 0.62, walk_y), Vector2(hw0, walk_y), Vector2(hw0, ceil_y),
+	]
+	var w_prof1: Array[Vector2] = [
+		Vector2(-hw1, ceil_y), Vector2(-hw1, walk_y), Vector2(-hw1 + 0.62, walk_y),
+		Vector2(-hw1 + 0.62, floor_y), Vector2(hw1 - 0.62, floor_y),
+		Vector2(hw1 - 0.62, walk_y), Vector2(hw1, walk_y), Vector2(hw1, ceil_y),
+	]
+	_extrude_open_profile_2(wall_st, f0, f1, w_prof0, w_prof1)
+	# Separate tunnel roof slab (hidden in Underground X-Ray View so player sees straight inside!)
+	var r_prof0: Array[Vector2] = [
+		Vector2(-hw0 - 0.35, ceil_y + 0.35), Vector2(hw0 + 0.35, ceil_y + 0.35),
+		Vector2(hw0, ceil_y), Vector2(-hw0, ceil_y),
+	]
+	var r_prof1: Array[Vector2] = [
+		Vector2(-hw1 - 0.35, ceil_y + 0.35), Vector2(hw1 + 0.35, ceil_y + 0.35),
+		Vector2(hw1, ceil_y), Vector2(-hw1, ceil_y),
+	]
+	_extrude_open_profile_2(roof_st, f0, f1, r_prof0, r_prof1)
+	# Glowing warm-white LED strips along upper tunnel cornices every 12m (visible both driving & in X-Ray!)
+	if led_st != null and int(floor(s0 / 6.0)) % 2 == 0:
+		for sd: float in [-1.0, 1.0]:
+			var lx0 := sd * (hw0 - 0.18)
+			var lx1 := sd * (hw1 - 0.18)
+			var lp0: Array[Vector2] = [Vector2(lx0, ceil_y - 0.55), Vector2(lx0, ceil_y - 0.32)]
+			var lp1: Array[Vector2] = [Vector2(lx1, ceil_y - 0.55), Vector2(lx1, ceil_y - 0.32)]
+			_extrude_open_profile_2(led_st, f0, f1, lp0, lp1)
+
+
+static func _emit_utrough_seg(
+	wall_st: SurfaceTool,
+	f0: Transform3D,
+	f1: Transform3D,
+	sep0: float,
+	sep1: float,
+	is_mono: bool
+) -> void:
+	# Open-cut concrete U-trough retaining walls rising from track level cleanly up to street level (+0.55m)
+	var hw0 := sep0 + (2.65 if is_mono else 2.38)
+	var hw1 := sep1 + (2.65 if is_mono else 2.38)
+	var floor_y := -1.65 if is_mono else -0.15
+	var top0 := maxf(0.55 - f0.origin.y, 0.75)
+	var top1 := maxf(0.55 - f1.origin.y, 0.75)
+	var u0: Array[Vector2] = [
+		Vector2(-hw0 - 0.38, top0), Vector2(-hw0, top0), Vector2(-hw0, floor_y),
+		Vector2(hw0, floor_y), Vector2(hw0, top0), Vector2(hw0 + 0.38, top0),
+	]
+	var u1: Array[Vector2] = [
+		Vector2(-hw1 - 0.38, top1), Vector2(-hw1, top1), Vector2(-hw1, floor_y),
+		Vector2(hw1, floor_y), Vector2(hw1, top1), Vector2(hw1 + 0.38, top1),
+	]
+	_extrude_open_profile_2(wall_st, f0, f1, u0, u1)
+
+
+static func _emit_box_with_normals(st: SurfaceTool, f: Transform3D, sz: Vector3) -> void:
+	var r := f.basis.x.normalized() * (sz.x * 0.5)
+	var u := Vector3.UP * (sz.y * 0.5)
+	var w := -f.basis.z.normalized() * (sz.z * 0.5)
+	var o := f.origin
+	var v := [o - r - u - w, o + r - u - w, o + r + u - w, o - r + u - w, o - r - u + w, o + r - u + w, o + r + u + w, o - r + u + w]
+	for fc: Array in [[0, 1, 2, 3], [5, 4, 7, 6], [4, 0, 3, 7], [1, 5, 6, 2], [3, 2, 6, 7], [4, 5, 1, 0]]:
+		var p0: Vector3 = v[fc[0]]
+		var p1: Vector3 = v[fc[1]]
+		var p2: Vector3 = v[fc[2]]
+		var fn := (p1 - p0).cross(p2 - p0)
+		fn = fn.normalized() if fn.length_squared() > 1e-6 else Vector3.UP
+		for idx: int in [0, 1, 2, 0, 2, 3]:
+			st.set_normal(fn)
+			st.add_vertex(v[fc[idx]])
+
+
+static func _emit_tunnel_portal_headwall(
+	wall_st: SurfaceTool,
+	led_st: SurfaceTool,
+	f: Transform3D,
+	sep: float,
+	is_mono: bool
+) -> void:
+	# Architectural concrete tunnel portal frame + illuminated clearance lintel at y ~ -4.2m
+	var hw := sep + (2.75 if is_mono else 2.55)
+	var ceil_y := 4.45 if is_mono else 5.25
+	var head_top := maxf(ceil_y + 1.35, 0.85 - f.origin.y)
+	var lintel_h := maxf(1.2, head_top - ceil_y)
+	var f_lintel := f
+	f_lintel.origin += Vector3.UP * (ceil_y + lintel_h * 0.5)
+	_emit_box_with_normals(wall_st, f_lintel, Vector3(hw * 2.0 + 1.6, lintel_h, 1.4))
+	for sd: float in [-1.0, 1.0]:
+		var f_col := f
+		f_col.origin += f.basis.x * (sd * (hw + 0.42)) + Vector3.UP * ((head_top - 0.5) * 0.5)
+		_emit_box_with_normals(wall_st, f_col, Vector3(0.84, head_top + 0.5, 1.4))
+	if led_st != null:
+		var f_sign := f
+		f_sign.origin += Vector3.UP * (ceil_y + 0.25)
+		_emit_box_with_normals(led_st, f_sign, Vector3(hw * 1.4, 0.22, 1.48))
 
 
 

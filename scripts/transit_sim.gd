@@ -1915,10 +1915,11 @@ func _step_ai_driver(
 	else:
 		# Not actively braking -> check short-station crawl vs. Power-and-Coast cruising
 		var base_cruise := user_cap_mps
+		var is_grade_sep := bool(tr.get("elevated", false)) or bool(tr.get("grade_sep", false))
 		if ai_style == AIStyle.SLOW and not bool(tr.get("ai_max_custom", false)):
-			base_cruise = minf(user_cap_mps, (spec_max_kmh * 0.72 / 3.6) if bool(tr.get("elevated", false)) else (minf(spec_max_kmh * 0.56, 38.0) / 3.6))
+			base_cruise = minf(user_cap_mps, (spec_max_kmh * 0.72 / 3.6) if is_grade_sep else (minf(spec_max_kmh * 0.56, 38.0) / 3.6))
 		elif ai_style == AIStyle.NORMAL and not bool(tr.get("ai_max_custom", false)):
-			base_cruise = minf(user_cap_mps, (spec_max_kmh * 0.90 / 3.6) if bool(tr.get("elevated", false)) else (minf(spec_max_kmh * 0.68, 48.0) / 3.6))
+			base_cruise = minf(user_cap_mps, (spec_max_kmh * 0.90 / 3.6) if is_grade_sep else (minf(spec_max_kmh * 0.68, 48.0) / 3.6))
 		var target_mps := minf(base_cruise, minf(allowed_mps, v_env))
 
 		var crawl_zone_d := 6.5 if ai_style == AIStyle.FURIOUS else 22.0
@@ -2366,6 +2367,8 @@ func _check_tram_to_tram_collisions() -> Dictionary:
 
 				for sb: Node3D in secs_b:
 					var pb3 := sb.global_position
+					if absf(pa3.y - pb3.y) >= 3.5:
+						continue # vertically grade-separated (viaduct over surface or tunnel under surface)
 					if pa3.distance_squared_to(pb3) > 95.0:
 						continue
 					var fb3 := -sb.global_transform.basis.z
@@ -2569,6 +2572,10 @@ func _position_tram_3d(tr: Dictionary) -> void:
 			base_basis = base_basis.rotated(-base_basis.z.normalized(), body_roll)
 
 		sec_node.global_transform = Transform3D(base_basis, mid)
+		if k == 0:
+			var rel_y := mid.y - Terrain.surface(mid.x, mid.z)
+			tr["rel_y"] = rel_y
+			tr["grade_sep"] = bool(tr.get("elevated", false)) or rel_y > 3.5 or rel_y < -2.0
 
 	var hl := sec_len * 0.5
 	for g_i in range(gangways.size()):
@@ -3513,6 +3520,8 @@ func _update_merge_yields() -> void:
 				continue
 			var pa := _head_pos(a)
 			var pb := _head_pos(b)
+			if absf(pa.y - pb.y) >= 3.5:
+				continue # vertically separated tracks never merge in 3D
 			if pa.distance_to(pb) > MERGE_LOOK * 2.0 + 20.0:
 				continue
 			if not paths.has(i):

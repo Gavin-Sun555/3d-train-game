@@ -26,7 +26,8 @@ static func build_detailed_station(
 	parent.add_child(st_node)
 
 	var is_island := (int(side) == 0)
-	var plat_h := 0.30 + maxf(0.0, rail_top_y - TrackBuilder.EMBED_RAIL_TOP)
+	var raw_dy := rail_top_y - TrackBuilder.EMBED_RAIL_TOP
+	var plat_h := 0.30 + (raw_dy if raw_dy < -1.0 else maxf(0.0, raw_dy))
 	var plat_len := clampf(float(st_data.get("platform_len", 27.0)), 20.0, 56.0)
 	var plat_half := plat_len * 0.5
 	var plat_w := 3.10 if is_island else 2.95
@@ -39,8 +40,10 @@ static func build_detailed_station(
 	var plat_top := plat_h
 
 	# 1. Platform deck (triplanar granite pavers), edge coping, tactile warning strip, rubbing strip
-	# Elevated (monorail) stations: platform slab on twin columns, stairs + lift tower to the street
-	var elevated := plat_h > 3.0
+	# Elevated (L1/L2) stations: platform slab on twin columns, stairs + lift tower to the street
+	# Underground (B1/B2) stations: subsurface concrete platform hall + full-height PSD + street entrance pavilion
+	var elevated := plat_h > 2.5
+	var underground := plat_h < -1.5
 	if elevated:
 		_box(st_node, Vector3(plat_w, 0.55, plat_len), Vector3(plat_cx, plat_h - 0.275, 0.0), mats["paver"])
 		_box(st_node, Vector3(plat_w + 0.3, 0.35, plat_len + 0.3), Vector3(plat_cx, plat_h - 0.72, 0.0), mats["coping"])
@@ -49,7 +52,10 @@ static func build_detailed_station(
 		for pi_ in range(n_piers):
 			var cz := lerpf(-pier_end, pier_end, float(pi_) / float(n_piers - 1))
 			for cx_off: float in ([-0.8, 0.8] if plat_w > 2.0 else [0.0]):
-				_cyl(st_node, 0.32, plat_h - 0.9, Vector3(plat_cx + cx_off, (plat_h - 0.9) * 0.5, cz), mats["coping"])
+				_cyl(st_node, 0.36 if plat_h > 10.0 else 0.32, plat_h - 0.9, Vector3(plat_cx + cx_off, (plat_h - 0.9) * 0.5, cz), mats["coping"])
+	elif underground:
+		_box(st_node, Vector3(plat_w, 0.55, plat_len), Vector3(plat_cx, plat_h - 0.275, 0.0), mats["paver"])
+		_box(st_node, Vector3(plat_w + 0.25, 0.45, plat_len + 0.3), Vector3(plat_cx, plat_h - 0.76, 0.0), mats["coping"])
 	else:
 		_box(st_node, Vector3(plat_w, plat_h, plat_len), Vector3(plat_cx, plat_h * 0.5, 0.0), mats["paver"])
 	var edges: Array[float] = []
@@ -62,7 +68,7 @@ static func build_detailed_station(
 		var track_dir := e_s if is_island else -side
 		var edge_x := (e_s * plat_w * 0.5) if is_island else inner_edge_x
 		_box(st_node, Vector3(0.32, 0.05, plat_len), Vector3(edge_x - track_dir * 0.16, plat_top + 0.002, 0.0), mats["coping"])
-		var rub_h := 0.5 if elevated else plat_h * 0.7
+		var rub_h := 0.5 if (elevated or underground) else plat_h * 0.7
 		_box(st_node, Vector3(0.04, rub_h, plat_len), Vector3(edge_x + track_dir * 0.005, plat_h - rub_h * 0.5 - 0.04, 0.0), mats["rubber"])
 		_box(st_node, Vector3(0.30, 0.012, plat_len - 0.6), Vector3(edge_x - track_dir * 0.55, plat_top + 0.006, 0.0), mats["tactile"])
 		# Door-position boarding marks evenly distributed along the platform
@@ -71,6 +77,19 @@ static func build_detailed_station(
 		for mi_m in range(n_marks):
 			var mz := lerpf(-mark_span, mark_span, float(mi_m) / float(n_marks - 1))
 			_box(st_node, Vector3(0.36, 0.008, 1.3), Vector3(edge_x - track_dir * 0.98, plat_top + 0.004, mz), mats["mark"])
+		# Platform Screen Doors (half-height on elevated viaduct stations, full-height on underground metro stations)
+		if elevated or underground:
+			var psd_h := 2.65 if underground else 1.28
+			var psd_x := edge_x - track_dir * 0.16
+			var seg_n := maxi(6, int(round(plat_len / 3.4)))
+			var seg_len := (plat_len - 1.2) / float(seg_n)
+			for pi_psd in range(seg_n):
+				var pz := -plat_half + 0.6 + (float(pi_psd) + 0.5) * seg_len
+				# Leave clean open boarding doorways on alternating bays, glass screen panels on fixed bays
+				if pi_psd % 2 == 0:
+					_box(st_node, Vector3(0.05, psd_h, seg_len - 0.14), Vector3(psd_x, plat_top + psd_h * 0.5, pz), mats["glass"])
+				_box(st_node, Vector3(0.09, psd_h + 0.06, 0.12), Vector3(psd_x, plat_top + psd_h * 0.5, pz - seg_len * 0.5), mats["stainless"])
+			_box(st_node, Vector3(0.14, 0.18 if underground else 0.08, plat_len - 0.8), Vector3(psd_x, plat_top + psd_h + (0.09 if underground else 0.04), 0.0), mats["accent"])
 	# Back/outer edge: low granite kerb + stainless guardrail with glass infill (side platforms)
 	if not is_island:
 		var rail_x := outer_edge_x - side * 0.08
@@ -82,18 +101,19 @@ static func build_detailed_station(
 			for pz: float in [-2.25, 0.0, 2.25]:
 				_cyl(st_node, 0.028, 1.05, Vector3(rail_x, plat_top + 0.53, gz + pz), mats["stainless"])
 
-	# 2. Ramps at both ends with stainless handrails
+	# 2. Ramps / stairs / escalators at platform ends
 	var ramp_len := 3.4
-	var ramp_angle := atan2(plat_h, ramp_len)
+	var ramp_angle := atan2(maxf(plat_h, 0.3), ramp_len)
 	var stair_x := plat_cx if is_island else (outer_edge_x - side * 1.0)
-	var stair_run := plat_h / 0.62
+	var stair_run := clampf(plat_h / 0.62, 6.0, 15.5) if elevated else 0.0
 	if elevated:
-		# Straight stair down from the +Z platform end (rise 0.155m, tread 0.32m per step)
-		var n_steps := int(ceil(plat_h / 0.155))
+		# Straight stair down from the +Z platform end (rise scaled cleanly for L1 +7.5m and L2 +14.1m)
+		var n_steps := clampi(int(ceil(plat_h / 0.165)), 12, 48)
+		var step_rise := plat_h / float(n_steps)
 		var tread := stair_run / float(n_steps)
 		for k in range(n_steps):
-			var y_top := plat_h - float(k) * 0.155
-			_box(st_node, Vector3(1.9, 0.155, tread + 0.02), Vector3(stair_x, y_top - 0.0775, plat_len * 0.5 + (float(k) + 0.5) * tread), mats["coping"])
+			var y_top := plat_h - float(k) * step_rise
+			_box(st_node, Vector3(1.9, step_rise, tread + 0.02), Vector3(stair_x, y_top - step_rise * 0.5, plat_len * 0.5 + (float(k) + 0.5) * tread), mats["coping"])
 		var stringer := _box(st_node, Vector3(2.1, 0.35, sqrt(stair_run * stair_run + plat_h * plat_h)), Vector3(stair_x, plat_h * 0.5 - 0.3, plat_len * 0.5 + stair_run * 0.5), mats["steel_dark"])
 		stringer.rotation.x = atan2(plat_h, stair_run)
 		for hs: float in [-1.0, 1.0]:
@@ -103,7 +123,17 @@ static func build_detailed_station(
 		_box(st_node, Vector3(2.4, plat_h + 3.2, 2.4), Vector3(stair_x, (plat_h + 3.2) * 0.5, -plat_len * 0.5 - 1.4), mats["glass"])
 		_box(st_node, Vector3(2.6, 0.4, 2.6), Vector3(stair_x, plat_h + 3.3, -plat_len * 0.5 - 1.4), mats["accent"])
 		_box(st_node, Vector3(plat_w, 0.5, 3.0), Vector3(plat_cx, plat_h - 0.25, -plat_len * 0.5 - 1.4), mats["paver"])
-	for end_sign: float in ([] if elevated else [-1.0, 1.0]):
+	elif underground:
+		# Ascending escalator bank at the +Z end of the underground platform hall
+		var esc_h := 3.6
+		var esc_run := 5.8
+		var esc_diag := sqrt(esc_run * esc_run + esc_h * esc_h)
+		var esc_body := _box(st_node, Vector3(1.85, 0.42, esc_diag), Vector3(stair_x, plat_top + esc_h * 0.5 - 0.2, plat_len * 0.5 + esc_run * 0.5), mats["steel_dark"])
+		esc_body.rotation.x = -atan2(esc_h, esc_run)
+		for hs_u: float in [-1.0, 1.0]:
+			var bal := _box(st_node, Vector3(0.08, 0.95, esc_diag), Vector3(stair_x + hs_u * 0.92, plat_top + esc_h * 0.5 + 0.45, plat_len * 0.5 + esc_run * 0.5), mats["glass"])
+			bal.rotation.x = -atan2(esc_h, esc_run)
+	for end_sign: float in ([] if (elevated or underground) else [-1.0, 1.0]):
 		var rz := end_sign * (plat_len * 0.5 + ramp_len * 0.48)
 		var ramp := _box(st_node, Vector3(plat_w - 0.12, plat_h * 0.65, ramp_len), Vector3(plat_cx, plat_h * 0.32, rz), mats["paver"])
 		ramp.rotation.x = end_sign * ramp_angle
@@ -277,19 +307,20 @@ static func build_detailed_station(
 	wait_lbl.position = Vector3(plat_cx, plat_h + 3.45, 0.0)
 	st_node.add_child(wait_lbl)
 
-	# Warm under-canopy linear LED lighting
+	# Warm under-canopy linear LED lighting (always bright inside underground metro stations!)
 	for lz: float in [-4.5, 4.5]:
 		var light := OmniLight3D.new()
-		light.light_color = Color(1.0, 0.92, 0.78)
-		light.light_energy = 0.0
-		light.visible = false
-		light.omni_range = 15.0
+		light.light_color = Color(0.95, 0.97, 1.0) if underground else Color(1.0, 0.92, 0.78)
+		light.light_energy = 2.0 if underground else 0.0
+		light.visible = underground
+		light.omni_range = 20.0 if underground else 15.0
 		light.distance_fade_enabled = true
-		light.distance_fade_begin = 90.0
+		light.distance_fade_begin = 110.0 if underground else 90.0
 		light.distance_fade_length = 30.0
 		light.position = Vector3(plat_cx, plat_h + 2.7, lz)
 		st_node.add_child(light)
-		station_lights.append(light)
+		if not underground:
+			station_lights.append(light)
 
 	# Precompute world-space passenger waiting positions along the full platform length safely behind the yellow line
 	var waiting_slots: Array[Vector3] = []
@@ -304,9 +335,11 @@ static func build_detailed_station(
 	var ramp_local := Vector3(plat_cx, 0.04, (plat_len * 0.5 + ramp_len * 0.85))
 	if elevated:
 		ramp_local = Vector3(stair_x, 0.2, plat_len * 0.5 + stair_run + 1.0)
+	elif underground:
+		ramp_local = Vector3(stair_x, plat_h + 1.6, plat_len * 0.5 + 3.2)
 	var board_local := Vector3(0.0 if is_island else (inner_edge_x + side * 0.28), plat_h, 0.0)
 	# Top of the stairs / ramp: where arriving passengers step onto the platform deck
-	var entry_local := Vector3(stair_x if elevated else plat_cx, plat_h, plat_len * 0.5 - 0.6)
+	var entry_local := Vector3(stair_x if (elevated or underground) else plat_cx, plat_h, plat_len * 0.5 - 0.6)
 
 	var ramp_world := tf * ramp_local
 	var board_edge_center := tf * board_local
@@ -323,6 +356,11 @@ static func build_detailed_station(
 
 	# Merge ~200 static box/cylinder pieces per station into ~12 material-batched ArrayMeshes (zero visual loss!)
 	_merge_static_station_meshes(st_node)
+
+	# Underground station extras added AFTER batch merge so the cavern roof stays independently toggleable in X-Ray mode
+	# and the street-level Metro Entrance Kiosk sits crisply on the surface sidewalk!
+	if underground:
+		_build_underground_station_shell_and_kiosk(st_node, st_name, plat_cx, plat_h, plat_w, plat_len, is_island, side, mats, cjk_font)
 
 	st_node.set_meta("drape_vertices", true) # long platform: bends with the ground (Terrain)
 	return {
@@ -806,3 +844,91 @@ static func _poster_mat(kind: int) -> StandardMaterial3D:
 	m.emission_energy_multiplier = 0.32
 	m.roughness = 0.2
 	return m
+
+
+static func _build_underground_station_shell_and_kiosk(
+	st_node: Node3D,
+	st_name: String,
+	plat_cx: float,
+	plat_h: float,
+	plat_w: float,
+	plat_len: float,
+	is_island: bool,
+	side: float,
+	mats: Dictionary,
+	cjk_font: Font
+) -> void:
+	# 1. Bright tiled underground station cavern walls & floor
+	var hall_w := (plat_w + 8.6) if is_island else (plat_w + 4.6)
+	var hall_cx := 0.0 if is_island else (plat_cx - side * 1.65)
+	var hall_len := plat_len + 10.0
+	var ceil_y := plat_h + 4.35
+	var floor_y := plat_h - 1.15
+	var wall_h := ceil_y - floor_y
+	var tile_mat := StandardMaterial3D.new()
+	tile_mat.albedo_color = Color(0.84, 0.86, 0.89)
+	tile_mat.roughness = 0.42
+	var glow_mat := StandardMaterial3D.new()
+	glow_mat.albedo_color = Color(0.95, 0.98, 1.0)
+	glow_mat.emission_enabled = true
+	glow_mat.emission = Color(0.92, 0.96, 1.0)
+	glow_mat.emission_energy_multiplier = 2.2
+	var walls_root := Node3D.new()
+	walls_root.name = "UndergroundStationWalls"
+	st_node.add_child(walls_root)
+	# Outer longitudinal cavern walls + station floor slab
+	for ws: float in [-1.0, 1.0]:
+		var wx := hall_cx + ws * (hall_w * 0.5)
+		_box(walls_root, Vector3(0.42, wall_h, hall_len), Vector3(wx, (floor_y + ceil_y) * 0.5, 0.0), tile_mat)
+		_box(walls_root, Vector3(0.12, 0.24, hall_len - 1.0), Vector3(wx - ws * 0.24, ceil_y - 0.55, 0.0), glow_mat)
+	_box(walls_root, Vector3(hall_w + 0.5, 0.35, hall_len), Vector3(hall_cx, floor_y - 0.175, 0.0), mats["coping"])
+
+	# 2. Separate station cavern roof (hidden automatically in Underground X-Ray View!)
+	var roof_root := Node3D.new()
+	roof_root.name = "UndergroundStationRoof"
+	st_node.add_child(roof_root)
+	_box(roof_root, Vector3(hall_w + 0.8, 0.45, hall_len + 0.6), Vector3(hall_cx, ceil_y + 0.225, 0.0), mats["steel_dark"])
+	for lz_r: float in [-plat_len * 0.28, 0.0, plat_len * 0.28]:
+		_box(roof_root, Vector3(hall_w * 0.55, 0.08, 2.2), Vector3(hall_cx, ceil_y - 0.04, lz_r), glow_mat)
+
+	# 3. Street-Level Modern Glass Metro Entrance Pavilion & Luminous Totem at y = 0.0
+	var kiosk := Node3D.new()
+	kiosk.name = "SurfaceEntranceKiosk"
+	st_node.add_child(kiosk)
+	var kiosk_side := 1.0 if is_island else side
+	var kx := kiosk_side * (7.2 if is_island else (absf(plat_cx) + 4.4))
+	var kz := plat_len * 0.25
+	# Stone plinth & dark recessed stairwell opening
+	_box(kiosk, Vector3(3.6, 0.18, 6.6), Vector3(kx, 0.09, kz), mats["coping"])
+	var throat_mat := StandardMaterial3D.new()
+	throat_mat.albedo_color = Color(0.05, 0.07, 0.10)
+	throat_mat.roughness = 0.9
+	_box(kiosk, Vector3(2.4, 0.14, 4.8), Vector3(kx, 0.14, kz + 0.2), throat_mat)
+	# Sleek glazed entrance walls & cantilevered dark-steel canopy roof
+	for gs: float in [-1.0, 1.0]:
+		_box(kiosk, Vector3(0.08, 2.75, 6.2), Vector3(kx + gs * 1.68, 1.55, kz), mats["glass"])
+		for pz_k: float in [-2.8, 0.0, 2.8]:
+			_box(kiosk, Vector3(0.14, 2.95, 0.14), Vector3(kx + gs * 1.68, 1.58, kz + pz_k), mats["steel_dark"])
+	_box(kiosk, Vector3(3.4, 2.75, 0.08), Vector3(kx, 1.55, kz - 3.05), mats["glass"])
+	_box(kiosk, Vector3(4.1, 0.24, 7.2), Vector3(kx, 3.08, kz + 0.15), mats["steel_dark"])
+	_box(kiosk, Vector3(4.16, 0.26, 0.30), Vector3(kx, 3.08, kz + 3.68), mats["accent"])
+	# Luminous Metro Entrance Totem Pylon beside doorway
+	var px := kx + kiosk_side * 2.35
+	var pz := kz + 3.4
+	_box(kiosk, Vector3(0.45, 4.4, 0.22), Vector3(px, 2.2, pz), mats["steel_dark"])
+	_box(kiosk, Vector3(0.68, 0.68, 0.28), Vector3(px, 3.95, pz), mats["accent"])
+	var tier_tag := "B2" if plat_h < -14.0 else "B1"
+	var surf_lbl := Label3D.new()
+	surf_lbl.text = "M  %s (%s)" % [st_name, tier_tag]
+	if cjk_font != null:
+		surf_lbl.font = cjk_font
+	surf_lbl.font_size = 56
+	surf_lbl.pixel_size = 0.0072
+	surf_lbl.modulate = Color(0.58, 0.92, 1.0)
+	surf_lbl.outline_modulate = Color(0.04, 0.08, 0.14)
+	surf_lbl.outline_size = 16
+	surf_lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	surf_lbl.visibility_range_end = 520.0
+	surf_lbl.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	surf_lbl.position = Vector3(kx, 4.85, kz)
+	kiosk.add_child(surf_lbl)

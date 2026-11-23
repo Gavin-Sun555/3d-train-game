@@ -10,8 +10,48 @@ const BUFFER_CLEAR_M := 2.4 # Dead-end tail tracks: usable track ends this far b
 const MAX_TAIL_TRACK_M := 90.0
 const ROUTE_SAMPLE_STEP_M := 1.0
 const TERMINAL_HOLD_MARGIN_M := 13.0 # Waiting trams stop safely outside the terminal crossover & signal mast
+
+# Standard 3D track elevation tiers (meters relative to ground surface)
+const ELEV_B2 := -18.0 # 深层地下 (Deep Underground)
+const ELEV_B1 := -10.0 # 标准地下 (Underground Metro / Light Rail)
+const ELEV_G  := 0.0   # 地面层 (Surface)
+const ELEV_L1 := 7.2   # 标准高架 (Standard Elevated Viaduct / Monorail)
+const ELEV_L2 := 13.8  # 双层高架 (High Double-Deck Viaduct)
+const ELEV_PRESETS: Array[float] = [ELEV_B2, ELEV_B1, ELEV_G, ELEV_L1, ELEV_L2]
+const MAX_GRADE_RAIL := 0.065     # 6.5% max vertical grade for light rail / metro
+const MAX_GRADE_MONORAIL := 0.085 # 8.5% max vertical grade for straddle monorail
+const ELEV_CONNECT_TOL := 0.30    # Two tracks at a node connect only when endpoint heights match within 0.30m
+const ELEV_CLEARANCE_M := 4.5     # Minimum vertical separation for non-colliding mid-span grade crossings
+
 const ZONE_LABELS := ["正线", "缓弯", "弯道", "急弯", "直向道岔", "侧向道岔"]
 const ZONE_LABELS_EN := ["Mainline", "Gentle Curve", "Curve", "Sharp Curve", "Straight Switch", "Diverging Switch"]
+
+
+static func elev_label(y: float) -> String:
+	if y <= -14.0:
+		return "B2 (-18m)"
+	if y <= -4.0:
+		return "B1 (-10m)"
+	if y < 3.0:
+		return "G (0m)" if L10n.is_en() else "G 地面 (0m)"
+	if y < 10.5:
+		return "L1 (+7.2m)"
+	return "L2 (+13.8m)"
+
+
+static func max_grade_for_style(bed_style: int) -> float:
+	return MAX_GRADE_MONORAIL if TrackBuilder.is_monorail_style(bed_style) else MAX_GRADE_RAIL
+
+
+static func default_elev_for_style(bed_style: int) -> float:
+	return ELEV_L1 if TrackBuilder.is_monorail_style(bed_style) else ELEV_G
+
+
+static func hermite_elev(ya: float, yb: float, t: float) -> float:
+	if absf(ya - yb) < 0.005:
+		return ya
+	var u := clampf(t, 0.0, 1.0)
+	return lerpf(ya, yb, u * u * (3.0 - 2.0 * u))
 
 
 static func zone_label(zk: int) -> String:
@@ -55,10 +95,91 @@ var _edge_grid: Dictionary = {} # Vector2i(cx, cz) -> Array[int] (edge_ids)
 # Player-built permanent infrastructure & transit lines
 var built_tracks: Dictionary = {}      # edge_id (int) -> bed_style (int)
 var built_track_modes: Dictionary = {} # edge_id (int) -> TrackMode (int)
+var built_track_elev: Dictionary = {}  # edge_id (int) -> {"ya": float, "yb": float} (m relative to local ground)
 var crossovers: Dictionary = {}        # edge_id (int) -> CrossoverType (int)
 var crossover_t: Dictionary = {}       # edge_id (int) -> float (normalized position 0..1 along edge)
 var stations: Dictionary = {}          # station_id (int) -> {id, name, edge_id, t, side, pos: Vector3, fwd: Vector3}
 var lines: Dictionary = {}             # line_id (int) -> {id, name, color: Color, model_key, trams_count, sections, station_ids: Array[int]}
+
+
+func get_edge_elev_pair(eid: int) -> Vector2:
+	if built_track_elev.has(eid):
+		var d: Dictionary = built_track_elev[eid]
+		return Vector2(float(d.get("ya", 0.0)), float(d.get("yb", 0.0)))
+	if built_tracks.has(eid):
+		var y0 := default_elev_for_style(int(built_tracks[eid]))
+		return Vector2(y0, y0)
+	return Vector2.ZERO
+
+
+func get_edge_elev_at_node(eid: int, nid: int) -> float:
+	if not edges.has(eid):
+		return 0.0
+	var ep := get_edge_elev_pair(eid)
+	return ep.x if int(edges[eid]["a"]) == nid else ep.y
+
+
+func get_edge_elev_at_t(eid: int, t: float) -> float:
+	var ep := get_edge_elev_pair(eid)
+	return hermite_elev(ep.x, ep.y, t)
+
+
+func is_edge_elevated(eid: int) -> bool:
+	var ep := get_edge_elev_pair(eid)
+	return minf(ep.x, ep.y) > 3.5
+
+
+func is_edge_underground(eid: int) -> bool:
+	var ep := get_edge_elev_pair(eid)
+	return maxf(ep.x, ep.y) < -2.0
+
+
+func edge_has_elevated_part(eid: int) -> bool:
+	var ep := get_edge_elev_pair(eid)
+	return maxf(ep.x, ep.y) > 0.6
+
+
+func edge_has_underground_part(eid: int) -> bool:
+	var ep := get_edge_elev_pair(eid)
+	return minf(ep.x, ep.y) < -0.4
+
+
+func is_edge_grade_separated(eid: int) -> bool:
+	var ep := get_edge_elev_pair(eid)
+	return minf(ep.x, ep.y) > 3.5 or maxf(ep.x, ep.y) < -2.0
+
+
+func edges_connect_at_node(ea: int, eb: int, nid: int) -> bool:
+	if not built_tracks.has(ea) or not built_tracks.has(eb):
+		return false
+	if TrackBuilder.edge_system(self, ea) != TrackBuilder.edge_system(self, eb):
+		return false
+	return absf(get_edge_elev_at_node(ea, nid) - get_edge_elev_at_node(eb, nid)) <= ELEV_CONNECT_TOL
+
+
+func get_node_track_elev(nid: int, sys: int = -1, prefer_elev: float = NAN) -> float:
+	if not adj.has(nid):
+		return float(nodes[nid].get("elev", NAN)) if nodes.has(nid) and nodes[nid].has("elev") else NAN
+	var best_y := NAN
+	var best_d := 1e9
+	for nb: Dictionary in adj[nid]:
+		var e := int(nb["edge_id"])
+		if not built_tracks.has(e):
+			continue
+		if sys >= 0 and TrackBuilder.edge_system(self, e) != sys:
+			continue
+		var ey := get_edge_elev_at_node(e, nid)
+		if is_nan(prefer_elev):
+			return ey
+		var d := absf(ey - prefer_elev)
+		if d < best_d:
+			best_d = d
+			best_y = ey
+	if not is_nan(best_y):
+		return best_y
+	if nodes.has(nid) and nodes[nid].has("elev"):
+		return float(nodes[nid]["elev"])
+	return NAN
 
 func is_multi_track(eid: int) -> bool:
 	return int(built_track_modes.get(eid, TrackMode.SINGLE)) >= TrackMode.DOUBLE
@@ -115,6 +236,7 @@ func load_from_map_data(map_data: Dictionary, use_starter: bool = true) -> void:
 	_edge_grid.clear()
 	built_tracks.clear()
 	built_track_modes.clear()
+	built_track_elev.clear()
 	crossovers.clear()
 	crossover_t.clear()
 	stations.clear()
@@ -178,6 +300,7 @@ func clear_player_network() -> void:
 	demolished_buildings.clear()
 	built_tracks.clear()
 	built_track_modes.clear()
+	built_track_elev.clear()
 	crossovers.clear()
 	crossover_t.clear()
 	stations.clear()
@@ -189,10 +312,13 @@ func clear_player_network() -> void:
 func export_state() -> Dictionary:
 	var tr_arr: Array = []
 	for eid: int in built_tracks.keys():
+		var ep := get_edge_elev_pair(eid)
 		var item := {
 			"edge_id": eid,
 			"bed_style": int(built_tracks[eid]),
 			"track_mode": int(built_track_modes.get(eid, TrackMode.SINGLE)),
+			"ya": ep.x,
+			"yb": ep.y,
 		}
 		if crossovers.has(eid):
 			item["crossover"] = int(crossovers[eid])
@@ -259,6 +385,10 @@ func import_state(state: Dictionary) -> void:
 		if edges.has(eid):
 			built_tracks[eid] = bst
 			built_track_modes[eid] = tmode
+			var def_y := default_elev_for_style(bst)
+			var ya := float(t_item.get("ya", def_y))
+			var yb := float(t_item.get("yb", ya))
+			built_track_elev[eid] = {"ya": ya, "yb": yb}
 			if tmode == TrackMode.DOUBLE and xover > CrossoverType.NONE: # four-track sections take no crossovers
 				crossovers[eid] = xover
 				crossover_t[eid] = clampf(float(t_item.get("crossover_t", 0.5)), 0.05, 0.95)
@@ -322,11 +452,14 @@ func import_state(state: Dictionary) -> void:
 				set_crossover_on_edge(eid, CrossoverType.DOUBLE, float(crossover_t.get(eid, 0.5)))
 
 
-func set_track_on_edge(edge_id: int, bed_style: int, track_mode: int = TrackMode.SINGLE) -> bool:
+func set_track_on_edge(edge_id: int, bed_style: int, track_mode: int = TrackMode.SINGLE, ya: float = NAN, yb: float = NAN) -> bool:
 	if not edges.has(edge_id):
 		return false
 	built_tracks[edge_id] = bed_style
 	built_track_modes[edge_id] = track_mode
+	var eff_ya := default_elev_for_style(bed_style) if is_nan(ya) else ya
+	var eff_yb := eff_ya if is_nan(yb) else yb
+	built_track_elev[edge_id] = {"ya": eff_ya, "yb": eff_yb}
 	if track_mode != TrackMode.DOUBLE:
 		crossovers.erase(edge_id) # single track has none; four-track turns back on its double-track ends
 	return true
@@ -358,6 +491,7 @@ func set_crossover_on_edge(edge_id: int, xover_type: int, t_val: float = 0.5) ->
 func remove_track_on_edge(edge_id: int) -> void:
 	built_tracks.erase(edge_id)
 	built_track_modes.erase(edge_id)
+	built_track_elev.erase(edge_id)
 	crossovers.erase(edge_id)
 	crossover_t.erase(edge_id)
 	# Also remove any station sitting on this demolished edge
@@ -393,10 +527,9 @@ func buffer_stop_at_edge_end(eid: int, at_b_end: bool) -> Dictionary:
 	if not built_tracks.has(eid) or not edges.has(eid):
 		return {}
 	var nid := int(edges[eid]["b"]) if at_b_end else int(edges[eid]["a"])
-	var sys := TrackBuilder.edge_system(self, eid)
 	for nb: Dictionary in adj.get(nid, []):
 		var oe := int(nb["edge_id"])
-		if oe != eid and built_tracks.has(oe) and TrackBuilder.edge_system(self, oe) == sys:
+		if oe != eid and edges_connect_at_node(eid, oe, nid):
 			return {}
 	var g := TrackBuilder.edge_track_geom(self, eid)
 	if g.is_empty():
@@ -448,13 +581,17 @@ func add_station_on_edge(
 	var sample := sample_edge(edge_id, t_clamped)
 	var eff_side := 0 if eff_kind == StationKind.ISLAND else (1 if side >= 0 else -1)
 
-	# Prevent overlapping stations (on Double Track side platforms, allow building on BOTH sides!)
+	# Prevent overlapping stations on the same vertical level (allow stacked ground/elevated/underground stations!)
 	for sid: int in stations.keys():
 		var st: Dictionary = stations[sid]
 		if eff_kind != StationKind.ISLAND and is_dbl and int(st["edge_id"]) == edge_id and int(st["side"]) != 0 and int(st["side"]) != eff_side:
 			continue
+		var st_p: Vector3 = st["pos"]
+		var smp_p: Vector3 = sample["pos"]
+		if absf(st_p.y - smp_p.y) >= 3.5:
+			continue
 		var min_sep := (plat_len + float(st.get("platform_len", 27.0))) * 0.5 - 1.0
-		if (st["pos"] as Vector3).distance_to(sample["pos"]) < min_sep:
+		if Vector2(st_p.x, st_p.z).distance_to(Vector2(smp_p.x, smp_p.z)) < min_sep:
 			return sid
 
 	var sid := next_station_id
@@ -561,11 +698,13 @@ func sample_edge(edge_id: int, t: float) -> Dictionary:
 		var d := (pts[i] as Vector2).distance_to(pts[i + 1] as Vector2)
 		seg_lens.append(d)
 		total += d
+	var t_clamped := clampf(t, 0.0, 1.0)
+	var y_elev := get_edge_elev_at_t(edge_id, t_clamped) if built_tracks.has(edge_id) else 0.0
 	if total < 0.01:
 		var p0: Vector2 = pts[0]
-		return {"pos": Vector3(p0.x, 0.0, p0.y), "fwd": Vector3.FORWARD}
+		return {"pos": Vector3(p0.x, y_elev, p0.y), "fwd": Vector3.FORWARD}
 
-	var target := clampf(t, 0.0, 1.0) * total
+	var target := t_clamped * total
 	var acc := 0.0
 	for i in range(seg_lens.size()):
 		var sl := seg_lens[i]
@@ -576,12 +715,12 @@ func sample_edge(edge_id: int, t: float) -> Dictionary:
 			var p2 := a2.lerp(b2, local_t)
 			var d2 := (b2 - a2).normalized()
 			return {
-				"pos": Vector3(p2.x, 0.0, p2.y),
+				"pos": Vector3(p2.x, y_elev, p2.y),
 				"fwd": Vector3(d2.x, 0.0, d2.y),
 			}
 		acc += sl
 	var plast: Vector2 = pts[pts.size() - 1]
-	return {"pos": Vector3(plast.x, 0.0, plast.y), "fwd": Vector3.FORWARD}
+	return {"pos": Vector3(plast.x, y_elev, plast.y), "fwd": Vector3.FORWARD}
 
 
 func _insert_edge_into_grid(eid: int, pts: Array[Vector2]) -> void:
@@ -607,20 +746,37 @@ func _insert_edge_into_grid(eid: int, pts: Array[Vector2]) -> void:
 func get_built_track_degree(node_id: int) -> int:
 	if not adj.has(node_id):
 		return 0
-	var deg := [0, 0]
+	var buckets := {} # "sys:elev_q" -> count
+	var best := 0
 	for nb: Dictionary in adj[node_id]:
 		var e := int(nb["edge_id"])
 		if built_tracks.has(e):
-			deg[TrackBuilder.edge_system(self, e)] += 1
-	return maxi(int(deg[0]), int(deg[1]))
+			var k := "%d:%d" % [TrackBuilder.edge_system(self, e), int(round(get_edge_elev_at_node(e, node_id) * 2.0))]
+			var c := int(buckets.get(k, 0)) + 1
+			buckets[k] = c
+			best = maxi(best, c)
+	return best
 
 
 func get_turnout_world_positions() -> Array[Vector3]:
 	var out: Array[Vector3] = []
 	for nid: int in nodes.keys():
-		if get_built_track_degree(nid) >= 3:
-			var p2: Vector2 = nodes[nid]["pos"]
-			out.append(Vector3(p2.x, 0.0, p2.y))
+		if not adj.has(nid):
+			continue
+		var buckets := {} # "sys:elev_q" -> [count, sum_y]
+		for nb: Dictionary in adj[nid]:
+			var e := int(nb["edge_id"])
+			if built_tracks.has(e):
+				var ey := get_edge_elev_at_node(e, nid)
+				var k := "%d:%d" % [TrackBuilder.edge_system(self, e), int(round(ey * 2.0))]
+				var arr: Array = buckets.get(k, [0, 0.0])
+				arr[0] = int(arr[0]) + 1
+				arr[1] = float(arr[1]) + ey
+				buckets[k] = arr
+		var p2: Vector2 = nodes[nid]["pos"]
+		for arr_v: Array in buckets.values():
+			if int(arr_v[0]) >= 3:
+				out.append(Vector3(p2.x, float(arr_v[1]) / float(arr_v[0]), p2.y))
 	for eid: int in crossovers.keys():
 		if int(crossovers[eid]) > CrossoverType.NONE and edges.has(eid):
 			if int(crossovers[eid]) == CrossoverType.DOUBLE and TrackBuilder.is_monorail_style(int(built_tracks.get(eid, -1))):
@@ -630,21 +786,22 @@ func get_turnout_world_positions() -> Array[Vector3]:
 				if not xo.is_empty():
 					for pt: Dictionary in TrackBuilder.mono_switch_parts(self, eid, xo):
 						var tf := TrackBuilder.sample_track_frame(g["curve"] as Curve3D, float(pt["s_mid"]), float(g["clen"]), false)
-						out.append(Vector3(tf.origin.x, 0.0, tf.origin.z))
+						out.append(tf.origin)
 					continue
 			# Centre of the crossover as built on the (aligned) track centreline
 			var gx := TrackBuilder.edge_track_geom(self, eid)
 			var xs := TrackBuilder.edge_crossover_span(self, eid, gx)
 			if not xs.is_empty():
 				var tfx := TrackBuilder.sample_track_frame(gx["curve"] as Curve3D, float(xs["s_mid"]), float(gx["clen"]), false)
-				out.append(Vector3(tfx.origin.x, 0.0, tfx.origin.z))
+				out.append(tfx.origin)
 				continue
 			out.append(sample_edge(eid, float(crossover_t.get(eid, 0.5)))["pos"] as Vector3)
 	return out
 
 
-func find_closest_edge(xz: Vector2, max_dist: float, only_built: bool = false) -> Dictionary:
+func find_closest_edge(xz: Vector2, max_dist: float, only_built: bool = false, elev_filter: int = 0) -> Dictionary:
 	var best_eid := -1
+	var best_score := max_dist
 	var best_d := max_dist
 	var best_t := 0.5
 
@@ -664,6 +821,16 @@ func find_closest_edge(xz: Vector2, max_dist: float, only_built: bool = false) -
 				checked[eid] = true
 				if only_built and not built_tracks.has(eid):
 					continue
+				if not only_built and bool(edges[eid].get("rail_3d", false)):
+					continue # street queries ignore stacked 3D dedicated rail overlays
+				# Elevation preference: -1 favors underground tracks (X-ray view), +1 favors surface/elevated
+				var score_bias := 0.0
+				if elev_filter != 0 and built_tracks.has(eid):
+					var is_ug := is_edge_underground(eid) or edge_has_underground_part(eid)
+					if elev_filter < 0 and not is_ug:
+						score_bias = 14.0
+					elif elev_filter > 0 and is_edge_underground(eid):
+						score_bias = 14.0
 				var pts: Array = edges[eid]["pts"]
 				var total := 0.0
 				var seg_lens: Array[float] = []
@@ -683,7 +850,9 @@ func find_closest_edge(xz: Vector2, max_dist: float, only_built: bool = false) -
 					var lt := 0.0 if l2 < 1e-5 else clampf((xz - a).dot(ab) / l2, 0.0, 1.0)
 					var proj := a + ab * lt
 					var d := xz.distance_to(proj)
-					if d < best_d:
+					var sc := d + score_bias
+					if d <= max_dist and sc < best_score:
+						best_score = sc
 						best_d = d
 						best_eid = eid
 						best_t = (acc + seg_lens[i] * lt) / total
@@ -701,13 +870,35 @@ func find_closest_edge(xz: Vector2, max_dist: float, only_built: bool = false) -
 	}
 
 
-func find_closest_node(xz: Vector2, max_dist: float) -> int:
+func find_closest_node(xz: Vector2, max_dist: float, elev_filter: int = 0, target_elev: float = NAN) -> int:
 	var best_id := -1
-	var best_d := max_dist
+	var best_score := max_dist
 	for nid: int in nodes.keys():
-		var d := xz.distance_to(nodes[nid]["pos"] as Vector2)
-		if d < best_d:
-			best_d = d
+		var nd: Dictionary = nodes[nid]
+		var is_3d_n := nd.has("elev")
+		if elev_filter == 0 and is_nan(target_elev) and is_3d_n:
+			# Street-mode node queries ignore isolated 3D rail nodes unless target_elev is given
+			pass
+		var d := xz.distance_to(nd["pos"] as Vector2)
+		if d > max_dist:
+			continue
+		var bias := 0.0
+		if not is_nan(target_elev):
+			var ny := get_node_track_elev(nid, -1, target_elev)
+			if not is_nan(ny):
+				bias = minf(absf(ny - target_elev) * 0.75, 10.0)
+			elif is_3d_n:
+				bias = minf(absf(float(nd["elev"]) - target_elev) * 0.75, 10.0)
+			elif absf(target_elev) > 1.5:
+				bias = 2.0 # slightly prefer matching 3D rail nodes over generic street nodes at same XZ
+		elif elev_filter < 0:
+			var ny_ug := get_node_track_elev(nid, -1, ELEV_B1)
+			if is_nan(ny_ug) or ny_ug >= -1.5:
+				bias = 10.0
+		elif elev_filter > 0 and is_3d_n and float(nd["elev"]) < -1.5:
+			bias = 10.0
+		if d + bias < best_score:
+			best_score = d + bias
 			best_id = nid
 	return best_id
 
@@ -729,21 +920,100 @@ func get_station_platform_world_pos(sid: int) -> Vector3:
 	return pos + right * (side * (sep + 2.8))
 
 
-func find_closest_station(xz: Vector2, max_dist: float) -> int:
+func find_closest_station(xz: Vector2, max_dist: float, elev_filter: int = 0) -> int:
 	var best_id := -1
-	var best_d := max_dist
+	var best_score := max_dist
 	for sid: int in stations.keys():
 		var sp := get_station_platform_world_pos(sid)
 		var d := xz.distance_to(Vector2(sp.x, sp.z))
-		if d < best_d:
-			best_d = d
+		if d > max_dist:
+			continue
+		var bias := 0.0
+		if elev_filter < 0 and sp.y >= -1.5:
+			bias = 12.0
+		elif elev_filter > 0 and sp.y < -1.5:
+			bias = 12.0
+		if d + bias < best_score:
+			best_score = d + bias
 			best_id = sid
 	return best_id
 
 
-func shortest_street_path(node_a: int, node_b: int, only_built: bool, sys: int = -1) -> Array[int]:
+func shortest_street_path(node_a: int, node_b: int, only_built: bool, sys: int = -1, start_elev: float = NAN, end_elev: float = NAN) -> Array[int]:
 	if node_a == node_b or not nodes.has(node_a) or not nodes.has(node_b):
 		return []
+	# When routing along built tracks, track (node_id, elev_key) so trains never teleport vertically
+	# between a ground track and an elevated/underground track sharing the same street junction!
+	if only_built:
+		var start_states: Array = []
+		if not is_nan(start_elev):
+			start_states.append(Vector2i(node_a, int(round(start_elev * 2.0))))
+		else:
+			var seen_q := {}
+			for nb0: Dictionary in adj.get(node_a, []):
+				var e0 := int(nb0["edge_id"])
+				if not built_tracks.has(e0):
+					continue
+				if sys >= 0 and TrackBuilder.edge_system(self, e0) != sys:
+					continue
+				var q0 := int(round(get_edge_elev_at_node(e0, node_a) * 2.0))
+				if not seen_q.has(q0):
+					seen_q[q0] = true
+					start_states.append(Vector2i(node_a, q0))
+		if start_states.is_empty():
+			return []
+		var dist3 := {}
+		var prev_s := {}
+		var prev_e3 := {}
+		var open3: Array[Vector2i] = []
+		for st0: Vector2i in start_states:
+			dist3[st0] = 0.0
+			open3.append(st0)
+		var goal_state := Vector2i(-1, 0)
+		while not open3.is_empty():
+			var bi3 := 0
+			var bu3 := open3[0]
+			var bc3 := float(dist3[bu3])
+			for i in range(1, open3.size()):
+				var uc3 := open3[i]
+				var cc3 := float(dist3[uc3])
+				if cc3 < bc3:
+					bc3 = cc3
+					bu3 = uc3
+					bi3 = i
+			open3.remove_at(bi3)
+			if bu3.x == node_b and (is_nan(end_elev) or absf(float(bu3.y) * 0.5 - end_elev) <= ELEV_CONNECT_TOL):
+				goal_state = bu3
+				break
+			var u_elev := float(bu3.y) * 0.5
+			for nb3: Dictionary in adj.get(bu3.x, []):
+				var e3 := int(nb3["edge_id"])
+				if not built_tracks.has(e3):
+					continue
+				if sys >= 0 and TrackBuilder.edge_system(self, e3) != sys:
+					continue
+				if absf(get_edge_elev_at_node(e3, bu3.x) - u_elev) > ELEV_CONNECT_TOL:
+					continue
+				var v3 := int(nb3["to"])
+				var v_elev := get_edge_elev_at_node(e3, v3)
+				var vs := Vector2i(v3, int(round(v_elev * 2.0)))
+				var nc3 := bc3 + float(nb3["length"])
+				if not dist3.has(vs) or nc3 < float(dist3[vs]):
+					dist3[vs] = nc3
+					prev_s[vs] = bu3
+					prev_e3[vs] = e3
+					if not open3.has(vs):
+						open3.append(vs)
+		if goal_state.x < 0:
+			return []
+		var res3: Array[int] = []
+		var cur3 := goal_state
+		while prev_e3.has(cur3):
+			res3.append(int(prev_e3[cur3]))
+			cur3 = prev_s[cur3]
+		res3.reverse()
+		return res3
+
 	var dist := {node_a: 0.0}
 	var prev_node := {}
 	var prev_edge := {}
@@ -767,8 +1037,8 @@ func shortest_street_path(node_a: int, node_b: int, only_built: bool, sys: int =
 
 		for nb: Dictionary in adj[best_u]:
 			var eid := int(nb["edge_id"])
-			if only_built and not built_tracks.has(eid):
-				continue
+			if bool(edges[eid].get("rail_3d", false)):
+				continue # street pathfinding stays on real city streets
 			if sys >= 0 and TrackBuilder.edge_system(self, eid) != sys:
 				continue
 			var v := int(nb["to"])
@@ -830,12 +1100,17 @@ func _station_path_spans(sid_a: int, sid_b: int) -> Array:
 
 	for na: int in candidates_a:
 		var cost_a := (float(st_a["t"]) if na == int(ed_a["a"]) else (1.0 - float(st_a["t"]))) * float(ed_a["length"])
+		var ea_y := get_edge_elev_at_node(eid_a, na)
 		for nb: int in candidates_b:
 			var cost_b := (float(st_b["t"]) if nb == int(ed_b["a"]) else (1.0 - float(st_b["t"]))) * float(ed_b["length"])
+			var eb_y := get_edge_elev_at_node(eid_b, nb)
 			var mid_eids: Array[int] = []
 			var mid_cost := 0.0
-			if na != nb:
-				mid_eids = shortest_street_path(na, nb, true, sys)
+			if na == nb:
+				if absf(ea_y - eb_y) > ELEV_CONNECT_TOL:
+					continue
+			else:
+				mid_eids = shortest_street_path(na, nb, true, sys, ea_y, eb_y)
 				if mid_eids.is_empty():
 					continue
 				for me: int in mid_eids:
@@ -1190,8 +1465,9 @@ func compile_line_route(line_dict: Dictionary, b_platform_sids: Dictionary = {},
 	for si in range(n_samples):
 		var s_val := minf(float(si) * PROFILE_STEP_M, total_len)
 		var pos_here := curve.sample_baked(s_val, true)
+		var rel_y := pos_here.y - Terrain.surface(pos_here.x, pos_here.z)
 		var bst := get_bed_style_at_world_pos(pos_here)
-		rail_heights[si] = TrackBuilder.rail_top_for_style(bst) - TrackBuilder.EMBED_RAIL_TOP
+		rail_heights[si] = TrackBuilder.local_rail_top_offset(bst, rel_y)
 
 		# Measure local curvature over a 7.0m chord
 		var s_back := fposmod(s_val - 3.5, total_len) if is_loop else maxf(0.0, s_val - 3.5)
@@ -1210,7 +1486,8 @@ func compile_line_route(line_dict: Dictionary, b_platform_sids: Dictionary = {},
 
 		var near_turnout := false
 		for tp: Vector3 in turnout_pts:
-			if pos_here.distance_squared_to(tp) <= 95.0: # within ~9.7m of turnout switch center
+			var tp_w := Vector3(tp.x, tp.y + Terrain.surface(tp.x, tp.z), tp.z)
+			if pos_here.distance_squared_to(tp_w) <= 95.0: # within ~9.7m in 3D of turnout switch center
 				near_turnout = true
 				break
 
@@ -1256,7 +1533,7 @@ func compile_line_route(line_dict: Dictionary, b_platform_sids: Dictionary = {},
 			raw_derail[si] = 54.0
 			raw_zones[si] = 1 # 缓弯
 		else:
-			raw_limits[si] = 60.0 if bst == TrackBuilder.BedStyle.ASPHALT else 70.0
+			raw_limits[si] = 70.0 if (rel_y > 3.5 or rel_y < -2.0 or bst != TrackBuilder.BedStyle.ASPHALT) else 60.0
 			raw_derail[si] = 999.0 # Straight track does not centrifugally overturn
 			raw_zones[si] = 0 # 正线
 
@@ -1303,11 +1580,54 @@ func compile_line_route(line_dict: Dictionary, b_platform_sids: Dictionary = {},
 
 
 func get_bed_style_at_world_pos(pos: Vector3) -> int:
-	var hit := find_closest_edge(Vector2(pos.x, pos.z), 16.0, true)
-	if hit.is_empty():
+	var xz := Vector2(pos.x, pos.z)
+	var rel_y := pos.y - Terrain.surface(pos.x, pos.z)
+	var best_eid := -1
+	var best_score := 1e9
+	var cx0 := int(floor((xz.x - 16.0) / GRID_CELL_M))
+	var cz0 := int(floor((xz.y - 16.0) / GRID_CELL_M))
+	var cx1 := int(floor((xz.x + 16.0) / GRID_CELL_M))
+	var cz1 := int(floor((xz.y + 16.0) / GRID_CELL_M))
+	var checked := {}
+	for cx in range(cx0, cx1 + 1):
+		for cz in range(cz0, cz1 + 1):
+			for raw_eid in _edge_grid.get(Vector2i(cx, cz), []):
+				var eid := int(raw_eid)
+				if checked.has(eid) or not built_tracks.has(eid) or not edges.has(eid):
+					continue
+				checked[eid] = true
+				var pts: Array = edges[eid]["pts"]
+				var total := 0.0
+				var seg_lens: Array[float] = []
+				for i in range(pts.size() - 1):
+					var l := (pts[i] as Vector2).distance_to(pts[i + 1] as Vector2)
+					seg_lens.append(l)
+					total += l
+				if total < 0.1:
+					continue
+				var acc := 0.0
+				var min_d := 1e9
+				var best_t := 0.5
+				for i in range(pts.size() - 1):
+					var a: Vector2 = pts[i]
+					var b: Vector2 = pts[i + 1]
+					var ab := b - a
+					var l2 := ab.length_squared()
+					var lt := 0.0 if l2 < 1e-5 else clampf((xz - a).dot(ab) / l2, 0.0, 1.0)
+					var d := xz.distance_to(a + ab * lt)
+					if d < min_d:
+						min_d = d
+						best_t = (acc + seg_lens[i] * lt) / total
+					acc += seg_lens[i]
+				if min_d <= 16.0:
+					var ey := get_edge_elev_at_t(eid, best_t)
+					var sc := min_d + absf(ey - rel_y) * 2.5
+					if sc < best_score:
+						best_score = sc
+						best_eid = eid
+	if best_eid < 0:
 		return TrackBuilder.BedStyle.ASPHALT
-	var eid := int(hit["edge_id"])
-	return int(built_tracks.get(eid, TrackBuilder.BedStyle.ASPHALT))
+	return int(built_tracks.get(best_eid, TrackBuilder.BedStyle.ASPHALT))
 
 
 func _slice_edge_points_3d(edge_id: int, t0: float, t1: float) -> Array[Vector3]:
@@ -1436,7 +1756,7 @@ func _route_junction_points(sp_a: Dictionary, sp_b: Dictionary, cache: Dictionar
 			nid = n_a
 	if nid < 0:
 		return out
-	var info := TrackBuilder.node_track_info(self, nid, TrackBuilder.edge_system(self, int(sp_a["eid"])))
+	var info := TrackBuilder.node_track_info(self, nid, TrackBuilder.edge_system(self, int(sp_a["eid"])), get_edge_elev_at_node(int(sp_a["eid"]), nid))
 	if not bool(info["bare"]) and (info["edges"] as Array).size() <= 2:
 		return out # Plain bend: the two edges' rails meet directly at the node
 	var g_a := _route_geom(cache, int(sp_a["eid"]))
@@ -1722,7 +2042,10 @@ func _apply_road_op(op: Dictionary) -> bool:
 		"node":
 			var nid := int(op["id"])
 			var pa: Array = op["pos"]
-			nodes[nid] = {"id": nid, "pos": Vector2(float(pa[0]), float(pa[1])), "name": str(op.get("name", "新路口"))}
+			var nd := {"id": nid, "pos": Vector2(float(pa[0]), float(pa[1])), "name": str(op.get("name", "新路口"))}
+			if op.has("elev"):
+				nd["elev"] = float(op["elev"])
+			nodes[nid] = nd
 			if not adj.has(nid):
 				adj[nid] = []
 			return true
@@ -1750,6 +2073,10 @@ func _apply_road_op(op: Dictionary) -> bool:
 				edges[eid]["no_cars"] = true
 				edges[eid]["lanes_f"] = 0
 				edges[eid]["lanes_b"] = 0
+			if bool(op.get("rail_3d", false)):
+				edges[eid]["rail_3d"] = true
+			if op.has("stacked_over"):
+				edges[eid]["stacked_over"] = int(op["stacked_over"])
 			adj[a].append({"to": b, "edge_id": eid, "length": elen})
 			adj[b].append({"to": a, "edge_id": eid, "length": elen})
 			_insert_edge_into_grid(eid, pts2)
@@ -1853,6 +2180,12 @@ func _split_edge_now(eid: int, t: float, nid: int, eid2: int) -> bool:
 	if built_tracks.has(eid):
 		built_tracks[eid2] = built_tracks[eid]
 		built_track_modes[eid2] = built_track_modes.get(eid, TrackMode.SINGLE)
+		var ep_s := get_edge_elev_pair(eid)
+		var ym := hermite_elev(ep_s.x, ep_s.y, tf)
+		built_track_elev[eid] = {"ya": ep_s.x, "yb": ym}
+		built_track_elev[eid2] = {"ya": ym, "yb": ep_s.y}
+		if nodes.has(nid) and absf(ym) > 0.5:
+			nodes[nid]["elev"] = ym
 	for sid: int in stations.keys():
 		var st: Dictionary = stations[sid]
 		if int(st["edge_id"]) != eid:
@@ -1905,6 +2238,150 @@ func node_for_point(xz: Vector2, snap_r: float = 9.0) -> Dictionary:
 	var free_n := _new_node_id()
 	_record({"op": "node", "id": free_n, "pos": [xz.x, xz.y]})
 	return {"nid": free_n}
+
+
+# Node for a 3D rail point at elevation `elev_y`: snaps to an existing node whose track height matches
+# (or splits a same-level built track edge if within snap_r), otherwise creates a dedicated 3D rail node
+# so elevated / underground tracks never merge accidentally with ground streets or other vertical layers.
+func node_for_point_3d(xz: Vector2, elev_y: float, snap_r: float = 9.0, sys: int = -1, allow_street_snap: bool = false) -> Dictionary:
+	# 1. Prefer snapping to an existing node that already has a compatible track at `elev_y` (or a free 3D node at `elev_y`)
+	var best_n := -1
+	var best_d := snap_r
+	for nid: int in nodes.keys():
+		var nd: Dictionary = nodes[nid]
+		var d := xz.distance_to(nd["pos"] as Vector2)
+		if d > best_d:
+			continue
+		var ny := get_node_track_elev(nid, sys, elev_y)
+		var ok := false
+		if not is_nan(ny) and absf(ny - elev_y) <= ELEV_CONNECT_TOL:
+			ok = true
+		elif nd.has("elev") and absf(float(nd["elev"]) - elev_y) <= ELEV_CONNECT_TOL:
+			ok = true
+		elif allow_street_snap and absf(elev_y) <= ELEV_CONNECT_TOL and not nd.has("elev"):
+			ok = true
+		if ok:
+			best_d = d
+			best_n = nid
+	if best_n >= 0:
+		return {"nid": best_n}
+	# 2. If near a same-level built track edge mid-span, split it cleanly to form a 3D T-junction
+	var elev_flt := -1 if elev_y < -1.5 else 1
+	var hit := find_closest_edge(xz, snap_r * 0.8, true, elev_flt)
+	if not hit.is_empty():
+		var eid := int(hit["edge_id"])
+		var t := float(hit["t"])
+		var hy := get_edge_elev_at_t(eid, t)
+		if (sys < 0 or TrackBuilder.edge_system(self, eid) == sys) and absf(hy - elev_y) <= ELEV_CONNECT_TOL:
+			var len_e := float(edges[eid]["length"])
+			if t * len_e < 6.0 or (1.0 - t) * len_e < 6.0:
+				return {"nid": int(edges[eid]["a"]) if t < 0.5 else int(edges[eid]["b"])}
+			for sid: int in stations.keys():
+				var st: Dictionary = stations[sid]
+				if int(st["edge_id"]) == eid and absf(float(st["t"]) - t) * len_e < float(st.get("platform_len", 27.0)) * 0.5 + 6.0:
+					return {"error": "on_station"}
+			if crossovers.has(eid) and absf(float(crossover_t.get(eid, 0.5)) - t) * len_e < 26.0:
+				return {"error": "on_crossover"}
+			var new_n := _new_node_id()
+			var new_e := _new_edge_id()
+			if _record({"op": "split", "eid": eid, "t": t, "nid": new_n, "eid2": new_e}):
+				return {"nid": new_n}
+			return {"error": "split_failed"}
+	# 3. For ground level (0m) when street snapping is allowed, delegate to standard node_for_point
+	if allow_street_snap and absf(elev_y) <= ELEV_CONNECT_TOL:
+		return node_for_point(xz, snap_r)
+	# 4. Otherwise create a dedicated 3D rail node at elev_y
+	var free_n := _new_node_id()
+	var nm := "立体节点" if elev_y > 1.0 else ("地下节点" if elev_y < -1.0 else "新路口")
+	_record({"op": "node", "id": free_n, "pos": [xz.x, xz.y], "elev": elev_y, "name": nm})
+	return {"nid": free_n}
+
+
+# Add a dedicated 3D rail edge between nodes a and b (elevated, underground, or ramp), copying optional polyline `custom_pts`.
+func add_3d_rail_edge(
+	a: int,
+	b: int,
+	track_mode: int,
+	bed_style: int,
+	ya: float,
+	yb: float,
+	name: String = "",
+	custom_pts: Array = [],
+	stacked_over: int = -1
+) -> int:
+	if a == b or not nodes.has(a) or not nodes.has(b):
+		return -1
+	var pa: Vector2 = nodes[a]["pos"]
+	var pb: Vector2 = nodes[b]["pos"]
+	if pa.distance_to(pb) < 8.0 and custom_pts.size() < 2:
+		return -1
+	var pts_raw: Array = []
+	if custom_pts.size() >= 2:
+		for p2 in custom_pts:
+			if p2 is Vector2:
+				pts_raw.append([(p2 as Vector2).x, (p2 as Vector2).y])
+			else:
+				pts_raw.append([float(p2[0]), float(p2[1])])
+	else:
+		pts_raw = [[pa.x, pa.y], [pb.x, pb.y]]
+	var eid := _new_edge_id()
+	var w := row_width_for(track_mode)
+	var nm := name
+	if nm.is_empty():
+		nm = "高架轨道" if maxf(ya, yb) > 2.0 else ("地下轨道" if minf(ya, yb) < -2.0 else "专用轨道")
+	var op := {
+		"op": "edge", "id": eid, "a": a, "b": b, "pts": pts_raw, "width": w,
+		"lf": 0, "lb": 0, "name": nm, "no_cars": true, "rail_3d": true,
+	}
+	if stacked_over >= 0:
+		op["stacked_over"] = stacked_over
+	if not _record(op):
+		return -1
+	set_track_on_edge(eid, bed_style, track_mode, ya, yb)
+	return eid
+
+
+# Lay a track along street `base_eid` at elevation (ya, yb). If `base_eid` is free OR already at the same elevation
+# & system, updates `base_eid` directly; if `base_eid` already holds a track at another vertical layer, spawns a
+# stacked 3D rail edge following the exact street polyline so ground/elevated/underground corridors coexist cleanly!
+func lay_track_along_street(
+	base_eid: int,
+	bed_style: int,
+	track_mode: int,
+	ya: float,
+	yb: float
+) -> int:
+	if not edges.has(base_eid):
+		return -1
+	var sys := 1 if TrackBuilder.is_monorail_style(bed_style) else 0
+	if not built_tracks.has(base_eid):
+		set_track_on_edge(base_eid, bed_style, track_mode, ya, yb)
+		return base_eid
+	var ep_cur := get_edge_elev_pair(base_eid)
+	var same_lvl := absf(ep_cur.x - ya) <= ELEV_CONNECT_TOL and absf(ep_cur.y - yb) <= ELEV_CONNECT_TOL
+	if same_lvl and TrackBuilder.edge_system(self, base_eid) == sys:
+		set_track_on_edge(base_eid, bed_style, track_mode, ya, yb)
+		return base_eid
+	# Already occupied at another height or system -> check if a stacked 3D edge already exists at (ya, yb)
+	var ed_base: Dictionary = edges[base_eid]
+	var pts_b: Array = ed_base["pts"]
+	var pa: Vector2 = pts_b[0]
+	var pb: Vector2 = pts_b[pts_b.size() - 1]
+	for oeid: int in edges.keys():
+		var oed: Dictionary = edges[oeid]
+		if int(oed.get("stacked_over", -1)) == base_eid and built_tracks.has(oeid):
+			var oep := get_edge_elev_pair(oeid)
+			if absf(oep.x - ya) <= ELEV_CONNECT_TOL and absf(oep.y - yb) <= ELEV_CONNECT_TOL and TrackBuilder.edge_system(self, oeid) == sys:
+				set_track_on_edge(oeid, bed_style, track_mode, ya, yb)
+				return oeid
+	var ra := node_for_point_3d(pa, ya, 4.0, sys, false)
+	var rb := node_for_point_3d(pb, yb, 4.0, sys, false)
+	if ra.has("error") or rb.has("error"):
+		return -1
+	var na := int(ra["nid"])
+	var nb := int(rb["nid"])
+	var nm := str(ed_base.get("name", "立体走廊"))
+	return add_3d_rail_edge(na, nb, track_mode, bed_style, ya, yb, nm, pts_b, base_eid)
 
 
 # New street (or tram-only right of way when no_cars) from node a to node b. Returns the edge id or -1.

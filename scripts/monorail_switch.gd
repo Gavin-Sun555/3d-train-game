@@ -17,8 +17,8 @@ const MONO_SIGNAL_ARM_DROP := 1.3 # arm runs below the car skirts (skirt bottom 
 
 var base_frames: Array[Transform3D] = [] # SEGMENTS+1 frames along the edge centreline over the span
 var seps: PackedFloat32Array = PackedFloat32Array()
-var top := 7.1
-var bot := 5.6
+var top := -0.045
+var bot := -1.545
 var half_w := 0.45
 var throw := 0.0
 var target := 0.0
@@ -127,7 +127,6 @@ func _apply() -> void:
 		var a := fa.origin + fa.basis.x * _lat(i, half, throw)
 		var b := fb.origin + fb.basis.x * _lat(i + 1, half, throw)
 		var d := b - a
-		d.y = 0.0
 		var length := d.length()
 		if length < 0.01:
 			continue

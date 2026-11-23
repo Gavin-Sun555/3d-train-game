@@ -29,6 +29,10 @@ static func build_city(
 	ground_mi.name = "UrbanSidewalkBase"
 	var g_mesh := PlaneMesh.new()
 	g_mesh.size = Vector2(sx, sz)
+	# Subdivide the base ground slab so its vertex depth-push stays locally accurate at close zoom
+	# (a 4-vertex 6km plane pushes its corners negligibly in Y and would otherwise slice above lakes when zoomed in)
+	g_mesh.subdivide_width = clampi(int(ceil(sx / 65.0)), 16, 112)
+	g_mesh.subdivide_depth = clampi(int(ceil(sz / 65.0)), 16, 112)
 	ground_mi.mesh = g_mesh
 	ground_mi.position = Vector3(cx, -0.01, cz)
 	ground_mi.material_override = sidewalk_mat
@@ -182,25 +186,25 @@ static func _build_areas(parent: Node3D, areas: Array) -> void:
 static var _tess_flat := false # water: stays one flat sheet
 
 static func _tri_out(st: SurfaceTool, a: Vector2, b: Vector2, c: Vector2, y: float) -> void:
-	if Terrain.active and not _tess_flat:
-		var lab := a.distance_squared_to(b)
-		var lbc := b.distance_squared_to(c)
-		var lca := c.distance_squared_to(a)
-		var lm := maxf(lab, maxf(lbc, lca))
-		if lm > 64.0:
-			if lm == lab:
-				var m := (a + b) * 0.5
-				_tri_out(st, a, m, c, y)
-				_tri_out(st, m, b, c, y)
-			elif lm == lbc:
-				var m2 := (b + c) * 0.5
-				_tri_out(st, a, b, m2, y)
-				_tri_out(st, a, m2, c, y)
-			else:
-				var m3 := (c + a) * 0.5
-				_tri_out(st, a, b, m3, y)
-				_tri_out(st, m3, b, c, y)
-			return
+	var max_e2 := 64.0 if (Terrain.active and not _tess_flat) else 6400.0
+	var lab := a.distance_squared_to(b)
+	var lbc := b.distance_squared_to(c)
+	var lca := c.distance_squared_to(a)
+	var lm := maxf(lab, maxf(lbc, lca))
+	if lm > max_e2:
+		if lm == lab:
+			var m := (a + b) * 0.5
+			_tri_out(st, a, m, c, y)
+			_tri_out(st, m, b, c, y)
+		elif lm == lbc:
+			var m2 := (b + c) * 0.5
+			_tri_out(st, a, b, m2, y)
+			_tri_out(st, a, m2, c, y)
+		else:
+			var m3 := (c + a) * 0.5
+			_tri_out(st, a, b, m3, y)
+			_tri_out(st, m3, b, c, y)
+		return
 	for rp: Vector2 in [a, b, c]:
 		st.set_normal(Vector3.UP)
 		st.add_vertex(Vector3(rp.x, y, rp.y))
@@ -287,8 +291,8 @@ static func _emit_area_group(
 		var pm := ShaderMaterial.new()
 		pm.shader = load("res://shaders/park_lawn.gdshader") as Shader
 		if node_name == "IslandParkAreas":
-			pm.set_shader_parameter("depth_push", 0.14)
-			pm.set_shader_parameter("depth_slope", 0.00024)
+			pm.set_shader_parameter("depth_push", 0.13)
+			pm.set_shader_parameter("depth_slope", 0.00050)
 		mi.material_override = pm
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(mi)

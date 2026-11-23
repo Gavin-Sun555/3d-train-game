@@ -8,7 +8,10 @@ render_mode diffuse_burley, specular_schlick_ggx, cull_disabled;
 uniform vec3 base_col : source_color = vec3(0.39, 0.38, 0.36);
 uniform float rough_val = 0.86;
 uniform float depth_push = 0.22;
-uniform float depth_slope = 0.00038;
+uniform float depth_slope = 0.0010;
+uniform int portal_count = 0;
+uniform vec4 portal_pos_hl[16];
+uniform vec4 portal_dir_hw[16];
 
 varying vec3 v_world;
 
@@ -28,6 +31,14 @@ void vertex() {
 
 void fragment() {
 	vec2 xz = v_world.xz;
+	for (int pi = 0; pi < portal_count; pi++) {
+		vec2 dp = xz - portal_pos_hl[pi].xy;
+		vec2 fw = portal_dir_hw[pi].xy;
+		vec2 rt = vec2(-fw.y, fw.x);
+		if (abs(dot(dp, fw)) < portal_pos_hl[pi].z && abs(dot(dp, rt)) < portal_dir_hw[pi].z) {
+			discard;
+		}
+	}
 	float fw = max(length(dFdx(xz)), length(dFdy(xz)));
 	float aa = 1.0 - smoothstep(0.04, 0.14, fw);
 	vec2 cell = floor(xz / 1.2);

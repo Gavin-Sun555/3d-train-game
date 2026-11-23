@@ -445,15 +445,15 @@ func _ensure_signal_visuals(sig: Dictionary, graph: NetworkGraph, sig_holder: No
 		int_root.set_meta("on_terrain", true)
 
 
-# Street-running tram track (monorail guideways are elevated and do not interact with road traffic)
+# Street-running tram track (monorail, elevated viaducts and underground tunnels do not interact with road traffic)
 static func _is_tram_edge(graph: NetworkGraph, eid: int) -> bool:
-	return graph.built_tracks.has(eid) and not TrackBuilder.is_monorail_style(int(graph.built_tracks[eid]))
+	return graph.built_tracks.has(eid) and not TrackBuilder.is_monorail_style(int(graph.built_tracks[eid])) and not graph.is_edge_grade_separated(eid)
 
 
 static func _ground_trams(trams: Array[Dictionary]) -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	for t: Dictionary in trams:
-		if not bool(t.get("elevated", false)):
+		if not bool(t.get("elevated", false)) and not bool(t.get("grade_sep", false)):
 			out.append(t)
 	return out
 
@@ -628,7 +628,7 @@ func get_signal_aspect(node_id: int, approach_fwd_2d: Vector2) -> String:
 # Queries the nearest signalized intersection ahead of a tram's FRONT NOSE along its actual curve (works on curves & quad tracks!)
 func get_upcoming_tram_signal(tr: Dictionary, graph: NetworkGraph, max_look: float = 190.0) -> Dictionary:
 	var secs: Array = tr["tram_info"]["sections"]
-	if secs.is_empty() or signals.is_empty() or bool(tr.get("elevated", false)):
+	if secs.is_empty() or signals.is_empty() or bool(tr.get("elevated", false)) or bool(tr.get("grade_sep", false)):
 		return {"has_signal": false, "aspect": "green", "dist": 999.0, "stop_line": 11.2, "is_phase_a": true, "tsp_active": false}
 
 	var curve: Curve3D = tr.get("curve")
@@ -1373,7 +1373,7 @@ static func _intersection_stop_line(graph: NetworkGraph, nid: int, my_eid: int) 
 
 
 func find_hazard_along_tram_curve(tr: Dictionary, max_lookahead: float = 48.0) -> Dictionary:
-	if bool(tr.get("elevated", false)):
+	if bool(tr.get("elevated", false)) or bool(tr.get("grade_sep", false)):
 		return {"has_hazard": false, "dist": 999.0}
 	var curve: Curve3D = tr.get("curve")
 	var rlen := float(tr.get("route_len", 10.0))
@@ -1442,7 +1442,7 @@ func find_hazard_ahead_of_tram(tram_pos: Vector3, tram_fwd: Vector3, max_lookahe
 func check_tram_collisions(trams: Array[Dictionary]) -> Dictionary:
 	for ti in range(trams.size()):
 		var tr: Dictionary = trams[ti]
-		if bool(tr.get("elevated", false)):
+		if bool(tr.get("elevated", false)) or bool(tr.get("grade_sep", false)):
 			continue
 		var tinfo: Dictionary = tr["tram_info"]
 		var secs: Array = tinfo["sections"]

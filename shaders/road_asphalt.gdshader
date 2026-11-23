@@ -1,6 +1,10 @@
 shader_type spatial;
 render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 
+uniform int portal_count = 0;
+uniform vec4 portal_pos_hl[16];
+uniform vec4 portal_dir_hw[16];
+
 varying vec3 v_world;
 varying vec2 v_uv;
 
@@ -29,12 +33,20 @@ void vertex() {
 	// away in depth so things lying on it always win (never visibly moves the street itself)
 	vec4 vp = MODELVIEW_MATRIX * vec4(VERTEX, 1.0);
 	float d = length(vp.xyz);
-	vp.xyz *= 1.0 + (0.12 + d * 0.0002) / max(d, 0.001);
+	vp.xyz *= 1.0 + (0.10 + d * 0.00035) / max(d, 0.001);
 	POSITION = PROJECTION_MATRIX * vp;
 }
 
 void fragment() {
 	vec2 xz = v_world.xz;
+	for (int pi = 0; pi < portal_count; pi++) {
+		vec2 dp = xz - portal_pos_hl[pi].xy;
+		vec2 fw = portal_dir_hw[pi].xy;
+		vec2 rt = vec2(-fw.y, fw.x);
+		if (abs(dot(dp, fw)) < portal_pos_hl[pi].z && abs(dot(dp, rt)) < portal_dir_hw[pi].z) {
+			discard;
+		}
+	}
 	float cam_d = distance(v_world, CAMERA_POSITION_WORLD);
 
 	// Multi-scale crushed basalt aggregate, bitumen tar patches & polished wheel ruts
