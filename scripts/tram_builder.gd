@@ -310,6 +310,8 @@ static func build_tram(spec: Dictionary, override_sections: int = -1) -> Diction
 				ring.material_override = mat_yellow_thresh if not vintage else mat_brass
 				ring.position = Vector3(rail_side, 2.15, strap_z)
 				ring.rotation_degrees = Vector3(0.0, 0.0, 90.0)
+				ring.visibility_range_end = 150.0
+				ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 				sec.add_child(ring)
 				strap_z += 0.92
 
@@ -345,11 +347,15 @@ static func build_tram(spec: Dictionary, override_sections: int = -1) -> Diction
 						shell.mesh = _get_seat_mesh(false)
 						shell.material_override = mat_dark
 						shell.position = Vector3(sx, 0.93, sz)
+						shell.visibility_range_end = 160.0
+						shell.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 						sec.add_child(shell)
 						var cushion := MeshInstance3D.new()
 						cushion.mesh = _get_seat_mesh(true)
 						cushion.material_override = mat_seat
 						cushion.position = Vector3(sx, 0.93, sz)
+						cushion.visibility_range_end = 160.0
+						cushion.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 						sec.add_child(cushion)
 						# Aisle-side top grab-loop handle + low side armrest
 						_add_box(sec, Vector3(0.032, 0.14, 0.032), Vector3(sx - side * 0.21, 1.54, sz + 0.25), mat_yellow_thresh)
@@ -480,7 +486,7 @@ static func build_tram(spec: Dictionary, override_sections: int = -1) -> Diction
 		_add_box(gw, Vector3(width - 0.36, 0.06, 0.98), Vector3(0.0, 0.56, 0.0), mat_floor)
 		gangway_nodes.append(gw)
 
-	return {
+	var tinfo := {
 		"root": root,
 		"sections": section_nodes,
 		"gangways": gangway_nodes,
@@ -511,7 +517,115 @@ static func build_tram(spec: Dictionary, override_sections: int = -1) -> Diction
 		"section_len": sec_len,
 		"sections_count": sections_count,
 		"width": width,
+		"pax_culled": false,
 	}
+	_merge_static_tram_meshes(tinfo)
+	return tinfo
+
+
+# Merge hundreds of static interior/exterior leaf MeshInstance3D parts per tram section & gangway
+# by (material, cast_shadow, lod_tier) while strictly keeping every animated door, cab control, and passenger rig untouched!
+static func _merge_static_tram_meshes(tinfo: Dictionary) -> void:
+	var keep := {}
+	for d: Dictionary in tinfo.get("doors", []):
+		if d.get("node") is Object:
+			keep[(d["node"] as Object).get_instance_id()] = true
+	for sp: Dictionary in tinfo.get("step_plates", []):
+		if sp.get("node") is Object:
+			keep[(sp["node"] as Object).get_instance_id()] = true
+	for pn in tinfo.get("onboard_pax", []):
+		if pn is Object:
+			keep[(pn as Object).get_instance_id()] = true
+	for k_s: String in ["throttle_lever", "rear_throttle_lever"]:
+		var n_s = tinfo.get(k_s)
+		if n_s is Object:
+			keep[(n_s as Object).get_instance_id()] = true
+	for cc_k: String in ["front_cab_controls", "rear_cab_controls"]:
+		var cc: Dictionary = tinfo.get(cc_k, {})
+		for v in cc.values():
+			if v is Object:
+				keep[(v as Object).get_instance_id()] = true
+			elif v is Array:
+				for elem in v:
+					if elem is Object:
+						keep[(elem as Object).get_instance_id()] = true
+
+	var containers: Array = []
+	for sec in tinfo.get("sections", []):
+		containers.append(sec)
+	for gw in tinfo.get("gangways", []):
+		containers.append(gw)
+
+	for cont: Node3D in containers:
+		if not is_instance_valid(cont):
+			continue
+		var groups := {}
+		var to_remove: Array[MeshInstance3D] = []
+		for ch in cont.get_children():
+			if not (ch is MeshInstance3D):
+				continue
+			var mi := ch as MeshInstance3D
+			if mi.mesh == null or mi.get_child_count() > 0 or keep.has(mi.get_instance_id()):
+				continue
+			var mat: Material = mi.material_override
+			if mat == null and mi.mesh.get_surface_count() > 0:
+				mat = mi.mesh.surface_get_material(0)
+			var cast_sh := mi.cast_shadow != GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			var vis_e := mi.visibility_range_end
+			var tier := 2 if (vis_e <= 0.0 or vis_e >= 500.0) else (1 if vis_e >= 250.0 else 0)
+			var mat_id := mat.get_instance_id() if mat != null else 0
+			var gk := "%d_%d_%d" % [mat_id, 1 if cast_sh else 0, tier]
+			if not groups.has(gk):
+				groups[gk] = {"mat": mat, "cast_sh": cast_sh, "vis": vis_e, "items": []}
+			var g: Dictionary = groups[gk]
+			(g["items"] as Array).append(mi)
+			if vis_e <= 0.0 or (float(g["vis"]) > 0.0 and vis_e > float(g["vis"])):
+				g["vis"] = vis_e
+			to_remove.append(mi)
+
+		var b_i := 0
+		for gk: String in groups.keys():
+			var g: Dictionary = groups[gk]
+			var items: Array = g["items"]
+			if items.size() <= 1:
+				continue # single mesh already optimal
+			var st := SurfaceTool.new()
+			st.begin(Mesh.PRIMITIVE_TRIANGLES)
+			var appended := 0
+			for mi: MeshInstance3D in items:
+				if mi.mesh.get_surface_count() <= 0:
+					continue
+				st.append_from(mi.mesh, 0, mi.transform)
+				appended += 1
+			if appended == 0:
+				continue
+			var merged := MeshInstance3D.new()
+			merged.name = "SecBatch_%d" % b_i
+			b_i += 1
+			merged.mesh = st.commit()
+			if g["mat"] != null:
+				merged.material_override = g["mat"]
+			merged.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if bool(g["cast_sh"]) else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			if float(g["vis"]) > 0.0:
+				merged.visibility_range_end = float(g["vis"])
+			cont.add_child(merged)
+			for old_mi: MeshInstance3D in items:
+				cont.remove_child(old_mi)
+				old_mi.queue_free()
+
+
+# Hide/restore onboard passenger rig trees on distant trams so 30+ trams never clutter RenderingServer!
+static func set_onboard_passengers_culled(tinfo: Dictionary, culled: bool, pax_count: int, capacity: int) -> void:
+	if bool(tinfo.get("pax_culled", false)) == culled:
+		return
+	tinfo["pax_culled"] = culled
+	if culled:
+		for rig: Dictionary in tinfo.get("onboard_rigs", []):
+			var n: Node3D = rig.get("root")
+			if is_instance_valid(n):
+				n.visible = false
+	else:
+		update_onboard_passengers(tinfo, pax_count, capacity)
 
 
 static func set_active_cab_end(tinfo: Dictionary, end_idx: int) -> void:
@@ -562,11 +676,35 @@ static func _is_door_allowed_by_platform(sec: Node3D, side: float, door_z: float
 	var st_pos: Vector3 = dock_info.get("st_pos", Vector3.ZERO)
 	var st_side := float(dock_info.get("st_side", 1.0))
 	var half_len := float(dock_info.get("plat_half_len", 13.05))
-	var plat_dir := Vector3.ZERO
+	var door_world := sec.global_transform * Vector3(0.0, 0.0, door_z)
+	var curve_spec: Dictionary = dock_info.get("curve_spec", {})
 	var st_right := st_fwd.cross(Vector3.UP).normalized()
+	var along := (door_world - st_pos).dot(st_fwd)
+	var ref_center := st_pos
+	if not curve_spec.is_empty() and curve_spec.has("geom"):
+		var g_c: Dictionary = curve_spec["geom"]
+		var c_c: Curve3D = g_c["curve"]
+		var clen_c := float(g_c["clen"])
+		var s_cen := float(curve_spec["s_center"])
+		var s_door := c_c.get_closest_offset(Vector3(door_world.x, 0.0, door_world.z))
+		along = s_door - s_cen
+		var tf_d := TrackBuilder.sample_track_frame(c_c, s_door, clen_c, false)
+		st_fwd = (-tf_d.basis.z).normalized()
+		st_right = st_fwd.cross(Vector3.UP).normalized()
+		if int(st_side) == 0:
+			var c_mode := str(curve_spec.get("mode", "double_island"))
+			if c_mode == "quad_twin":
+				var lat_sgn := signf((sec.global_position - tf_d.origin).dot(st_right))
+				if lat_sgn == 0.0:
+					lat_sgn = 1.0
+				var isl_lat := 0.5 * (TrackBuilder.geom_sep_at(g_c, s_door) + TrackBuilder.geom_lsep_at(g_c, s_door))
+				ref_center = tf_d.origin + st_right * (lat_sgn * isl_lat)
+			else:
+				ref_center = tf_d.origin
+	var plat_dir := Vector3.ZERO
 	if int(st_side) == 0:
-		# Central Island Platform: platform is at st_pos between both tracks; project laterally so longitudinal offset never shrinks the dot!
-		var lat_to_island := (st_pos - sec.global_position).dot(st_right)
+		# Central Island Platform: platform is at ref_center between both tracks; project laterally so longitudinal offset never shrinks the dot!
+		var lat_to_island := (ref_center - sec.global_position).dot(st_right)
 		if absf(lat_to_island) < 0.05:
 			return false
 		plat_dir = st_right * signf(lat_to_island)
@@ -575,8 +713,6 @@ static func _is_door_allowed_by_platform(sec: Node3D, side: float, door_z: float
 	var tram_right := sec.global_transform.basis.x.normalized()
 	if side * tram_right.dot(plat_dir) <= 0.35:
 		return false
-	var door_world := sec.global_transform * Vector3(0.0, 0.0, door_z)
-	var along := (door_world - st_pos).dot(st_fwd)
 	return absf(along) <= half_len
 
 
@@ -637,6 +773,8 @@ static func update_doors(tram_info: Dictionary, open_ratio: float, dock_info: Di
 
 
 static func update_onboard_passengers(tram_info: Dictionary, pax_count: int, capacity: int) -> void:
+	if bool(tram_info.get("pax_culled", false)):
+		return
 	var rigs: Array = tram_info.get("onboard_rigs", [])
 	if rigs.is_empty():
 		return
@@ -876,6 +1014,8 @@ static func _build_front_cab_and_nose(
 	mfd_lbl.modulate = Color(0.62, 0.96, 1.0)
 	mfd_lbl.position = Vector3(-0.292, 1.448, fz + 0.638)
 	mfd_lbl.rotation.x = deg_to_rad(-18.0)
+	mfd_lbl.visibility_range_end = 90.0
+	mfd_lbl.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	sec.add_child(mfd_lbl)
 
 	# Live In-Cab Tram Traffic Signal Repeater inside the MFD Screen (shows upcoming ┃ GO / ● WAIT / ━ STOP + dist!)
@@ -887,6 +1027,8 @@ static func _build_front_cab_and_nose(
 	sig_lbl.modulate = Color(0.30, 0.96, 0.62)
 	sig_lbl.position = Vector3(-0.045, 1.568, fz + 0.602)
 	sig_lbl.rotation.x = deg_to_rad(-18.0)
+	sig_lbl.visibility_range_end = 90.0
+	sig_lbl.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	sec.add_child(sig_lbl)
 
 	# Cab Radio Handset on right wing + Driver Timetable Clipboard on left A-pillar
@@ -1282,6 +1424,7 @@ static func _add_mesh_inst(parent: Node3D, m: Mesh, pos: Vector3, rot_deg: Vecto
 	mi.position = pos
 	mi.rotation_degrees = rot_deg
 	mi.visibility_range_end = 140.0
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(mi)
 	return mi
 
@@ -1308,6 +1451,7 @@ static func _add_cap(parent: Node3D, r: float, h: float, pos: Vector3, mat: Mate
 	mi.position = pos
 	mi.rotation_degrees = rot_deg
 	mi.visibility_range_end = 140.0
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(mi)
 	return mi
 
@@ -1337,6 +1481,11 @@ static func _add_box(parent: Node3D, sz: Vector3, pos: Vector3, mat: Material) -
 	bm.material = mat
 	mi.mesh = bm
 	mi.position = pos
+	var max_dim := maxf(sz.x, maxf(sz.y, sz.z))
+	var min_dim := minf(sz.x, minf(sz.y, sz.z))
+	mi.visibility_range_end = 800.0 if max_dim >= 1.4 else (320.0 if max_dim >= 0.55 else 160.0)
+	if max_dim < 1.4 or min_dim <= 0.045:
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(mi)
 	return mi
 
@@ -1352,6 +1501,8 @@ static func _add_cyl(parent: Node3D, r: float, h: float, pos: Vector3, mat: Mate
 	mi.mesh = cm
 	mi.position = pos
 	mi.rotation_degrees = rot_deg
+	mi.visibility_range_end = 450.0 if r >= 0.25 else 180.0
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(mi)
 	return mi
 
@@ -1366,6 +1517,8 @@ static func _add_sph(parent: Node3D, r: float, pos: Vector3, mat: Material) -> M
 	sm.material = mat
 	mi.mesh = sm
 	mi.position = pos
+	mi.visibility_range_end = 150.0
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(mi)
 	return mi
 
@@ -1378,6 +1531,8 @@ static func _add_quad(parent: Node3D, sz: Vector2, pos: Vector3, rot_deg: Vector
 	mi.mesh = qm
 	mi.position = pos
 	mi.rotation_degrees = rot_deg
+	mi.visibility_range_end = 160.0
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(mi)
 	return mi
 
@@ -1392,6 +1547,8 @@ static func _add_cab_label(parent: Node3D, txt: String, pos: Vector3, col: Color
 	lbl.outline_modulate = Color(0.03, 0.04, 0.06)
 	lbl.position = pos
 	lbl.rotation_degrees = Vector3(-90.0, 0.0, 0.0)
+	lbl.visibility_range_end = 90.0
+	lbl.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(lbl)
 
 

@@ -8,6 +8,8 @@ var _mix_rate := 22050.0
 var speed_mps := 0.0
 var traction_effort := 0.0 # -1..+1
 var overspeed_squeal := 0.0 # 0..1 continuous warning + flange squeal
+var weather_rain_intensity := 0.0 # 0..1 ambient rain intensity
+var weather_rain_muffled := false # true when inside cab/interior for warmer roof-patter sound
 var muted := false
 var _menu_silenced := true
 
@@ -37,6 +39,19 @@ var _crash_timer := -1.0
 var _click_timer := -1.0
 var _dist_since_joint := 0.0
 var _noise_seed := 1337
+var _rain_smooth := 0.0
+var _rain_seed_l := 918273
+var _rain_seed_r := 456789
+var _rain_lp_l := 0.0
+var _rain_lp_r := 0.0
+var _rain_hp_l := 0.0
+var _rain_hp_r := 0.0
+var _rain_sub_l := 0.0
+var _rain_sub_r := 0.0
+var _rain_drop_env := 0.0
+var _rain_drop_phase := 0.0
+var _rain_drop_freq := 1200.0
+var _rain_drop_pan := 0.5
 
 
 func _ready() -> void:
@@ -72,6 +87,8 @@ func set_menu_silenced(silent: bool) -> void:
 		_joint_timer = -1.0
 		_crash_timer = -1.0
 		_click_timer = -1.0
+		_rain_smooth = 0.0
+		_rain_drop_env = 0.0
 		if DisplayServer.get_name() != "headless":
 			DisplayServer.tts_stop()
 	if _player != null:
@@ -136,8 +153,12 @@ func _process(_delta: float) -> void:
 	var sq_amp := clampf(overspeed_squeal, 0.0, 1.0)
 
 	var gain := master_volume * sfx_volume
+	var target_rain := clampf(weather_rain_intensity, 0.0, 1.0)
+	var rain_lp_a := 0.19 if weather_rain_muffled else 0.36
+	var rain_base_gain := 0.095 if weather_rain_muffled else 0.128
 	for _i in range(frames):
 		if muted or _menu_silenced or not sfx_enabled or gain <= 0.005:
+			_rain_smooth = 0.0
 			_playback.push_frame(Vector2.ZERO)
 			continue
 
@@ -219,5 +240,42 @@ func _process(_delta: float) -> void:
 			if _click_timer > 0.03:
 				_click_timer = -1.0
 
-		sample = clampf(sample * gain, -0.88, 0.88)
-		_playback.push_frame(Vector2(sample, sample))
+		var sample_l := sample
+		var sample_r := sample
+
+		# 8. Stereo Rain Ambience (band-shaped rainfall wash + gentle cab/glass droplet patter)
+		if target_rain > 0.001 or _rain_smooth > 0.001:
+			_rain_smooth += (target_rain - _rain_smooth) * 0.00022
+			_rain_seed_l = (_rain_seed_l * 1103515245 + 12345) & 0x7fffffff
+			_rain_seed_r = (_rain_seed_r * 1664525 + 1013904223) & 0x7fffffff
+			var wl := (float(_rain_seed_l % 2000) / 1000.0) - 1.0
+			var wr := (float(_rain_seed_r % 2000) / 1000.0) - 1.0
+
+			_rain_lp_l += (wl - _rain_lp_l) * rain_lp_a
+			_rain_lp_r += (wr - _rain_lp_r) * rain_lp_a
+			_rain_hp_l += (_rain_lp_l - _rain_hp_l) * 0.048
+			_rain_hp_r += (_rain_lp_r - _rain_hp_r) * 0.048
+			var hiss_l := _rain_lp_l - _rain_hp_l
+			var hiss_r := _rain_lp_r - _rain_hp_r
+
+			_rain_sub_l += (wl - _rain_sub_l) * 0.032
+			_rain_sub_r += (wr - _rain_sub_r) * 0.032
+
+			var drop_s := 0.0
+			if _rain_drop_env < 0.002 and (_rain_seed_l & 1023) == 0:
+				_rain_drop_env = (0.022 + float(_rain_seed_r % 100) * 0.00018) * _rain_smooth
+				_rain_drop_freq = (520.0 if weather_rain_muffled else 880.0) + float((_rain_seed_l >> 10) % 900)
+				_rain_drop_pan = 0.18 + float((_rain_seed_r >> 8) % 64) * 0.01
+				_rain_drop_phase = 0.0
+			if _rain_drop_env >= 0.001:
+				_rain_drop_phase = fmod(_rain_drop_phase + _rain_drop_freq * dt, 1.0)
+				drop_s = sin(_rain_drop_phase * TAU) * _rain_drop_env
+				_rain_drop_env *= 0.985
+
+			var rg := _rain_smooth * rain_base_gain
+			sample_l += (hiss_l * 0.85 + _rain_sub_l * 0.68) * rg + drop_s * (1.0 - _rain_drop_pan)
+			sample_r += (hiss_r * 0.85 + _rain_sub_r * 0.68) * rg + drop_s * _rain_drop_pan
+
+		sample_l = clampf(sample_l * gain, -0.88, 0.88)
+		sample_r = clampf(sample_r * gain, -0.88, 0.88)
+		_playback.push_frame(Vector2(sample_l, sample_r))

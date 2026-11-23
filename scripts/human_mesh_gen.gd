@@ -1165,7 +1165,8 @@ static func _add_part(parent: Node3D, m: Mesh, pos: Vector3, rot_deg: Vector3, s
 	mi.position = pos
 	mi.rotation_degrees = rot_deg
 	mi.scale = sc
-	mi.visibility_range_end = 150.0
+	mi.visibility_range_end = 140.0 if sc.x >= 0.5 else 85.0
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(mi)
 	return mi
 

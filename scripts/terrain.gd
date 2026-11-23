@@ -20,6 +20,9 @@ static var _dk := PackedFloat32Array() # street bridge decks (overpasses, canal 
 # the ground, so surface() is continuous: streets and tracks draped with different vertex spacings then agree
 # at deck ends and shores (a nearest-cell step there put one above the other by up to metres)
 static var _lf := PackedFloat32Array()
+static var _hs_raw := PackedFloat32Array()
+static var _lf_raw := PackedFloat32Array()
+static var _graded_sig := 0
 static var _rigid_max := 60.0
 
 
@@ -29,6 +32,9 @@ static func load_for(map_key: String, areas: Array, edges: Array = []) -> void:
 	_wl = PackedFloat32Array()
 	_dk = PackedFloat32Array()
 	_lf = PackedFloat32Array()
+	_hs_raw = PackedFloat32Array()
+	_lf_raw = PackedFloat32Array()
+	_graded_sig = 0
 	var base := "res://data/%s_terrain" % map_key
 	if not FileAccess.file_exists(base + ".bin") or not FileAccess.file_exists(base + ".json"):
 		return
@@ -52,6 +58,8 @@ static func load_for(map_key: String, areas: Array, edges: Array = []) -> void:
 	_lf.resize(_w * _h)
 	for i in range(_w * _h):
 		_lf[i] = maxf(0.0, maxf(_wl[i], _dk[i]) - _hs[i])
+	_hs_raw = _hs.duplicate()
+	_lf_raw = _lf.duplicate()
 	active = true
 
 
@@ -142,6 +150,308 @@ static func _water_at(x: float, z: float) -> float:
 	var fx := clampf((x - _x0) / _cell, 0.0, float(_w) - 1.0)
 	var fz := clampf((z - _z0) / _cell, 0.0, float(_h) - 1.0)
 	return _wl[int(round(fz)) * _w + int(round(fx))]
+
+
+static func _raw_surface(x: float, z: float) -> float:
+	if not active or _hs_raw.is_empty():
+		return 0.0
+	var fx := clampf((x - _x0) / _cell, 0.0, float(_w) - 1.001)
+	var fz := clampf((z - _z0) / _cell, 0.0, float(_h) - 1.001)
+	var ix := int(fx)
+	var iz := int(fz)
+	var ux := fx - float(ix)
+	var uz := fz - float(iz)
+	var k := iz * _w + ix
+	var g := lerpf(lerpf(_hs_raw[k], _hs_raw[k + 1], ux), lerpf(_hs_raw[k + _w], _hs_raw[k + _w + 1], ux), uz)
+	return g + lerpf(lerpf(_lf_raw[k], _lf_raw[k + 1], ux), lerpf(_lf_raw[k + _w], _lf_raw[k + _w + 1], ux), uz)
+
+
+# Grade terrain under built tracks: levels out small local undulations into flat stretches or uniform-gradient
+# ramps across the full track + platform corridor width, blending smoothly into the surrounding ground.
+# Returns true if the graded terrain changed.
+static func grade_for_tracks(graph) -> bool:
+	if not active or graph == null or _hs_raw.is_empty():
+		return false
+	var eids: Array = graph.built_tracks.keys()
+	eids.sort()
+	var sig := 23
+	for eid_raw in eids:
+		var eid0 := int(eid_raw)
+		if graph.edges.has(eid0):
+			var ed0: Dictionary = graph.edges[eid0]
+			sig = hash([sig, eid0, int(ed0["a"]), int(ed0["b"]), roundi(float(ed0["length"]) * 10.0), int(graph.built_tracks[eid0])])
+	if sig == _graded_sig:
+		return false
+	_graded_sig = sig
+	_hs = _hs_raw.duplicate()
+	_lf = _lf_raw.duplicate()
+	if eids.is_empty():
+		return true
+
+	# 1. Build track subgraph and sample raw elevations at track nodes
+	var t_adj := {} # nid -> Array of {to, eid, len, dir}
+	var node_h := {} # nid -> float
+	var valid_eids: Array[int] = []
+	for eid_raw in eids:
+		var eid := int(eid_raw)
+		if not graph.edges.has(eid):
+			continue
+		var ed: Dictionary = graph.edges[eid]
+		var pts: Array = ed.get("pts", [])
+		if pts.size() < 2:
+			continue
+		valid_eids.append(eid)
+		var a := int(ed["a"])
+		var b := int(ed["b"])
+		var elen := maxf(1.0, float(ed.get("length", 20.0)))
+		var p_a: Vector2 = pts[0]
+		var p_b: Vector2 = pts[pts.size() - 1]
+		var dir_ab := (p_b - p_a).normalized() if p_a.distance_to(p_b) > 0.01 else Vector2(1.0, 0.0)
+		if not node_h.has(a):
+			var pa2: Vector2 = graph.nodes[a]["pos"] if graph.nodes.has(a) else p_a
+			node_h[a] = _raw_surface(pa2.x, pa2.y)
+			t_adj[a] = []
+		if not node_h.has(b):
+			var pb2: Vector2 = graph.nodes[b]["pos"] if graph.nodes.has(b) else p_b
+			node_h[b] = _raw_surface(pb2.x, pb2.y)
+			t_adj[b] = []
+		(t_adj[a] as Array).append({"to": b, "eid": eid, "len": elen, "dir": dir_ab})
+		(t_adj[b] as Array).append({"to": a, "eid": eid, "len": elen, "dir": -dir_ab})
+
+	if valid_eids.is_empty():
+		return true
+
+	var nids: Array = node_h.keys()
+	# 2. Long-wavelength graph Laplacian diffusion (removes <500m bumps and dips)
+	for _it in range(80):
+		var next_h := {}
+		for nid: int in nids:
+			var nbs: Array = t_adj[nid]
+			if nbs.is_empty():
+				next_h[nid] = float(node_h[nid])
+				continue
+			var sum_w := 0.25 / 40.0
+			var sum_wh := sum_w * float(node_h[nid])
+			for i in range(nbs.size()):
+				var nb: Dictionary = nbs[i]
+				var d_i: Vector2 = nb["dir"]
+				var col_boost := 1.0
+				for j in range(nbs.size()):
+					if i != j and d_i.dot(nbs[j]["dir"] as Vector2) < -0.55:
+						col_boost = 2.6
+						break
+				var w := col_boost / maxf(18.0, float(nb["len"]))
+				sum_w += w
+				sum_wh += w * float(node_h[int(nb["to"])])
+			var nh := sum_wh / sum_w
+			if graph.nodes.has(nid):
+				var np: Vector2 = graph.nodes[nid]["pos"]
+				nh = maxf(nh, _water_at(np.x, np.y))
+			next_h[nid] = nh
+		node_h = next_h
+
+	# 3. Extract maximal collinear track chains and apply 1D RDP piecewise-linear uniform-slope grading
+	var used_eids := {}
+	var chains: Array = []
+	# Start chains from terminals/junctions (degree != 2) first, then remaining loop cycles
+	for pass_i in range(2):
+		for start_nid: int in nids:
+			var nbs0: Array = t_adj[start_nid]
+			if pass_i == 0 and nbs0.size() == 2:
+				continue
+			for nb0: Dictionary in nbs0:
+				var eid0 := int(nb0["eid"])
+				if used_eids.has(eid0):
+					continue
+				used_eids[eid0] = true
+				var chain_nids: Array[int] = [start_nid, int(nb0["to"])]
+				var chain_s: Array[float] = [0.0, float(nb0["len"])]
+				var prev_dir: Vector2 = nb0["dir"]
+				var cur_nid := int(nb0["to"])
+				while true:
+					var c_nbs: Array = t_adj[cur_nid]
+					var best_nb: Dictionary = {}
+					var best_dot := 0.35 # only continue along collinear corridor (dot > 0.35)
+					for cnb: Dictionary in c_nbs:
+						var ceid := int(cnb["eid"])
+						if used_eids.has(ceid):
+							continue
+						var d_dot := prev_dir.dot(cnb["dir"] as Vector2)
+						if d_dot > best_dot:
+							best_dot = d_dot
+							best_nb = cnb
+					if best_nb.is_empty():
+						break
+					used_eids[int(best_nb["eid"])] = true
+					cur_nid = int(best_nb["to"])
+					chain_nids.append(cur_nid)
+					chain_s.append(chain_s[chain_s.size() - 1] + float(best_nb["len"]))
+					prev_dir = best_nb["dir"]
+				chains.append({"nids": chain_nids, "s": chain_s})
+
+	var locked_nids := {}
+	for ch: Dictionary in chains:
+		var cn: Array[int] = ch["nids"]
+		var cs: Array[float] = ch["s"]
+		if cn.size() < 2:
+			continue
+		var ch_h: Array[float] = []
+		for nid_c: int in cn:
+			ch_h.append(float(node_h[nid_c]))
+		var keep := _rdp_profile_indices(cs, ch_h, 2.1)
+		# Flatten spans with negligible elevation change (<1.1m or <0.3% slope)
+		for ki in range(keep.size() - 1):
+			var i0: int = keep[ki]
+			var i1: int = keep[ki + 1]
+			var ds := maxf(1.0, cs[i1] - cs[i0])
+			var dh := ch_h[i1] - ch_h[i0]
+			if absf(dh) < 1.1 or absf(dh) / ds < 0.003:
+				if locked_nids.has(cn[i0]) and not locked_nids.has(cn[i1]):
+					ch_h[i1] = ch_h[i0]
+				elif locked_nids.has(cn[i1]) and not locked_nids.has(cn[i0]):
+					ch_h[i0] = ch_h[i1]
+				elif not locked_nids.has(cn[i0]) and not locked_nids.has(cn[i1]):
+					var avg_h := (ch_h[i0] + ch_h[i1]) * 0.5
+					ch_h[i0] = avg_h
+					ch_h[i1] = avg_h
+		# Strict uniform-slope linear interpolation between kept control points
+		for ki in range(keep.size() - 1):
+			var i0: int = keep[ki]
+			var i1: int = keep[ki + 1]
+			var s0 := cs[i0]
+			var ds := maxf(0.01, cs[i1] - s0)
+			var h0 := ch_h[i0]
+			var h1 := ch_h[i1]
+			for idx in range(i0, i1 + 1):
+				var u := clampf((cs[idx] - s0) / ds, 0.0, 1.0)
+				node_h[cn[idx]] = lerpf(h0, h1, u)
+				locked_nids[cn[idx]] = true
+
+	# Gentle 4-pass vertical curve rounding at grade break junctions
+	for _it2 in range(4):
+		var next_h2 := node_h.duplicate()
+		for nid: int in nids:
+			var nbs: Array = t_adj[nid]
+			if nbs.size() < 2:
+				continue
+			var sw := 0.0
+			var swh := 0.0
+			for nb: Dictionary in nbs:
+				var w := 1.0 / maxf(15.0, float(nb["len"]))
+				sw += w
+				swh += w * float(node_h[int(nb["to"])])
+			next_h2[nid] = lerpf(float(node_h[nid]), swh / sw, 0.35)
+		node_h = next_h2
+
+	# 4. Stamp graded track corridors onto the terrain grid (_hs and _lf)
+	var touched := {} # cell index k -> [sum_w, sum_wh, min_u]
+	for eid: int in valid_eids:
+		var ed: Dictionary = graph.edges[eid]
+		var pts: Array = ed["pts"]
+		var cum: Array[float] = [0.0]
+		for i in range(1, pts.size()):
+			cum.append(cum[i - 1] + (pts[i] as Vector2).distance_to(pts[i - 1] as Vector2))
+		var L := maxf(cum[cum.size() - 1], 0.01)
+		var ha := float(node_h[int(ed["a"])])
+		var hb := float(node_h[int(ed["b"])])
+		var road_hw := float(ed.get("width", 12.0)) * 0.5
+		if graph.is_quad(eid):
+			road_hw = maxf(road_hw, 11.5)
+		var flat_r := road_hw + 14.0
+		var blend_r := flat_r + 28.0
+		for i in range(pts.size() - 1):
+			var a: Vector2 = pts[i]
+			var b: Vector2 = pts[i + 1]
+			var seg_v := b - a
+			var seg_l := seg_v.length()
+			var seg_dir := seg_v / seg_l if seg_l > 0.001 else Vector2(1.0, 0.0)
+			var mn := a.min(b) - Vector2(blend_r, blend_r)
+			var mx := a.max(b) + Vector2(blend_r, blend_r)
+			var j0 := clampi(int(floor((mn.y - _z0) / _cell)), 0, _h - 1)
+			var j1 := clampi(int(ceil((mx.y - _z0) / _cell)), 0, _h - 1)
+			var i0 := clampi(int(floor((mn.x - _x0) / _cell)), 0, _w - 1)
+			var i1 := clampi(int(ceil((mx.x - _x0) / _cell)), 0, _w - 1)
+			for j in range(j0, j1 + 1):
+				var cz := _z0 + float(j) * _cell
+				for ii in range(i0, i1 + 1):
+					var c := Vector2(_x0 + float(ii) * _cell, cz)
+					var q := Geometry2D.get_closest_point_to_segment(c, a, b)
+					var d := c.distance_to(q)
+					if d > blend_r:
+						continue
+					var proj := clampf((c - a).dot(seg_dir), 0.0, seg_l)
+					var t := clampf(cum[i] + proj, 0.0, L)
+					var h_t := lerpf(ha, hb, t / L)
+					var eff_d := maxf(0.0, d - road_hw * 0.6)
+					var w := 1.0 / (eff_d * eff_d * eff_d + 0.04)
+					var u := clampf((d - flat_r) / (blend_r - flat_r), 0.0, 1.0)
+					var k := j * _w + ii
+					if touched.has(k):
+						var cur_t: Array = touched[k]
+						cur_t[0] = float(cur_t[0]) + w
+						cur_t[1] = float(cur_t[1]) + w * h_t
+						cur_t[2] = minf(float(cur_t[2]), u)
+					else:
+						touched[k] = [w, w * h_t, u]
+
+	for k: int in touched.keys():
+		var info: Array = touched[k]
+		var h_trk := float(info[1]) / maxf(1e-6, float(info[0]))
+		var u := float(info[2])
+		var s_u := u * u * (3.0 - 2.0 * u)
+		var h_raw := _hs_raw[k] + _lf_raw[k]
+		var h_final := lerpf(h_trk, h_raw, s_u)
+		if _wl[k] > -1e5:
+			_hs[k] = minf(_hs_raw[k], _wl[k] - 1.2)
+			_lf[k] = maxf(0.0, h_final - _hs[k])
+		else:
+			_hs[k] = h_final
+			_lf[k] = 0.0
+	return true
+
+
+static func _rdp_profile_indices(s_arr: Array[float], h_arr: Array[float], tol: float) -> Array[int]:
+	var n := s_arr.size()
+	if n <= 2:
+		var out_s: Array[int] = []
+		for i in range(n):
+			out_s.append(i)
+		return out_s
+	var keep_flags := PackedByteArray()
+	keep_flags.resize(n)
+	keep_flags.fill(0)
+	keep_flags[0] = 1
+	keep_flags[n - 1] = 1
+	var stack: Array[Vector2i] = [Vector2i(0, n - 1)]
+	while not stack.is_empty():
+		var seg: Vector2i = stack.pop_back()
+		var ia := seg.x
+		var ib := seg.y
+		if ib - ia <= 1:
+			continue
+		var sa := s_arr[ia]
+		var sb := s_arr[ib]
+		var ds := maxf(0.01, sb - sa)
+		var ha := h_arr[ia]
+		var hb := h_arr[ib]
+		var best_err := -1.0
+		var best_idx := -1
+		for i in range(ia + 1, ib):
+			var u := clampf((s_arr[i] - sa) / ds, 0.0, 1.0)
+			var h_line := lerpf(ha, hb, u)
+			var err := absf(h_arr[i] - h_line)
+			if err > best_err:
+				best_err = err
+				best_idx = i
+		if best_err > tol and best_idx > ia and best_idx < ib:
+			keep_flags[best_idx] = 1
+			stack.append(Vector2i(ia, best_idx))
+			stack.append(Vector2i(best_idx, ib))
+	var out: Array[int] = []
+	for i in range(n):
+		if keep_flags[i] != 0:
+			out.append(i)
+	return out
 
 
 # Level of a water polygon: the elevation data holds lakes as flat surfaces (their lowest value); the sea
@@ -319,6 +629,20 @@ static func lift_station_view(sv: Dictionary) -> void:
 				lift_station_view(t)
 
 
+# Drape a world-space SurfaceTool in CPU RAM before uploading to RenderingServer (safe & instant on worker threads)
+static func commit_draped(st: SurfaceTool, mi: MeshInstance3D = null) -> ArrayMesh:
+	if not active:
+		return st.commit()
+	var arr := st.commit_to_arrays()
+	var out := ArrayMesh.new()
+	if not arr.is_empty() and arr[Mesh.ARRAY_VERTEX] != null:
+		arr[Mesh.ARRAY_VERTEX] = _lift_verts(arr[Mesh.ARRAY_VERTEX])
+		out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+	if mi != null:
+		mi.set_meta("on_terrain", true)
+	return out
+
+
 # Every vertex follows the ground under it (mesh in its node's local frame `xf`)
 static func drape_mesh(mesh: Mesh, xf: Transform3D = Transform3D.IDENTITY) -> Mesh:
 	var out := ArrayMesh.new()
@@ -430,9 +754,16 @@ static func _split_span(a: Vector2, b: Vector2, ha: float, hb: float, min_step: 
 static func build_ground(parent: Node3D, bounds: Array, mat: Material, step_cells: int = 1) -> void:
 	if not active:
 		return
+	var old := parent.get_node_or_null("TerrainGround")
+	if old != null:
+		parent.remove_child(old)
+		old.queue_free()
 	var holder := Node3D.new()
 	holder.name = "TerrainGround"
 	holder.set_meta("on_terrain", true)
+	holder.set_meta("bounds", bounds)
+	holder.set_meta("mat", mat)
+	holder.set_meta("step_cells", step_cells)
 	parent.add_child(holder)
 	var x_lo := maxf(float(bounds[0]) - 300.0, _x0)
 	var z_lo := maxf(float(bounds[1]) - 300.0, _z0)
@@ -455,12 +786,21 @@ static func build_ground(parent: Node3D, bounds: Array, mat: Material, step_cell
 				mi.material_override = mat
 				mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 				if lod == 0:
-					mi.visibility_range_end = 1500.0
+					mi.visibility_range_end = 600.0
 				else:
-					mi.visibility_range_begin = 1500.0
+					mi.visibility_range_begin = 600.0
 				holder.add_child(mi)
 			cz0 += chunk_m
 		cx0 += chunk_m
+
+
+static func rebuild_ground(parent: Node3D) -> void:
+	if not active or parent == null:
+		return
+	var holder := parent.get_node_or_null("TerrainGround")
+	if holder == null or not holder.has_meta("bounds"):
+		return
+	build_ground(parent, holder.get_meta("bounds"), holder.get_meta("mat"), int(holder.get_meta("step_cells", 1)))
 
 
 static func _ground_chunk(x0: float, z0: float, x1: float, z1: float, step: float, centre: Vector3) -> ArrayMesh:

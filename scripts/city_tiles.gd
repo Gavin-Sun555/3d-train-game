@@ -17,6 +17,9 @@ var on_tile_built: Callable # main: (tile_root: Node3D) -> void (clearance, kerb
 
 var _mats := {}
 var _tiles := {} # Vector2i -> {"data": Dictionary, "sig": int, "built_sig": int, "node": Node3D}
+var _clear_idx := {}
+var _station_bays: Array = []
+var track_ctx_ver := 0
 var _task_id := -1
 var _task_key := Vector2i.ZERO
 var _task_sig := 0
@@ -24,7 +27,9 @@ var _task_result: Node3D = null
 # Real terrain: a finished tile is draped on the main thread (reading meshes back from the RenderingServer is
 # instant there, but waits a frame per call on a worker), a few milliseconds per frame, then swapped in
 var _drape := {} # {"key", "node", "sig", "queue": Array[Node]} while one is in progress
-const DRAPE_BUDGET_MS := 4.0
+const DRAPE_BUDGET_MS := 2.0
+var _swap_cooldown := 0
+const SWAP_COOLDOWN_FRAMES := 4
 
 
 static func has_tiles(map_data: Dictionary) -> bool:
@@ -130,6 +135,27 @@ func setup(map_data: Dictionary, mats: Dictionary) -> void:
 	_mats = mats
 	core_rect = core_rect_of(map_data)
 	update_data(map_data)
+
+
+# Snapshot track clearance & station bays so worker threads bake kerb bays + track clearance off the main thread!
+func set_track_context(clear_idx: Dictionary, bays: Array) -> void:
+	_clear_idx = clear_idx
+	_station_bays = bays.duplicate(false)
+	track_ctx_ver += 1
+	if not clear_idx.is_empty():
+		CityBuilder._touched_tiles(clear_idx, _station_bays) # pre-populate _touched_tiles cache on main thread
+
+
+static func _bays_near_key(key: Vector2i, bays: Array) -> Array:
+	if bays.is_empty():
+		return []
+	var out: Array = []
+	var r := Rect2(Vector2(float(key.x), float(key.y)) * TILE, Vector2(TILE, TILE)).grow(60.0)
+	for bay: Dictionary in bays:
+		var bp: Vector3 = bay["pos"]
+		if r.has_point(Vector2(bp.x, bp.z)):
+			out.append(bay)
+	return out
 
 
 # Re-cut the (possibly edited) map into tiles; tiles whose content changed are queued for a rebuild
@@ -304,7 +330,7 @@ static func _data_sig(td: Dictionary) -> int:
 		h = hash([h, _road_key(r), int(r.get("lanes_f", 1)), int(r.get("lanes_b", 1)), int(r.get("lv", 0))])
 	for r2: Dictionary in td["context"]:
 		h = hash([h, _road_key(r2)])
-	h = hash([h, (td["crosswalks"] as Array).size(), (td["storefronts"] as Array).size(), (td["streetlamps"] as Array).size(), (td["piers"] as Array).size(), (td["fills"] as Array).size(), (td["freeways"] as Array).size()])
+	h = hash([h, Terrain._graded_sig, (td["crosswalks"] as Array).size(), (td["storefronts"] as Array).size(), (td["streetlamps"] as Array).size(), (td["piers"] as Array).size(), (td["fills"] as Array).size(), (td["freeways"] as Array).size()])
 	return h
 
 
@@ -318,7 +344,13 @@ static func _road_key(r: Dictionary) -> Array:
 
 
 # Builds one tile's subtree off the scene tree (runs on a worker thread)
-static func build_tile_node(td: Dictionary, mats: Dictionary) -> Node3D:
+static func build_tile_node(
+	td: Dictionary,
+	mats: Dictionary,
+	bays: Array = [],
+	clear_idx: Dictionary = {},
+	ctx_ver: int = -1
+) -> Node3D:
 	var key: Vector2i = td["key"]
 	var root := Node3D.new()
 	root.name = "Tile_%d_%d" % [key.x, key.y]
@@ -332,7 +364,7 @@ static func build_tile_node(td: Dictionary, mats: Dictionary) -> Node3D:
 			root.set_meta("shop_mat", shop_mat)
 	var roads: Array = td["roads"]
 	if not roads.is_empty():
-		CityBuilder._build_roads_and_curbs(root, roads + (td["context"] as Array), td["crosswalks"], mats["road"], roads.size())
+		CityBuilder._build_roads_and_curbs(root, roads + (td["context"] as Array), td["crosswalks"], mats["road"], roads.size(), bays)
 		FreewayBuilder.build_street_bridges(root, roads)
 	if not (td["freeways"] as Array).is_empty():
 		FreewayBuilder.build(root, td["freeways"], mats["road"])
@@ -350,6 +382,9 @@ static func build_tile_node(td: Dictionary, mats: Dictionary) -> Node3D:
 		}, lights, mats["globe"])
 	if not (td["piers"] as Array).is_empty():
 		SeattleV2Landmarks._piers(root, td["piers"])
+	if ctx_ver >= 0 and not clear_idx.is_empty():
+		CityBuilder.apply_track_clearance(root, clear_idx, bays)
+		root.set_meta("clear_ctx_ver", ctx_ver)
 	root.set_meta("lights", lights)
 	_apply_visibility_ranges(root)
 	return root
@@ -390,28 +425,35 @@ static func _apply_visibility_ranges(n: Node) -> void:
 			_apply_visibility_ranges(ch)
 
 
-func _thread_build(td: Dictionary) -> void:
-	_task_result = build_tile_node(td, _mats)
+func _thread_build(td: Dictionary, near_bays: Array, clear_idx: Dictionary, ctx_ver: int) -> void:
+	_task_result = build_tile_node(td, _mats, near_bays, clear_idx, ctx_ver)
 
 
 # Called every frame by main: finish the tile in flight, then start the nearest tile that needs building
 func step() -> void:
 	if not _drape.is_empty():
 		_drape_step()
+		return
+	if _swap_cooldown > 0:
+		_swap_cooldown -= 1
+		return
 	if _task_id >= 0:
-		if not WorkerThreadPool.is_task_completed(_task_id) or not _drape.is_empty():
+		if not WorkerThreadPool.is_task_completed(_task_id):
 			return
 		WorkerThreadPool.wait_for_task_completion(_task_id)
 		_task_id = -1
 		_install(_task_key, _task_result, _task_sig)
 		_task_result = null
+		_swap_cooldown = SWAP_COOLDOWN_FRAMES
+		return
 	var key := _next_tile()
 	if key == Vector2i(2147483647, 0):
 		return
 	var t: Dictionary = _tiles[key]
 	_task_key = key
 	_task_sig = int(t["sig"])
-	_task_id = WorkerThreadPool.add_task(_thread_build.bind(t["data"]), false, "city tile")
+	var near_bays := _bays_near_key(key, _station_bays)
+	_task_id = WorkerThreadPool.add_task(_thread_build.bind(t["data"], near_bays, _clear_idx, track_ctx_ver), false, "city tile")
 
 
 func _next_tile() -> Vector2i:
@@ -437,15 +479,33 @@ func _install(key: Vector2i, node: Node3D, sig: int) -> void:
 		node.queue_free()
 		return
 	if Terrain.active and not node.has_meta("on_terrain"):
-		# put it on the ground first (hidden, over the next frames), then swap it in
+		var q: Array = []
+		_collect_drape_queue(node, q)
+		if q.is_empty():
+			node.set_meta("on_terrain", true)
+			_swap_in(key, node, sig)
+			return
+		# put remaining nodes on the ground first (hidden, over the next frames), then swap it in
 		node.visible = false
 		add_child(node)
-		var q: Array = []
-		for ch in node.get_children():
-			q.append(ch)
 		_drape = {"key": key, "node": node, "sig": sig, "queue": q}
 		return
 	_swap_in(key, node, sig)
+
+
+static func _collect_drape_queue(parent: Node, q: Array) -> void:
+	for ch in parent.get_children():
+		if ch.has_meta("on_terrain"):
+			continue
+		if ch.get_class() == "Node3D":
+			var n3 := ch as Node3D
+			if n3.get_child_count() == 0:
+				continue
+			if n3.has_meta("drape_vertices") or n3.transform.origin.length_squared() < 0.01:
+				n3.set_meta("on_terrain", true)
+				_collect_drape_queue(n3, q)
+				continue
+		q.append(ch)
 
 
 func _drape_step(budget_ms: float = DRAPE_BUDGET_MS) -> void:
@@ -462,7 +522,6 @@ func _drape_step(budget_ms: float = DRAPE_BUDGET_MS) -> void:
 		_drape = {}
 		node.set_meta("on_terrain", true)
 		if is_instance_valid(node):
-			remove_child(node)
 			_swap_in(key, node, sig)
 
 
@@ -474,7 +533,8 @@ func _swap_in(key: Vector2i, node: Node3D, sig: int) -> void:
 	var t: Dictionary = _tiles[key]
 	if is_instance_valid(t.get("node")):
 		(t["node"] as Node).queue_free()
-	add_child(node)
+	if node.get_parent() != self:
+		add_child(node)
 	t["node"] = node
 	t["built_sig"] = sig
 	if on_tile_built.is_valid():
@@ -502,7 +562,8 @@ func build_all_now() -> void:
 		if key == Vector2i(2147483647, 0):
 			break
 		var t: Dictionary = _tiles[key]
-		_install(key, build_tile_node(t["data"], _mats), int(t["sig"]))
+		var near_bays := _bays_near_key(key, _station_bays)
+		_install(key, build_tile_node(t["data"], _mats, near_bays, _clear_idx, track_ctx_ver), int(t["sig"]))
 		if not _drape.is_empty():
 			_drape_step(1e9)
 
@@ -517,6 +578,52 @@ func built_count() -> int:
 		if int(t["built_sig"]) == int(t["sig"]):
 			n += 1
 	return n
+
+
+func near_unbuilt_count(center: Vector3, radius_m: float = 1450.0) -> int:
+	var f := Vector2(center.x, center.z)
+	var r2 := radius_m * radius_m
+	var n := 0
+	for key: Vector2i in _tiles.keys():
+		var t: Dictionary = _tiles[key]
+		if int(t["built_sig"]) == int(t["sig"]):
+			continue
+		var c := (Vector2(key) + Vector2(0.5, 0.5)) * TILE
+		if c.distance_squared_to(f) <= r2:
+			n += 1
+	return n
+
+
+# Advance one non-blocking prewarm tick during the loading overlay (no swap cooldown, builds nearest tiles within radius_m).
+# Returns true while prewarming is still in progress, false once all tiles within radius_m are installed.
+func prewarm_step(center: Vector3, radius_m: float = 1450.0) -> bool:
+	focus = center
+	_swap_cooldown = 0
+	if not _drape.is_empty():
+		_drape_step(10.0)
+		return true
+	if _task_id >= 0:
+		if not WorkerThreadPool.is_task_completed(_task_id):
+			return true
+		WorkerThreadPool.wait_for_task_completion(_task_id)
+		_task_id = -1
+		_install(_task_key, _task_result, _task_sig)
+		_task_result = null
+		if not _drape.is_empty():
+			return true
+	var key := _next_tile()
+	if key == Vector2i(2147483647, 0):
+		return false
+	var f := Vector2(center.x, center.z)
+	var c := (Vector2(key) + Vector2(0.5, 0.5)) * TILE
+	if c.distance_squared_to(f) > radius_m * radius_m:
+		return false
+	var t: Dictionary = _tiles[key]
+	_task_key = key
+	_task_sig = int(t["sig"])
+	var near_bays := _bays_near_key(key, _station_bays)
+	_task_id = WorkerThreadPool.add_task(_thread_build.bind(t["data"], near_bays, _clear_idx, track_ctx_ver), false, "city tile")
+	return true
 
 
 func _exit_tree() -> void:

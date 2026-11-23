@@ -211,12 +211,22 @@ static func _quad_local_sep_profile(graph: NetworkGraph, eid: int, curve: Curve3
 	for sid: int in graph.stations.keys():
 		var st: Dictionary = graph.stations[sid]
 		if int(st["edge_id"]) == eid and int(st.get("side", 1)) == 0:
-			islands.append([curve.get_closest_offset(st["pos"] as Vector3), float(st.get("platform_len", 27.0)) * 0.5 + 1.0])
+			islands.append([curve.get_closest_offset(st["pos"] as Vector3), float(st.get("platform_len", 27.0)) * 0.5 + 3.4])
 	# Distance from each end of this edge to the end of the whole four-track section (0 where it ends right here)
 	var ext_a := _quad_run_beyond(graph, eid, na_id, e_sys)
 	var ext_b := _quad_run_beyond(graph, eid, nb_id, e_sys)
 	var section := ext_a + ext_b + (s_end - s_start)
 	var ramp := minf(NetworkGraph.QUAD_MERGE_RAMP, maxf(section * 0.45, 4.0))
+	# Never allow the four-track-to-double-track merge ramp to cut into a twin-island platform!
+	var ramp_a := ramp
+	var ramp_b := ramp
+	for isl_r: Array in islands:
+		var isl_lo := float(isl_r[0]) - float(isl_r[1])
+		var isl_hi := float(isl_r[0]) + float(isl_r[1])
+		if ext_a < NetworkGraph.QUAD_MERGE_RAMP - 0.01:
+			ramp_a = minf(ramp_a, maxf(isl_lo - s_start + ext_a, 4.0))
+		if ext_b < NetworkGraph.QUAD_MERGE_RAMP - 0.01:
+			ramp_b = minf(ramp_b, maxf(s_end - isl_hi + ext_b, 4.0))
 	for i in range(n):
 		var s_i := clen * float(i) / float(maxi(n - 1, 1))
 		var base := xprof[i] + spacing
@@ -224,9 +234,11 @@ static func _quad_local_sep_profile(graph: NetworkGraph, eid: int, curve: Curve3
 		for isl: Array in islands:
 			var d := absf(s_i - float(isl[0])) - float(isl[1])
 			fl = maxf(fl, 1.0 if d <= 0.0 else 1.0 - smoothstep(0.0, NetworkGraph.QUAD_ISLAND_TAPER, d))
-		var v := lerpf(base, maxf(base, NetworkGraph.QUAD_ISLAND_LOCAL_SEP), fl)
-		var w_a := 1.0 if ext_a >= NetworkGraph.QUAD_MERGE_RAMP - 0.01 else smoothstep(0.0, ramp, s_i - s_start + ext_a)
-		var w_b := 1.0 if ext_b >= NetworkGraph.QUAD_MERGE_RAMP - 0.01 else smoothstep(0.0, ramp, s_end - s_i + ext_b)
+		# Keep full twin-island clearance (6.10m) even when xprof widens on tight curves!
+		var isl_target := xprof[i] + (NetworkGraph.QUAD_ISLAND_LOCAL_SEP - NetworkGraph.DOUBLE_TRACK_HALF_SEP)
+		var v := lerpf(base, maxf(base, isl_target), fl)
+		var w_a := 1.0 if ext_a >= NetworkGraph.QUAD_MERGE_RAMP - 0.01 else smoothstep(0.0, ramp_a, s_i - s_start + ext_a)
+		var w_b := 1.0 if ext_b >= NetworkGraph.QUAD_MERGE_RAMP - 0.01 else smoothstep(0.0, ramp_b, s_end - s_i + ext_b)
 		var w := minf(w_a, w_b)
 		out[i] = lerpf(xprof[i], v, w)
 	return out
@@ -319,12 +331,8 @@ static func build_track_clearance_index(graph: NetworkGraph) -> Dictionary:
 		var ss := float(g["s_start"])
 		while ss <= float(g["s_end"]) + 0.001:
 			var tf := sample_track_frame(c, minf(ss, float(g["s_end"])), clen, false)
-			if bool(g["is_double"]):
-				var sp_v := geom_sep_at(g, ss)
-				_clear_add(grid, tf.origin + tf.basis.x * sp_v)
-				_clear_add(grid, tf.origin - tf.basis.x * sp_v)
-			else:
-				_clear_add(grid, tf.origin)
+			for off_c: float in geom_track_offsets(g, ss):
+				_clear_add(grid, tf.origin + tf.basis.x * off_c)
 			ss += 0.5
 		var xo := edge_crossover_span(graph, eid, g)
 		if not xo.is_empty():
@@ -422,13 +430,28 @@ static func track_clearance_dist(idx: Dictionary, p: Vector2) -> float:
 	var cx := int(floor(p.x / CLEAR_CELL))
 	var cz := int(floor(p.y / CLEAR_CELL))
 	var best_sq := 999.0 * 999.0
-	for dx in range(-2, 3):
-		for dz in range(-2, 3):
+	for dx in range(-1, 2):
+		for dz in range(-1, 2):
 			var k := Vector2i(cx + dx, cz + dz)
 			if not grid.has(k):
 				continue
 			for q: Vector2 in (grid[k] as PackedVector2Array):
-				best_sq = minf(best_sq, p.distance_squared_to(q))
+				var d2 := p.distance_squared_to(q)
+				if d2 < best_sq:
+					best_sq = d2
+	if best_sq <= CLEAR_CELL * CLEAR_CELL:
+		return sqrt(best_sq)
+	for dx in range(-2, 3):
+		for dz in range(-2, 3):
+			if dx >= -1 and dx <= 1 and dz >= -1 and dz <= 1:
+				continue
+			var k2 := Vector2i(cx + dx, cz + dz)
+			if not grid.has(k2):
+				continue
+			for q2: Vector2 in (grid[k2] as PackedVector2Array):
+				var d2_2 := p.distance_squared_to(q2)
+				if d2_2 < best_sq:
+					best_sq = d2_2
 	return sqrt(best_sq)
 
 
@@ -1681,26 +1704,27 @@ static func build_network_tracks_and_stations(
 									clip_tfs.append(clip_tf)
 							js_slp += 0.68
 
-	# Commit batched trackbed & rail meshes
+	# Commit batched trackbed & rail meshes (ground-flush trackbeds/rails/wire never need directional shadows)
 	if has_grass:
 		var g_mi := MeshInstance3D.new()
 		g_mi.name = "GrassTrackBed"
 		g_mi.mesh = grass_st.commit()
 		g_mi.material_override = grass_mat
+		g_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(g_mi)
 
 	if has_collar:
-		_commit_mesh(parent, "RailConcreteCollars", collar_st, Color(0.58, 0.56, 0.53), 0.84, 0.0)
+		_commit_mesh(parent, "RailConcreteCollars", collar_st, Color(0.58, 0.56, 0.53), 0.84, 0.0, false)
 	if has_lane_mark:
-		_commit_mesh(parent, "TramLaneEdgeDashes", lane_mark_st, Color(0.86, 0.76, 0.34), 0.78, 0.0)
+		_commit_mesh(parent, "TramLaneEdgeDashes", lane_mark_st, Color(0.86, 0.76, 0.34), 0.78, 0.0, false)
 	if has_stone:
-		_commit_mesh(parent, "StoneSlabTrackBed", stone_st, Color(0.56, 0.55, 0.52), 0.84, 0.0)
+		_commit_mesh(parent, "StoneSlabTrackBed", stone_st, Color(0.56, 0.55, 0.52), 0.84, 0.0, false)
 	if has_curb:
-		_commit_mesh(parent, "TrackEdgeCurbs", curb_st, Color(0.70, 0.69, 0.66), 0.80, 0.0)
+		_commit_mesh(parent, "TrackEdgeCurbs", curb_st, Color(0.70, 0.69, 0.66), 0.80, 0.0, false)
 	if has_ballast:
-		_commit_mesh(parent, "BallastTrackBed", bal_st, Color(0.40, 0.39, 0.37), 0.94, 0.0)
+		_commit_mesh(parent, "BallastTrackBed", bal_st, Color(0.40, 0.39, 0.37), 0.94, 0.0, false)
 
-	_commit_mesh(parent, "RailWebFootAndGrooves", dark_rail_st, Color(0.09, 0.085, 0.08), 0.90, 0.05)
+	_commit_mesh(parent, "RailWebFootAndGrooves", dark_rail_st, Color(0.09, 0.085, 0.08), 0.90, 0.05, false)
 
 	var bright_mi := MeshInstance3D.new()
 	bright_mi.name = "PolishedSteelRailHeads"
@@ -1712,54 +1736,35 @@ static func build_network_tracks_and_stations(
 	bright_mat.metallic_specular = 0.95
 	bright_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	bright_mi.material_override = bright_mat
+	bright_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(bright_mi)
 
-	_commit_mesh(parent, "ContactWire", wire_st, Color(0.16, 0.16, 0.16), 0.55, 0.20)
+	_commit_mesh(parent, "ContactWire", wire_st, Color(0.16, 0.16, 0.16), 0.55, 0.20, false)
 
-	_emit_multimesh_boxes(parent, "ConcreteSleepers", sleeper_tfs, Vector3(2.26, 0.056, 0.24), Color(0.68, 0.67, 0.64), 0.84, 0.0)
-	_emit_multimesh_boxes(parent, "PandrolRailClips", clip_tfs, Vector3(0.065, 0.032, 0.14), Color(0.16, 0.15, 0.15), 0.72, 0.0)
+	# Spatially chunk sleepers & Pandrol rail clips so frustum culling + visibility_range eliminate >95% of instances!
+	_emit_chunked_multimesh_boxes(parent, "ConcreteSleepers", sleeper_tfs, Vector3(2.26, 0.056, 0.24), Color(0.68, 0.67, 0.64), 0.84, 240.0, 260.0, false)
+	_emit_chunked_multimesh_boxes(parent, "PandrolRailClips", clip_tfs, Vector3(0.065, 0.032, 0.14), Color(0.16, 0.15, 0.15), 0.72, 75.0, 140.0, false)
 
 	if not bollard_tfs.is_empty():
-		var bmm := MultiMesh.new()
-		bmm.transform_format = MultiMesh.TRANSFORM_3D
 		var cyl := CylinderMesh.new()
 		cyl.top_radius = 0.045; cyl.bottom_radius = 0.052; cyl.height = 0.44; cyl.radial_segments = 8
 		var bol_mat := StandardMaterial3D.new()
 		bol_mat.albedo_color = Color(0.16, 0.22, 0.18); bol_mat.metallic = 0.45; bol_mat.roughness = 0.45
 		cyl.material = bol_mat
-		bmm.mesh = cyl; bmm.instance_count = bollard_tfs.size()
-		for idx in range(bollard_tfs.size()):
-			bmm.set_instance_transform(idx, bollard_tfs[idx])
-		var b_inst := MultiMeshInstance3D.new()
-		b_inst.name = "ROWBollards"; b_inst.multimesh = bmm
-		parent.add_child(b_inst)
+		_emit_chunked_multimesh(parent, "ROWBollards", bollard_tfs, cyl, 220.0, 260.0, false)
 
 	if not mast_tfs.is_empty():
 		var pole_mat := StandardMaterial3D.new()
 		pole_mat.albedo_color = Color(0.20, 0.22, 0.23); pole_mat.metallic = 0.55; pole_mat.roughness = 0.42
 
-		var mmm := MultiMesh.new()
-		mmm.transform_format = MultiMesh.TRANSFORM_3D
 		var mcyl := CylinderMesh.new()
 		mcyl.top_radius = 0.08; mcyl.bottom_radius = 0.115; mcyl.height = 5.35; mcyl.radial_segments = 8
 		mcyl.material = pole_mat
-		mmm.mesh = mcyl; mmm.instance_count = mast_tfs.size()
-		for idx in range(mast_tfs.size()):
-			mmm.set_instance_transform(idx, mast_tfs[idx])
-		var m_inst := MultiMeshInstance3D.new()
-		m_inst.name = "CatenaryMasts"; m_inst.multimesh = mmm
-		parent.add_child(m_inst)
+		_emit_chunked_multimesh(parent, "CatenaryMasts", mast_tfs, mcyl, 460.0, 320.0, true)
 
-		var amm := MultiMesh.new()
-		amm.transform_format = MultiMesh.TRANSFORM_3D
 		var abox := BoxMesh.new()
 		abox.size = Vector3(2.45, 0.065, 0.065); abox.material = pole_mat
-		amm.mesh = abox; amm.instance_count = arm_tfs.size()
-		for idx in range(arm_tfs.size()):
-			amm.set_instance_transform(idx, arm_tfs[idx])
-		var a_inst := MultiMeshInstance3D.new()
-		a_inst.name = "CatenaryArms"; a_inst.multimesh = amm
-		parent.add_child(a_inst)
+		_emit_chunked_multimesh(parent, "CatenaryArms", arm_tfs, abox, 360.0, 320.0, false)
 
 	# Build 3D Wayside Speed Limit Signs & Turnout Switch Indicators ahead of curves & turnouts!
 	_build_wayside_speed_signs(parent, graph, node_built_edges, edge_geoms, clear_idx, st_positions, cjk_font)
@@ -1770,34 +1775,81 @@ static func build_network_tracks_and_stations(
 		var st_d: Dictionary = graph.stations[sid].duplicate()
 		var eid := int(st_d["edge_id"])
 		var bst := int(graph.built_tracks.get(eid, BedStyle.ASPHALT))
-		var sep_st := graph.get_edge_track_half_sep(eid)
+		var geom_st: Dictionary = edge_geoms.get(eid, edge_track_geom(graph, eid))
 		var quad_e := graph.is_quad(eid)
-		if quad_e:
-			sep_st = NetworkGraph.QUAD_LOCAL_HALF_SEP # side platforms stand outside the local tracks
+		var is_dbl_e := graph.is_multi_track(eid)
+		var s_center := 0.0
+		var sep_st := graph.get_edge_track_half_sep(eid)
+		if not geom_st.is_empty():
+			var c_st: Curve3D = geom_st["curve"]
+			var clen_st := float(geom_st["clen"])
+			s_center = c_st.get_closest_offset(st_d["pos"] as Vector3)
+			var tf_st := sample_track_frame(c_st, s_center, clen_st, false)
+			# Anchor station on the exact smoothed track curve (not the coarse street polyline!)
+			st_d["pos"] = tf_st.origin
+			st_d["fwd"] = (-tf_st.basis.z).normalized()
+			if quad_e:
+				sep_st = geom_lsep_at(geom_st, s_center)
+			elif is_dbl_e:
+				sep_st = geom_sep_at(geom_st, s_center)
+			else:
+				sep_st = 0.0
+		elif quad_e:
+			sep_st = NetworkGraph.QUAD_LOCAL_HALF_SEP # fallback if geom missing
 		var st_fwd := (st_d["fwd"] as Vector3).normalized()
 		var st_right := st_fwd.cross(Vector3.UP).normalized()
-		if sep_st > 0.01 and int(st_d["side"]) != 0:
-			st_d["pos"] = (st_d["pos"] as Vector3) + st_right * (float(st_d["side"]) * sep_st)
 		var rtop := rail_top_for_style(bst)
 		if quad_e and int(st_d["side"]) == 0:
-			# Four-track twin islands: one between the express and local track of each direction
+			# Four-track twin islands: one centered between the express and local track of each direction
 			var centre: Vector3 = st_d["pos"]
+			var isl_lat := NetworkGraph.QUAD_ISLAND_CENTER
+			if not geom_st.is_empty():
+				isl_lat = 0.5 * (geom_sep_at(geom_st, s_center) + geom_lsep_at(geom_st, s_center))
 			var twins: Array = []
 			for isl_s: float in [-1.0, 1.0]:
 				var isl_d := st_d.duplicate()
-				isl_d["pos"] = centre + st_right * (isl_s * NetworkGraph.QUAD_ISLAND_CENTER)
-				twins.append(StationBuilder.build_detailed_station(parent, isl_d, rtop, cjk_font, station_lights))
+				isl_d["pos"] = centre + st_right * (isl_s * isl_lat)
+				if not geom_st.is_empty():
+					isl_d["curve_spec"] = {
+						"geom": geom_st,
+						"s_center": s_center,
+						"mode": "quad_twin",
+						"side_sign": isl_s,
+					}
+				var tw_v := StationBuilder.build_detailed_station(parent, isl_d, rtop, cjk_font, station_lights)
+				tw_v["island_sign"] = isl_s
+				twins.append(tw_v)
 			var sv_main: Dictionary = (twins[1] as Dictionary).duplicate()
 			sv_main["twins"] = twins
 			sv_main["waiting_slots"] = _interleave_slots(twins)
 			station_views[sid] = sv_main
 			continue
+		if sep_st > 0.01 and int(st_d["side"]) != 0:
+			st_d["pos"] = (st_d["pos"] as Vector3) + st_right * (float(st_d["side"]) * sep_st)
+		if not geom_st.is_empty():
+			var c_mode := "single"
+			if quad_e:
+				c_mode = "quad_side"
+			elif is_dbl_e:
+				c_mode = "double_island" if int(st_d["side"]) == 0 else "double_side"
+			st_d["curve_spec"] = {
+				"geom": geom_st,
+				"s_center": s_center,
+				"mode": c_mode,
+				"side_sign": float(st_d["side"]),
+			}
 		var sview := StationBuilder.build_detailed_station(parent, st_d, rtop, cjk_font, station_lights)
 		station_views[sid] = sview
 		# Side platforms take the motor lane: cut the kerb back into a tapered bay so traffic shifts outward
 		if int(st_d["side"]) != 0 and not is_monorail_style(bst) and not quad_e:
 			bays.append(station_bay(graph, st_d, sep_st))
 	graph.set_meta("station_bays", bays)
+	var st_curves := {}
+	for sid_c: int in station_views.keys():
+		var sv_c: Dictionary = station_views[sid_c]
+		if sv_c.has("curve_spec") and not (sv_c["curve_spec"] as Dictionary).is_empty():
+			st_curves[sid_c] = sv_c["curve_spec"]
+	graph.set_meta("station_curve_specs", st_curves)
 	_build_buffer_stops(parent, graph, station_lights)
 	_build_monorail_guideways(parent, graph)
 	_build_tram_switches(parent, graph)
@@ -1958,7 +2010,8 @@ static func _commit_mesh(
 	st: SurfaceTool,
 	col: Color,
 	rough: float,
-	metal: float
+	metal: float,
+	cast_sh: bool = true
 ) -> void:
 	var mi := MeshInstance3D.new()
 	mi.name = m_name
@@ -1969,7 +2022,69 @@ static func _commit_mesh(
 	mat.metallic = metal
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mi.material_override = mat
+	if not cast_sh:
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(mi)
+
+
+static func _emit_chunked_multimesh_boxes(
+	parent: Node3D,
+	m_name: String,
+	tfs: Array[Transform3D],
+	sz: Vector3,
+	col: Color,
+	rough: float,
+	vis_end: float,
+	cell_m: float,
+	cast_sh: bool
+) -> void:
+	if tfs.is_empty():
+		return
+	var box := BoxMesh.new()
+	box.size = sz
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = col
+	mat.roughness = rough
+	box.material = mat
+	_emit_chunked_multimesh(parent, m_name, tfs, box, vis_end, cell_m, cast_sh)
+
+
+static func _emit_chunked_multimesh(
+	parent: Node3D,
+	m_name: String,
+	tfs: Array[Transform3D],
+	mesh_res: Mesh,
+	vis_end: float,
+	cell_m: float,
+	cast_sh: bool
+) -> void:
+	if tfs.is_empty():
+		return
+	var buckets := {}
+	for tf: Transform3D in tfs:
+		var ck := Vector2i(int(floor(tf.origin.x / cell_m)), int(floor(tf.origin.z / cell_m)))
+		if not buckets.has(ck):
+			buckets[ck] = []
+		(buckets[ck] as Array).append(tf)
+	var holder := Node3D.new()
+	holder.name = m_name
+	parent.add_child(holder)
+	for ck: Vector2i in buckets.keys():
+		var arr: Array = buckets[ck]
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.mesh = mesh_res
+		mm.instance_count = arr.size()
+		for idx in range(arr.size()):
+			mm.set_instance_transform(idx, arr[idx] as Transform3D)
+		var inst := MultiMeshInstance3D.new()
+		inst.name = "%s_%d_%d" % [m_name, ck.x, ck.y]
+		inst.multimesh = mm
+		if vis_end > 0.0:
+			inst.visibility_range_end = vis_end
+		if not cast_sh:
+			inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		holder.add_child(inst)
 
 
 static func _emit_multimesh_boxes(

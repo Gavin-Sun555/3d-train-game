@@ -9,8 +9,14 @@ const TURNBACK_EXTEND_M := 12.0 # Terminal turnback point beyond the platform ce
 const BUFFER_CLEAR_M := 2.4 # Dead-end tail tracks: usable track ends this far before the rail end (buffer stop)
 const MAX_TAIL_TRACK_M := 90.0
 const ROUTE_SAMPLE_STEP_M := 1.0
-const TERMINAL_HOLD_MARGIN_M := 6.0 # Waiting trams stop this far before the terminal crossover
+const TERMINAL_HOLD_MARGIN_M := 13.0 # Waiting trams stop safely outside the terminal crossover & signal mast
 const ZONE_LABELS := ["正线", "缓弯", "弯道", "急弯", "直向道岔", "侧向道岔"]
+const ZONE_LABELS_EN := ["Mainline", "Gentle Curve", "Curve", "Sharp Curve", "Straight Switch", "Diverging Switch"]
+
+
+static func zone_label(zk: int) -> String:
+	var idx := clampi(zk, 0, ZONE_LABELS.size() - 1)
+	return ZONE_LABELS_EN[idx] if L10n.is_en() else ZONE_LABELS[idx]
 
 enum TrackMode {
 	SINGLE = 0,
@@ -73,6 +79,18 @@ func is_quad_island(sid: int) -> bool:
 var next_station_id := 1
 var next_line_id := 1
 var monorail_seeded := false
+var global_signal_priority := false
+
+func is_line_signal_priority(lid: int) -> bool:
+	if global_signal_priority:
+		return true
+	if not lines.has(lid):
+		return false
+	return bool((lines[lid] as Dictionary).get("signal_priority", false))
+
+func set_line_signal_priority(lid: int, enabled: bool) -> void:
+	if lines.has(lid):
+		(lines[lid] as Dictionary)["signal_priority"] = enabled
 # Player road / land edits on top of the map, replayed in order on load (ids are stored so they never drift):
 #   {op: "node", id, pos} | {op: "edge", id, a, b, pts, width, lf, lb, name, no_cars}
 #   {op: "split", eid, t, nid, eid2} | {op: "remove", eid} | {op: "lanes", eid, lf, lb, width}
@@ -104,6 +122,7 @@ func load_from_map_data(map_data: Dictionary, use_starter: bool = true) -> void:
 	next_station_id = 1
 	next_line_id = 1
 	monorail_seeded = false
+	global_signal_priority = false
 
 	for n_raw in map_data.get("graph_nodes", []):
 		var nid := int(n_raw["id"])
@@ -206,6 +225,7 @@ func export_state() -> Dictionary:
 			"sections": ln["sections"],
 			"station_ids": ln["station_ids"],
 			"express": bool(ln.get("express", false)),
+			"signal_priority": bool(ln.get("signal_priority", false)),
 		})
 
 	return {
@@ -213,6 +233,7 @@ func export_state() -> Dictionary:
 		"stations": st_arr,
 		"lines": ln_arr,
 		"monorail_seeded": monorail_seeded,
+		"global_signal_priority": global_signal_priority,
 		"mono_two_way": true,
 		"road_edits": road_edits.duplicate(true),
 		"demolished_buildings": demolished_buildings.keys(),
@@ -222,6 +243,7 @@ func export_state() -> Dictionary:
 func import_state(state: Dictionary) -> void:
 	clear_player_network()
 	monorail_seeded = bool(state.get("monorail_seeded", false))
+	global_signal_priority = bool(state.get("global_signal_priority", false))
 	# Roads / open-ground track first: tracks and stations refer to their edge ids
 	for op in state.get("road_edits", []):
 		if typeof(op) == TYPE_DICTIONARY:
@@ -284,10 +306,11 @@ func import_state(state: Dictionary) -> void:
 			"name": str(l_item.get("name", "%d号线" % lid)),
 			"color": Color(float(c_arr[0]), float(c_arr[1]), float(c_arr[2])),
 			"model_key": str(l_item.get("model_key", "siemens-s700")),
-			"trams_count": clampi(int(l_item.get("trams_count", 2)), 1, 8),
+			"trams_count": clampi(int(l_item.get("trams_count", 2)), 1, 15),
 			"sections": clampi(int(l_item.get("sections", 3)), 1, 4),
 			"station_ids": sids,
 			"express": bool(l_item.get("express", false)),
+			"signal_priority": bool(l_item.get("signal_priority", false)),
 		}
 		next_line_id = maxi(next_line_id, lid + 1)
 
@@ -479,7 +502,8 @@ func create_line(
 	trams_count: int,
 	sections: int,
 	custom_name: String = "",
-	express: bool = false
+	express: bool = false,
+	signal_priority: bool = false
 ) -> int:
 	if station_ids.size() < 2:
 		return -1
@@ -499,16 +523,17 @@ func create_line(
 		"name": lname,
 		"color": col,
 		"model_key": model_key,
-		"trams_count": clampi(trams_count, 1, 8),
+		"trams_count": clampi(trams_count, 1, 15),
 		"sections": clampi(sections, 1, 4),
 		"station_ids": station_ids.duplicate(),
 		"express": express,
+		"signal_priority": signal_priority,
 	}
 	return lid
 
 
 # Edit an existing line in place (keeps its id, name and colour). False if a station pair has no connecting track.
-func update_line(lid: int, station_ids: Array[int], model_key: String, trams_count: int, sections: int, express: bool = false) -> bool:
+func update_line(lid: int, station_ids: Array[int], model_key: String, trams_count: int, sections: int, express: bool = false, signal_priority: bool = false) -> bool:
 	if not lines.has(lid) or station_ids.size() < 2:
 		return false
 	for i in range(station_ids.size() - 1):
@@ -517,9 +542,10 @@ func update_line(lid: int, station_ids: Array[int], model_key: String, trams_cou
 	var ln: Dictionary = lines[lid]
 	ln["station_ids"] = station_ids.duplicate()
 	ln["model_key"] = model_key
-	ln["trams_count"] = clampi(trams_count, 1, 8)
+	ln["trams_count"] = clampi(trams_count, 1, 15)
 	ln["sections"] = clampi(sections, 1, 4)
 	ln["express"] = express
+	ln["signal_priority"] = signal_priority
 	return true
 
 
@@ -1066,6 +1092,7 @@ func compile_line_route(line_dict: Dictionary, b_platform_sids: Dictionary = {},
 	if all_pts.size() < 2:
 		return {}
 
+	Terrain.grade_for_tracks(self)
 	var raw_arr: Array = []
 	for p: Vector3 in all_pts:
 		raw_arr.append([p.x, p.y + Terrain.surface(p.x, p.z), p.z]) # trains run over the real ground

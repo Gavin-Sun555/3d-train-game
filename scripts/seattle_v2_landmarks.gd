@@ -845,18 +845,22 @@ static func _piers(parent: Node3D, piers: Array) -> void:
 			var nps := int(seg / 4.0)
 			for k in range(nps):
 				var q := a.lerp(b, (float(k) + 0.5) / float(maxi(1, nps)))
-				pile_tfs.append(Transform3D(Basis.IDENTITY, Vector3(q.x, -0.6, q.y)))
+				var py := -0.6 + (Terrain.surface(q.x, q.y) if Terrain.active else 0.0)
+				pile_tfs.append(Transform3D(Basis.IDENTITY, Vector3(q.x, py, q.y)))
 	var deck_mi := MeshInstance3D.new()
 	deck_mi.name = "PierDecks"
-	deck_mi.mesh = st.commit()
+	deck_mi.mesh = Terrain.commit_draped(st, deck_mi)
 	deck_mi.material_override = _plank_mat()
 	deck_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(deck_mi)
 	edge_st.generate_normals()
 	var em := _mat(Color(0.30, 0.25, 0.20), 0.9, 0.0)
 	em.cull_mode = BaseMaterial3D.CULL_DISABLED
-	var edge_mi := _mi(parent, edge_st.commit(), em)
+	var edge_mi := _mi(parent, Terrain.commit_draped(edge_st), em)
 	edge_mi.name = "PierEdgeBeams"
+	edge_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	if Terrain.active:
+		edge_mi.set_meta("on_terrain", true)
 	if not pile_tfs.is_empty():
 		var mm := MultiMesh.new()
 		mm.transform_format = MultiMesh.TRANSFORM_3D
@@ -873,10 +877,18 @@ static func _piers(parent: Node3D, piers: Array) -> void:
 		mmi.name = "PierPiles"
 		mmi.multimesh = mm
 		mmi.material_override = _mat(Color(0.22, 0.18, 0.14), 0.95, 0.0)
+		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		if Terrain.active:
+			mmi.set_meta("on_terrain", true)
 		parent.add_child(mmi)
 
 
+static var _plank_mat_cache: StandardMaterial3D = null
+
+
 static func _plank_mat() -> StandardMaterial3D:
+	if _plank_mat_cache != null:
+		return _plank_mat_cache
 	var img := Image.create(128, 128, false, Image.FORMAT_RGBA8)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 57
@@ -895,6 +907,7 @@ static func _plank_mat() -> StandardMaterial3D:
 	m.albedo_texture = ImageTexture.create_from_image(img)
 	m.roughness = 0.88
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_plank_mat_cache = m
 	return m
 
 

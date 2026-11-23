@@ -363,11 +363,13 @@ static func _build_lake_union_waterfront(
 				(prop_lists["park_lamp"] as Array).append(Transform3D(Basis(Vector3.UP, yaw_lake), Vector3(lp.x, 0.24, lp.y)))
 				if lights.size() < 42 and int(accum_d) % 45 < 16:
 					var om := OmniLight3D.new()
-					om.position = Vector3(lp.x, 4.1, lp.y)
+					om.position = Vector3(lp.x, 4.1 + (Terrain.surface(lp.x, lp.y) if Terrain.active else 0.0), lp.y)
 					om.light_color = Color(1.0, 0.86, 0.62)
 					om.light_energy = 1.6
 					om.omni_range = 19.0
 					om.shadow_enabled = false
+					if Terrain.active:
+						om.set_meta("on_terrain", true)
 					lu_root.add_child(om)
 					lights.append(om)
 				next_lamp_d = accum_d + 22.0
@@ -514,11 +516,13 @@ static func _build_model_boat_pond(
 			(prop_lists[fkey] as Array).append(Transform3D(Basis(Vector3.UP, a), Vector3(fp.x, 0.03, fp.y)))
 	if lights.size() < 46:
 		var om := OmniLight3D.new()
-		om.position = Vector3(center.x, 4.4, center.y)
+		om.position = Vector3(center.x, 4.4 + (Terrain.surface(center.x, center.y) if Terrain.active else 0.0), center.y)
 		om.light_color = Color(1.0, 0.88, 0.66)
 		om.light_energy = 1.8
 		om.omni_range = 24.0
 		om.shadow_enabled = false
+		if Terrain.active:
+			om.set_meta("on_terrain", true)
 		parent.add_child(om)
 		lights.append(om)
 
@@ -576,11 +580,13 @@ static func _build_lake_union_fountain_plaza(
 		(prop_lists["flower_pink" if k % 2 == 0 else "flower_blue"] as Array).append(Transform3D(Basis(Vector3.UP, a), Vector3(fp.x, 0.03, fp.y)))
 	if lights.size() < 48:
 		var om := OmniLight3D.new()
-		om.position = Vector3(center.x, 3.8, center.y)
+		om.position = Vector3(center.x, 3.8 + (Terrain.surface(center.x, center.y) if Terrain.active else 0.0), center.y)
 		om.light_color = Color(0.82, 0.94, 1.0)
 		om.light_energy = 1.6
 		om.omni_range = 20.0
 		om.shadow_enabled = false
+		if Terrain.active:
+			om.set_meta("on_terrain", true)
 		parent.add_child(om)
 		lights.append(om)
 
@@ -878,11 +884,13 @@ static func _build_parks_detail(
 					_add_park_pavilion_into(pav_st, Vector3(plaza_c.x, 0.068, plaza_c.y), _hash01(plaza_c.x, plaza_c.y, 9.0) * PI)
 					if lights.size() < 54:
 						var om := OmniLight3D.new()
-						om.position = Vector3(plaza_c.x, 3.6, plaza_c.y)
+						om.position = Vector3(plaza_c.x, 3.6 + (Terrain.surface(plaza_c.x, plaza_c.y) if Terrain.active else 0.0), plaza_c.y)
 						om.light_color = Color(1.0, 0.86, 0.62)
 						om.light_energy = 1.6
 						om.omni_range = 20.0
 						om.shadow_enabled = false
+						if Terrain.active:
+							om.set_meta("on_terrain", true)
 						parent.add_child(om)
 						lights.append(om)
 				# 4 radial benches + 4 ornamental flowerbeds around focal plaza
@@ -1062,13 +1070,18 @@ static func _emit_park_props(parent: Node3D, prop_lists: Dictionary, globe_mat: 
 			mm.mesh = mesh
 			mm.instance_count = ctfs.size()
 			for i in range(ctfs.size()):
-				mm.set_instance_transform(i, ctfs[i])
+				var ptf: Transform3D = ctfs[i]
+				if Terrain.active:
+					ptf.origin.y += Terrain.surface(ptf.origin.x, ptf.origin.z)
+				mm.set_instance_transform(i, ptf)
 			var mmi := MultiMeshInstance3D.new()
 			mmi.name = "ParkProp_%s_%d_%d" % [key, ck.x, ck.y]
 			mmi.multimesh = mm
 			mmi.material_override = mat_vc
 			mmi.visibility_range_end = 340.0 if key in ["shrub", "park_lamp"] else 260.0
 			mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if key in ["bench", "picnic", "park_lamp"] else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			if Terrain.active:
+				mmi.set_meta("on_terrain", true)
 			holder.add_child(mmi)
 
 		# Glowing lantern globes for park lamps & waterfront bollard lights
@@ -1086,12 +1099,15 @@ static func _emit_park_props(parent: Node3D, prop_lists: Dictionary, globe_mat: 
 			var gy := 3.65 if key == "park_lamp" else 0.92
 			for i in range(tfs.size()):
 				var tf: Transform3D = tfs[i]
-				g_mm.set_instance_transform(i, Transform3D(Basis.IDENTITY, tf.origin + Vector3(0.0, gy, 0.0)))
+				var g_dy := Terrain.surface(tf.origin.x, tf.origin.z) if Terrain.active else 0.0
+				g_mm.set_instance_transform(i, Transform3D(Basis.IDENTITY, tf.origin + Vector3(0.0, gy + g_dy, 0.0)))
 			var g_mmi := MultiMeshInstance3D.new()
 			g_mmi.name = "ParkLampGlobes_%s" % key
 			g_mmi.multimesh = g_mm
 			g_mmi.visibility_range_end = 520.0
 			g_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			if Terrain.active:
+				g_mmi.set_meta("on_terrain", true)
 			holder.add_child(g_mmi)
 
 
@@ -1307,6 +1323,8 @@ static func _build_multi_species_trees(
 		var c_list: Array = chunks[ck]
 		var chunk_node := Node3D.new()
 		chunk_node.name = "TreeChunk_%d_%d" % [ck.x, ck.y]
+		if Terrain.active:
+			chunk_node.set_meta("on_terrain", true)
 		holder.add_child(chunk_node)
 
 		var by_sp := [[], [], [], [], [], []]
@@ -1320,12 +1338,14 @@ static func _build_multi_species_trees(
 			var p2: Vector2 = tr_d["pos"]
 			var sc := float(tr_d["scale"])
 			var yaw := float(tr_d["yaw"])
+			var y_terr := Terrain.surface(p2.x, p2.y) if Terrain.active else 0.0
+			tr_d["y_terr"] = y_terr
 			if bool(tr_d["is_street"]):
-				street_pits.append(Transform3D(Basis(Vector3.UP, yaw), Vector3(p2.x, 0.205, p2.y)))
+				street_pits.append(Transform3D(Basis(Vector3.UP, yaw), Vector3(p2.x, 0.205 + y_terr, p2.y)))
 			if sp == 0:
-				far_conifer_list.append([Transform3D(Basis().scaled(Vector3.ONE * sc), Vector3(p2.x, 5.5 * sc, p2.y)), tr_d["tint"]])
+				far_conifer_list.append([Transform3D(Basis().scaled(Vector3.ONE * sc), Vector3(p2.x, 5.5 * sc + y_terr, p2.y)), tr_d["tint"]])
 			else:
-				far_broad_list.append([Transform3D(Basis().scaled(Vector3.ONE * sc), Vector3(p2.x, 4.4 * sc, p2.y)), tr_d["tint"]])
+				far_broad_list.append([Transform3D(Basis().scaled(Vector3.ONE * sc), Vector3(p2.x, 4.4 * sc + y_terr, p2.y)), tr_d["tint"]])
 
 		# Sidewalk cast-iron grates ONLY for street trees (never inside parks!)
 		if not street_pits.is_empty():
@@ -1338,6 +1358,7 @@ static func _build_multi_species_trees(
 			var pmmi := MultiMeshInstance3D.new()
 			pmmi.name = "TreePits"
 			pmmi.multimesh = pmm
+			pmmi.set_meta("base_tfs", street_pits)
 			pmmi.visibility_range_end = 260.0
 			pmmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 			chunk_node.add_child(pmmi)
@@ -1362,20 +1383,23 @@ static func _build_multi_species_trees(
 			l_mm.mesh = leaf_m
 			l_mm.instance_count = sp_list.size()
 
+			var sp_tfs: Array[Transform3D] = []
 			for k in range(sp_list.size()):
 				var tr_d: Dictionary = sp_list[k]
 				var p2: Vector2 = tr_d["pos"]
 				var sc := float(tr_d["scale"])
 				var yaw := float(tr_d["yaw"])
-				var y_base := 0.20 if bool(tr_d["is_street"]) else 0.02
+				var y_base := (0.20 if bool(tr_d["is_street"]) else 0.02) + float(tr_d.get("y_terr", 0.0))
 				var tf := Transform3D(Basis(Vector3.UP, yaw).scaled(Vector3.ONE * sc), Vector3(p2.x, y_base, p2.y))
 				w_mm.set_instance_transform(k, tf)
 				l_mm.set_instance_transform(k, tf)
 				l_mm.set_instance_color(k, tr_d["tint"] as Color)
+				sp_tfs.append(tf)
 
 			var w_mmi := MultiMeshInstance3D.new()
 			w_mmi.name = "TreeWood_S%d" % sp
 			w_mmi.multimesh = w_mm
+			w_mmi.set_meta("base_tfs", sp_tfs)
 			w_mmi.material_override = bark_mat
 			w_mmi.visibility_range_end = 360.0
 			# Crown casts full canopy shadow onto the ground; skipping interior trunk shadow cuts tree shadow pass in half!
@@ -1385,6 +1409,7 @@ static func _build_multi_species_trees(
 			var l_mmi := MultiMeshInstance3D.new()
 			l_mmi.name = "TreeLeaf_S%d" % sp
 			l_mmi.multimesh = l_mm
+			l_mmi.set_meta("base_tfs", sp_tfs)
 			l_mmi.material_override = foliage_mat
 			l_mmi.visibility_range_end = 360.0
 			l_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
@@ -1397,12 +1422,16 @@ static func _build_multi_species_trees(
 			fb_mm.use_colors = true
 			fb_mm.mesh = far_broad
 			fb_mm.instance_count = far_broad_list.size()
+			var fb_tfs: Array[Transform3D] = []
 			for k in range(far_broad_list.size()):
-				fb_mm.set_instance_transform(k, far_broad_list[k][0])
+				var fbtf: Transform3D = far_broad_list[k][0]
+				fb_mm.set_instance_transform(k, fbtf)
 				fb_mm.set_instance_color(k, far_broad_list[k][1])
+				fb_tfs.append(fbtf)
 			var fb_mmi := MultiMeshInstance3D.new()
 			fb_mmi.name = "FarBroadleaf"
 			fb_mmi.multimesh = fb_mm
+			fb_mmi.set_meta("base_tfs", fb_tfs)
 			fb_mmi.visibility_range_begin = 350.0
 			fb_mmi.visibility_range_end = 2200.0
 			fb_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -1414,12 +1443,16 @@ static func _build_multi_species_trees(
 			fc_mm.use_colors = true
 			fc_mm.mesh = far_conifer
 			fc_mm.instance_count = far_conifer_list.size()
+			var fc_tfs: Array[Transform3D] = []
 			for k in range(far_conifer_list.size()):
-				fc_mm.set_instance_transform(k, far_conifer_list[k][0])
+				var fctf: Transform3D = far_conifer_list[k][0]
+				fc_mm.set_instance_transform(k, fctf)
 				fc_mm.set_instance_color(k, far_conifer_list[k][1])
+				fc_tfs.append(fctf)
 			var fc_mmi := MultiMeshInstance3D.new()
 			fc_mmi.name = "FarConifer"
 			fc_mmi.multimesh = fc_mm
+			fc_mmi.set_meta("base_tfs", fc_tfs)
 			fc_mmi.visibility_range_begin = 350.0
 			fc_mmi.visibility_range_end = 2200.0
 			fc_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -1768,11 +1801,34 @@ static func _add_vc_tri(st: SurfaceTool, v0: Vector3, v1: Vector3, v2: Vector3, 
 
 static func _commit_vc_mesh(parent: Node3D, node_name: String, st: SurfaceTool, rough: float, metal: float, cast_sh: bool) -> void:
 	st.generate_normals()
-	var m := st.commit()
-	if m == null or m.get_surface_count() == 0:
+	var arr := st.commit_to_arrays()
+	if arr.is_empty() or arr[Mesh.ARRAY_VERTEX] == null:
+		return
+	var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+	if verts.is_empty():
 		return
 	var mi := MeshInstance3D.new()
 	mi.name = node_name
+	if Terrain.active:
+		var mn := Vector2(1e9, 1e9)
+		var mx := Vector2(-1e9, -1e9)
+		for v: Vector3 in verts:
+			if v.x < mn.x: mn.x = v.x
+			if v.x > mx.x: mx.x = v.x
+			if v.z < mn.y: mn.y = v.z
+			if v.z > mx.y: mx.y = v.z
+		if maxf(mx.x - mn.x, mx.y - mn.y) <= Terrain._rigid_max:
+			var lo := minf(
+				minf(Terrain.surface(mn.x, mn.y), Terrain.surface(mx.x, mn.y)),
+				minf(Terrain.surface(mn.x, mx.y), Terrain.surface(mx.x, mx.y))
+			)
+			var mid := (mn + mx) * 0.5
+			mi.position.y += minf(lo, Terrain.surface(mid.x, mid.y))
+		else:
+			arr[Mesh.ARRAY_VERTEX] = Terrain._lift_verts(verts)
+		mi.set_meta("on_terrain", true)
+	var m := ArrayMesh.new()
+	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
 	mi.mesh = m
 	var mat := StandardMaterial3D.new()
 	mat.vertex_color_use_as_albedo = true

@@ -93,6 +93,10 @@ const GROCERY := ["convenience", "supermarket", "pharmacy", "chemist", "grocery"
 const OFFICE := ["bank", "hotel", "optician", "hairdresser", "beauty", "tattoo", "dry_cleaning", "storage_rental", "telecommunication", "mobile_phone", "ticket"]
 
 
+static var _frame_mat_cache: StandardMaterial3D = null
+static var _glass_mat_cache: ShaderMaterial = null
+
+
 static func build_storefronts(parent: Node3D, storefronts: Array, buildings: Array) -> ShaderMaterial:
 	if storefronts.is_empty():
 		return null
@@ -102,6 +106,8 @@ static func build_storefronts(parent: Node3D, storefronts: Array, buildings: Arr
 	gst.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var labels := Node3D.new()
 	labels.name = "StorefrontSigns"
+	if Terrain.active:
+		labels.set_meta("on_terrain", true)
 	parent.add_child(labels)
 
 	for sf: Dictionary in storefronts:
@@ -113,24 +119,27 @@ static func build_storefronts(parent: Node3D, storefronts: Array, buildings: Arr
 
 	var f_mi := MeshInstance3D.new()
 	f_mi.name = "StorefrontFrames"
-	f_mi.mesh = fst.commit()
-	var f_mat := StandardMaterial3D.new()
-	f_mat.vertex_color_use_as_albedo = true
-	f_mat.roughness = 0.55
-	f_mat.metallic = 0.25
-	f_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	f_mi.material_override = f_mat
+	f_mi.mesh = Terrain.commit_draped(fst, f_mi)
+	if _frame_mat_cache == null:
+		_frame_mat_cache = StandardMaterial3D.new()
+		_frame_mat_cache.vertex_color_use_as_albedo = true
+		_frame_mat_cache.roughness = 0.55
+		_frame_mat_cache.metallic = 0.25
+		_frame_mat_cache.cull_mode = BaseMaterial3D.CULL_DISABLED
+	f_mi.material_override = _frame_mat_cache
+	f_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(f_mi)
 
-	var g_mat := ShaderMaterial.new()
-	g_mat.shader = load("res://shaders/shopfront_glass.gdshader") as Shader
+	if _glass_mat_cache == null:
+		_glass_mat_cache = ShaderMaterial.new()
+		_glass_mat_cache.shader = load("res://shaders/shopfront_glass.gdshader") as Shader
 	var g_mi := MeshInstance3D.new()
 	g_mi.name = "StorefrontGlazing"
-	g_mi.mesh = gst.commit()
-	g_mi.material_override = g_mat
+	g_mi.mesh = Terrain.commit_draped(gst, g_mi)
+	g_mi.material_override = _glass_mat_cache
 	g_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(g_mi)
-	return g_mat
+	return _glass_mat_cache
 
 
 static func _style_for(sf: Dictionary) -> Dictionary:
@@ -287,6 +296,8 @@ static func _build_one(fst: SurfaceTool, gst: SurfaceTool, labels: Node3D, sf: D
 		var short := name_txt.split(" ")[0] if name_txt.length() > 10 else name_txt
 		for sd: float in [-1.0, 1.0]:
 			var lp := o + U * (bu + sd * 0.045) + N * 0.70 + Vector3.UP * ((by0 + by1) * 0.5)
+			if Terrain.active:
+				lp.y += Terrain.surface(lp.x, lp.z)
 			var lbl := _make_label(short, st["fg"], false)
 			lbl.transform = Transform3D(_face_basis(U * sd), lp)
 			_fit_label(lbl, short, 0.80, 0.5)
@@ -325,7 +336,8 @@ static func _make_label(txt: String, col: Color, letters: bool) -> Label3D:
 	l.modulate = col
 	l.double_sided = false
 	l.shaded = letters
-	l.visibility_range_end = 130.0
+	l.visibility_range_end = 95.0
+	l.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	l.render_priority = 1
 	return l
 
@@ -339,7 +351,10 @@ static func _fit_label(l: Label3D, txt: String, max_w: float, max_h: float) -> v
 
 static func _sign_label(parent: Node3D, pos: Vector3, n: Vector3, txt: String, max_w: float, max_h: float, col: Color, letters: bool) -> void:
 	var l := _make_label(txt, col, letters)
-	l.transform = Transform3D(_face_basis(n), pos)
+	var p := pos
+	if Terrain.active:
+		p.y += Terrain.surface(p.x, p.z)
+	l.transform = Transform3D(_face_basis(n), p)
 	_fit_label(l, txt, max_w, max_h)
 	parent.add_child(l)
 

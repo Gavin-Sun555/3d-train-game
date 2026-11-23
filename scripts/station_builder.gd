@@ -10,7 +10,7 @@ static func build_detailed_station(
 	station_lights: Array[OmniLight3D]
 ) -> Dictionary:
 	var sid := int(st_data.get("id", 1))
-	var st_name := str(st_data.get("name", "电车站"))
+	var st_name := L10n.station_display_name(str(st_data.get("name", L10n.t("电车站", "Tram Station"))))
 	var pos: Vector3 = st_data.get("pos", Vector3.ZERO)
 	var fwd: Vector3 = (st_data.get("fwd", Vector3.FORWARD) as Vector3).normalized()
 	if fwd.length_squared() < 0.001:
@@ -257,6 +257,8 @@ static func build_detailed_station(
 	lbl.outline_modulate = Color(0.06, 0.11, 0.18)
 	lbl.outline_size = 18
 	lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	lbl.visibility_range_end = 480.0
+	lbl.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	lbl.position = Vector3(plat_cx, plat_h + 3.95, 0.0)
 	st_node.add_child(lbl)
 
@@ -270,6 +272,8 @@ static func build_detailed_station(
 	wait_lbl.outline_modulate = Color(0.05, 0.09, 0.14)
 	wait_lbl.outline_size = 14
 	wait_lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	wait_lbl.visibility_range_end = 360.0
+	wait_lbl.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	wait_lbl.position = Vector3(plat_cx, plat_h + 3.45, 0.0)
 	st_node.add_child(wait_lbl)
 
@@ -297,12 +301,28 @@ static func build_detailed_station(
 			var wz_local := lerpf(-slot_span, slot_span, float(col_i) / float(slot_cols - 1)) + float(row_i) * 0.35
 			waiting_slots.append(tf * Vector3(wx_local, plat_h, wz_local))
 
-	var ramp_world := tf * Vector3(plat_cx, 0.04, (plat_len * 0.5 + ramp_len + 1.0))
+	var ramp_local := Vector3(plat_cx, 0.04, (plat_len * 0.5 + ramp_len * 0.85))
 	if elevated:
-		ramp_world = tf * Vector3(stair_x, 0.2, plat_len * 0.5 + stair_run + 1.0)
-	var board_edge_center := tf * Vector3(0.0 if is_island else (inner_edge_x + side * 0.28), plat_h, 0.0)
+		ramp_local = Vector3(stair_x, 0.2, plat_len * 0.5 + stair_run + 1.0)
+	var board_local := Vector3(0.0 if is_island else (inner_edge_x + side * 0.28), plat_h, 0.0)
 	# Top of the stairs / ramp: where arriving passengers step onto the platform deck
-	var plat_entry := tf * Vector3(stair_x if elevated else plat_cx, plat_h, plat_len * 0.5 - 0.6)
+	var entry_local := Vector3(stair_x if elevated else plat_cx, plat_h, plat_len * 0.5 - 0.6)
+
+	var ramp_world := tf * ramp_local
+	var board_edge_center := tf * board_local
+	var plat_entry := tf * entry_local
+
+	var curve_spec: Dictionary = st_data.get("curve_spec", {})
+	if not curve_spec.is_empty():
+		var warped := _curve_conform_station(st_node, tf, curve_spec, is_island, plat_w, plat_len, waiting_slots, ramp_local, entry_local, board_local)
+		if bool(warped.get("applied", false)):
+			waiting_slots = warped["waiting_slots"]
+			ramp_world = warped["ramp_entry"]
+			plat_entry = warped["platform_entry"]
+			board_edge_center = warped["board_edge"]
+
+	# Merge ~200 static box/cylinder pieces per station into ~12 material-batched ArrayMeshes (zero visual loss!)
+	_merge_static_station_meshes(st_node)
 
 	st_node.set_meta("drape_vertices", true) # long platform: bends with the ground (Terrain)
 	return {
@@ -318,9 +338,232 @@ static func build_detailed_station(
 		"ramp_entry": ramp_world,
 		"platform_entry": plat_entry,
 		"board_edge": board_edge_center,
+		"curve_spec": curve_spec,
 		"wait_label": wait_lbl,
 		"name_label": lbl,
 	}
+
+
+# Evaluates the track centerline frame, lateral platform center offset, local curvature throw padding,
+# and available island half-width at station-local longitudinal coordinate `z_local` (-Z = +s along edge).
+static func _eval_curve_station_slice(curve_spec: Dictionary, z_local: float, is_island: bool, plat_w: float) -> Dictionary:
+	var geom: Dictionary = curve_spec["geom"]
+	var curve: Curve3D = geom["curve"]
+	var clen := float(geom["clen"])
+	var s_center := float(curve_spec["s_center"])
+	var mode := str(curve_spec.get("mode", "single"))
+	var side_sign := float(curve_spec.get("side_sign", 1.0))
+
+	var s_raw := s_center - z_local
+	var s_clamped := clampf(s_raw, 0.0, clen)
+	var tf_s := TrackBuilder.sample_track_frame(curve, s_clamped, clen, false)
+	var fwd_s := (-tf_s.basis.z)
+	fwd_s.y = 0.0
+	fwd_s = fwd_s.normalized() if fwd_s.length_squared() > 0.0001 else Vector3.FORWARD
+	var right_s := fwd_s.cross(Vector3.UP).normalized()
+	var origin_s := tf_s.origin + fwd_s * (s_raw - s_clamped)
+	origin_s.y = 0.0
+
+	# Local curvature kappa -> extra lateral throw clearance for curving car ends/mids (prevents clipping!)
+	var sb := clampf(s_clamped - 2.0, 0.0, clen)
+	var sf := clampf(s_clamped + 2.0, 0.0, clen)
+	var chord := sf - sb
+	var curve_pad := 0.0
+	if chord > 0.5:
+		var fb := -TrackBuilder.sample_track_frame(curve, sb, clen, false).basis.z
+		var ff := -TrackBuilder.sample_track_frame(curve, sf, clen, false).basis.z
+		var ang := acos(clampf(fb.normalized().dot(ff.normalized()), -1.0, 1.0))
+		var kappa := ang / chord
+		curve_pad = clampf(6.2 * kappa, 0.0, 0.28)
+
+	var lat_c := 0.0
+	var x_scale := 1.0
+	if mode == "single":
+		lat_c = side_sign * curve_pad
+	elif mode == "double_side":
+		lat_c = side_sign * (TrackBuilder.geom_sep_at(geom, s_clamped) + curve_pad)
+	elif mode == "quad_side":
+		lat_c = side_sign * (TrackBuilder.geom_lsep_at(geom, s_clamped) + curve_pad)
+	elif mode == "double_island":
+		lat_c = 0.0
+		var avail_hw := TrackBuilder.geom_sep_at(geom, s_clamped) - (1.46 + curve_pad)
+		if avail_hw < plat_w * 0.5:
+			x_scale = clampf(avail_hw / maxf(plat_w * 0.5, 0.1), 0.62, 1.0)
+	elif mode == "quad_twin":
+		var sp := TrackBuilder.geom_sep_at(geom, s_clamped)
+		var lsp := TrackBuilder.geom_lsep_at(geom, s_clamped)
+		lat_c = side_sign * 0.5 * (sp + lsp)
+		var avail_hw_q := 0.5 * (lsp - sp) - (1.46 + curve_pad)
+		if avail_hw_q < plat_w * 0.5:
+			x_scale = clampf(avail_hw_q / maxf(plat_w * 0.5, 0.1), 0.62, 1.0)
+	return {
+		"origin": origin_s,
+		"right": right_s,
+		"fwd": fwd_s,
+		"lat_c": lat_c,
+		"x_scale": x_scale,
+		"curve_pad": curve_pad,
+	}
+
+
+# Bends a station's platform slab, coping, tactile strips, shelter roof, windscreens, ramps, props and waiting slots
+# along curved or widened track edges so the platform edge NEVER overlaps or clips into curved steel rails!
+static func _curve_conform_station(
+	st_node: Node3D,
+	tf_base: Transform3D,
+	curve_spec: Dictionary,
+	is_island: bool,
+	plat_w: float,
+	plat_len: float,
+	orig_slots: Array[Vector3],
+	ramp_local: Vector3,
+	entry_local: Vector3,
+	board_local: Vector3
+) -> Dictionary:
+	var half_span := plat_len * 0.5 + 4.5
+	var max_dev := 0.0
+	var need_conform := false
+	for k in range(13):
+		var zt := lerpf(-half_span, half_span, float(k) / 12.0)
+		var sl := _eval_curve_station_slice(curve_spec, zt, is_island, plat_w)
+		var w_curved := (sl["origin"] as Vector3) + (sl["right"] as Vector3) * float(sl["lat_c"])
+		var w_straight := tf_base * Vector3(0.0, 0.0, zt)
+		w_straight.y = 0.0
+		var dev := w_curved.distance_to(w_straight)
+		if dev > max_dev:
+			max_dev = dev
+		if float(sl["x_scale"]) < 0.995 or float(sl["curve_pad"]) > 0.02:
+			need_conform = true
+	if max_dev <= 0.025 and not need_conform:
+		return {"applied": false}
+
+	var st_inv := tf_base.affine_inverse()
+	var fwd0 := (-tf_base.basis.z)
+	fwd0.y = 0.0
+	fwd0 = fwd0.normalized() if fwd0.length_squared() > 0.0001 else Vector3.FORWARD
+
+	var map_world := func(p_local: Vector3) -> Vector3:
+		var sl := _eval_curve_station_slice(curve_spec, p_local.z, is_island, plat_w)
+		var lx_eff := p_local.x * float(sl["x_scale"]) if is_island else p_local.x
+		return (sl["origin"] as Vector3) + (sl["right"] as Vector3) * (float(sl["lat_c"]) + lx_eff) + Vector3(0.0, p_local.y, 0.0)
+
+	var yaw_delta_at := func(z_l: float) -> float:
+		var sl := _eval_curve_station_slice(curve_spec, z_l, is_island, plat_w)
+		var fs: Vector3 = sl["fwd"]
+		return atan2(fwd0.cross(fs).y, fwd0.dot(fs))
+
+	for child in st_node.get_children():
+		if child is MeshInstance3D:
+			var mi := child as MeshInstance3D
+			if mi.mesh is BoxMesh and (mi.mesh as BoxMesh).size.z > 1.6:
+				var src_box := mi.mesh as BoxMesh
+				var tmp_box := BoxMesh.new()
+				tmp_box.size = src_box.size
+				tmp_box.subdivide_depth = clampi(int(ceil(src_box.size.z / 1.0)), 4, 72)
+				var arrs := tmp_box.get_mesh_arrays()
+				var verts: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX]
+				var norms: PackedVector3Array = arrs[Mesh.ARRAY_NORMAL]
+				var xform := mi.transform
+				var n_basis := xform.basis.orthonormalized()
+				for vi in range(verts.size()):
+					var p_st := xform * verts[vi]
+					var dyaw: float = yaw_delta_at.call(p_st.z)
+					verts[vi] = st_inv * (map_world.call(p_st) as Vector3)
+					if vi < norms.size():
+						var n_st := (n_basis * norms[vi]).normalized()
+						norms[vi] = (Basis(Vector3.UP, dyaw) * n_st).normalized()
+				arrs[Mesh.ARRAY_VERTEX] = verts
+				arrs[Mesh.ARRAY_NORMAL] = norms
+				var am := ArrayMesh.new()
+				am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrs)
+				if src_box.material != null:
+					am.surface_set_material(0, src_box.material)
+				mi.mesh = am
+				mi.transform = Transform3D.IDENTITY
+			else:
+				var p0 := mi.position
+				var dyaw_p: float = yaw_delta_at.call(p0.z)
+				mi.position = st_inv * (map_world.call(p0) as Vector3)
+				mi.basis = Basis(Vector3.UP, dyaw_p) * mi.basis
+		elif child is Node3D:
+			var n3 := child as Node3D
+			var p0 := n3.position
+			var dyaw_n: float = yaw_delta_at.call(p0.z)
+			n3.position = st_inv * (map_world.call(p0) as Vector3)
+			if n3 is Label3D and (n3 as Label3D).billboard == BaseMaterial3D.BILLBOARD_DISABLED:
+				n3.basis = Basis(Vector3.UP, dyaw_n) * n3.basis
+
+	var new_slots: Array[Vector3] = []
+	for ws: Vector3 in orig_slots:
+		var ls := st_inv * ws
+		new_slots.append(map_world.call(ls) as Vector3)
+	return {
+		"applied": true,
+		"waiting_slots": new_slots,
+		"ramp_entry": map_world.call(ramp_local) as Vector3,
+		"platform_entry": map_world.call(entry_local) as Vector3,
+		"board_edge": map_world.call(board_local) as Vector3,
+	}
+
+
+static func _merge_static_station_meshes(st_node: Node3D) -> void:
+	# Group static MeshInstance3D children by (material_id, cast_shadow, lod_tier)
+	var groups := {} # key -> {"mat": Material, "cast_sh": bool, "vis": float, "items": Array[MeshInstance3D]}
+	var to_remove: Array[MeshInstance3D] = []
+	for ch in st_node.get_children():
+		if not (ch is MeshInstance3D):
+			continue
+		var mi := ch as MeshInstance3D
+		if mi.mesh == null or mi.get_child_count() > 0:
+			continue
+		var mat: Material = mi.material_override
+		if mat == null and mi.mesh.get_surface_count() > 0:
+			mat = mi.mesh.surface_get_material(0)
+		var cast_sh := mi.cast_shadow != GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var vis_e := mi.visibility_range_end
+		var tier := 1 if (vis_e <= 0.0 or vis_e >= 450.0) else 0
+		var mat_id := mat.get_instance_id() if mat != null else 0
+		var gk := "%d_%d_%d" % [mat_id, 1 if cast_sh else 0, tier]
+		if not groups.has(gk):
+			groups[gk] = {"mat": mat, "cast_sh": cast_sh, "vis": vis_e, "items": []}
+		var g: Dictionary = groups[gk]
+		(g["items"] as Array).append(mi)
+		if vis_e <= 0.0 or (float(g["vis"]) > 0.0 and vis_e > float(g["vis"])):
+			g["vis"] = vis_e
+		to_remove.append(mi)
+
+	if to_remove.is_empty():
+		return
+
+	var b_idx := 0
+	for gk: String in groups.keys():
+		var g: Dictionary = groups[gk]
+		var items: Array = g["items"]
+		var st := SurfaceTool.new()
+		st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		var appended := 0
+		for mi: MeshInstance3D in items:
+			var m_src := mi.mesh
+			if m_src.get_surface_count() <= 0:
+				continue
+			st.append_from(m_src, 0, mi.transform)
+			appended += 1
+		if appended == 0:
+			continue
+		var merged := MeshInstance3D.new()
+		merged.name = "Batch_%d" % b_idx
+		b_idx += 1
+		merged.mesh = st.commit()
+		if g["mat"] != null:
+			merged.material_override = g["mat"]
+		merged.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if bool(g["cast_sh"]) else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		if float(g["vis"]) > 0.0:
+			merged.visibility_range_end = float(g["vis"])
+		st_node.add_child(merged)
+
+	for old_mi: MeshInstance3D in to_remove:
+		st_node.remove_child(old_mi)
+		old_mi.queue_free()
 
 
 static func _mat(col: Color, rough: float, metal: float) -> StandardMaterial3D:
@@ -348,6 +591,11 @@ static func _box(parent: Node3D, sz: Vector3, pos: Vector3, mat: Material) -> Me
 	b.material = mat
 	mi.mesh = b
 	mi.position = pos
+	var max_dim := maxf(sz.x, maxf(sz.y, sz.z))
+	var min_dim := minf(sz.x, minf(sz.y, sz.z))
+	mi.visibility_range_end = 750.0 if max_dim >= 4.0 else (360.0 if max_dim >= 1.5 else 220.0)
+	if max_dim < 1.5 or min_dim <= 0.06:
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(mi)
 	return mi
 
@@ -362,6 +610,9 @@ static func _cyl(parent: Node3D, radius: float, h: float, pos: Vector3, mat: Mat
 	c.material = mat
 	mi.mesh = c
 	mi.position = pos
+	mi.visibility_range_end = 550.0 if h >= 2.0 else 240.0
+	if h < 2.0 or radius <= 0.05:
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(mi)
 	return mi
 
@@ -449,6 +700,8 @@ static func _label(parent: Node3D, txt: String, pos: Vector3, rot_y_deg: float, 
 	l.modulate = col
 	l.outline_size = 0
 	l.double_sided = false
+	l.visibility_range_end = 220.0
+	l.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	l.position = pos
 	l.rotation_degrees = Vector3(0.0, rot_y_deg, 0.0)
 	parent.add_child(l)

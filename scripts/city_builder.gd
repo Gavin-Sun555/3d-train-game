@@ -1,6 +1,9 @@
 class_name CityBuilder
 extends RefCounted
 
+static var _curb_mat_cache: StandardMaterial3D = null
+static var _sidewalk_mat_cache: ShaderMaterial = null
+
 
 static func build_city(
 	parent: Node3D,
@@ -89,6 +92,21 @@ static func build_city(
 	return lm_info
 
 
+# Player edits / track grading: rebuild core non-water area fills (parks, plazas, brick squares) on current terrain
+static func rebuild_area_layer(parent: Node3D, areas: Array) -> void:
+	for nm: String in ["ParkAreas", "PlazaAreas", "BrickPlazas"]:
+		var old := parent.get_node_or_null(nm)
+		if old != null:
+			parent.remove_child(old)
+			old.queue_free()
+	var non_water: Array = []
+	for a in areas:
+		if str((a as Dictionary).get("kind", "")) != "water":
+			non_water.append(a)
+	if not non_water.is_empty():
+		_build_areas(parent, non_water)
+
+
 # Player edits: rebuild only the street surface (asphalt, markings, kerbs, sidewalks, furniture)
 static func rebuild_road_layer(parent: Node3D, roads: Array, crosswalks: Array, road_mat: ShaderMaterial) -> void:
 	for nm: String in ["Roads", "RoadMarkings", "RoadCentreLines"]:
@@ -151,7 +169,7 @@ static func _build_areas(parent: Node3D, areas: Array) -> void:
 	_emit_area_group(parent, "BrickPlazas", buckets["brick"], 0.034, Color(0.45, 0.27, 0.22), 0.84, 0.0)
 
 
-# Flat triangle; with terrain, split until no edge is longer than 10 m so the later drape bends it over the ground
+# Flat triangle; with terrain, split until no edge is longer than 8 m so the later drape bends smoothly over graded embankments
 static var _tess_flat := false # water: stays one flat sheet
 
 static func _tri_out(st: SurfaceTool, a: Vector2, b: Vector2, c: Vector2, y: float) -> void:
@@ -160,7 +178,7 @@ static func _tri_out(st: SurfaceTool, a: Vector2, b: Vector2, c: Vector2, y: flo
 		var lbc := b.distance_squared_to(c)
 		var lca := c.distance_squared_to(a)
 		var lm := maxf(lab, maxf(lbc, lca))
-		if lm > 256.0:
+		if lm > 64.0:
 			if lm == lab:
 				var m := (a + b) * 0.5
 				_tri_out(st, a, m, c, y)
@@ -239,7 +257,9 @@ static func _emit_area_group(
 	mi.name = node_name
 	if is_water:
 		mi.set_meta("on_terrain", true)
-	mi.mesh = st.commit()
+		mi.mesh = st.commit()
+	else:
+		mi.mesh = Terrain.commit_draped(st, mi)
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = col
 	mat.roughness = rough
@@ -311,7 +331,8 @@ static func _build_roads_and_curbs(
 	roads: Array,
 	crosswalks: Array,
 	road_mat: ShaderMaterial,
-	emit_n: int = -1
+	emit_n: int = -1,
+	bays: Array = []
 ) -> void:
 	if roads.is_empty():
 		return
@@ -531,7 +552,7 @@ static func _build_roads_and_curbs(
 	if has_road:
 		var road_mi := MeshInstance3D.new()
 		road_mi.name = "Roads"
-		road_mi.mesh = road_st.commit()
+		road_mi.mesh = Terrain.commit_draped(road_st, road_mi)
 		road_mi.material_override = road_mat
 		road_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(road_mi)
@@ -539,12 +560,12 @@ static func _build_roads_and_curbs(
 	parent.set_meta("kerb_roads", kerb_src)
 	parent.set_meta("kerb_emit_n", emit_n)
 	parent.set_meta("road_mat", road_mat)
-	_build_kerbs(parent, kerb_src, [], road_mat)
+	_build_kerbs(parent, kerb_src, bays, road_mat)
 
 	if has_mark:
 		var mark_mi := MeshInstance3D.new()
 		mark_mi.name = "RoadMarkings"
-		mark_mi.mesh = mark_st.commit()
+		mark_mi.mesh = Terrain.commit_draped(mark_st, mark_mi)
 		var m_mat := StandardMaterial3D.new()
 		m_mat.albedo_color = Color(0.78, 0.77, 0.73)
 		m_mat.roughness = 0.82
@@ -556,7 +577,7 @@ static func _build_roads_and_curbs(
 	if has_yellow:
 		var y_mi := MeshInstance3D.new()
 		y_mi.name = "RoadCentreLines"
-		y_mi.mesh = yellow_st.commit()
+		y_mi.mesh = Terrain.commit_draped(yellow_st, y_mi)
 		var y_mat := StandardMaterial3D.new()
 		y_mat.albedo_color = Color(0.86, 0.68, 0.18)
 		y_mat.roughness = 0.8
@@ -892,7 +913,8 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 		f_mat.metallic = 0.08
 		f_mat.metallic_specular = 0.28
 		f_mi.material_override = f_mat
-		f_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		# Solid Buildings mesh already casts the full building shadow; skipping mullions/frames cuts millions of shadow tris!
+		f_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(f_mi)
 
 
@@ -1642,13 +1664,22 @@ static func _build_streetlamps(
 
 	var light_holder := Node3D.new()
 	light_holder.name = "StreetlampPools"
+	if Terrain.active:
+		light_holder.set_meta("on_terrain", true)
 	parent.add_child(light_holder)
 
+	var post_tfs: Array[Transform3D] = []
+	var globe_tfs: Array[Transform3D] = []
 	for i in range(count):
 		var lx := float(lamps[i][0])
 		var lz := float(lamps[i][1])
-		post_mm.set_instance_transform(i, Transform3D(Basis.IDENTITY, Vector3(lx, 2.30, lz)))
-		globe_mm.set_instance_transform(i, Transform3D(Basis.IDENTITY, Vector3(lx, 4.72, lz)))
+		var dy := Terrain.surface(lx, lz) if Terrain.active else 0.0
+		var ptf := Transform3D(Basis.IDENTITY, Vector3(lx, 2.30 + dy, lz))
+		var gtf := Transform3D(Basis.IDENTITY, Vector3(lx, 4.72 + dy, lz))
+		post_mm.set_instance_transform(i, ptf)
+		globe_mm.set_instance_transform(i, gtf)
+		post_tfs.append(ptf)
+		globe_tfs.append(gtf)
 
 		# Spaced streetlamps cast warm pools of light at night (disabled in daytime & distance-faded!)
 		if i % 14 == 0:
@@ -1661,19 +1692,25 @@ static func _build_streetlamps(
 			ol.distance_fade_enabled = true
 			ol.distance_fade_begin = 95.0
 			ol.distance_fade_length = 35.0
-			ol.position = Vector3(lx, 4.55, lz)
+			ol.position = Vector3(lx, 4.55 + dy, lz)
 			light_holder.add_child(ol)
 			night_lights.append(ol)
 
 	var p_inst := MultiMeshInstance3D.new()
 	p_inst.name = "StreetlampPosts"
 	p_inst.multimesh = post_mm
+	p_inst.set_meta("base_tfs", post_tfs)
+	if Terrain.active:
+		p_inst.set_meta("on_terrain", true)
 	parent.add_child(p_inst)
 
 	var g_inst := MultiMeshInstance3D.new()
 	g_inst.name = "StreetlampGlobes"
 	g_inst.multimesh = globe_mm
+	g_inst.set_meta("base_tfs", globe_tfs)
 	g_inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	if Terrain.active:
+		g_inst.set_meta("on_terrain", true)
 	parent.add_child(g_inst)
 
 	return night_lights
@@ -1973,24 +2010,45 @@ static func _add_flat_quad(
 		st.add_vertex(v)
 
 
+static func _touched_tiles(clear_idx: Dictionary, bays: Array) -> Dictionary:
+	var base_t: Dictionary = {}
+	if not clear_idx.is_empty():
+		if clear_idx.has("_touched_tiles"):
+			base_t = clear_idx["_touched_tiles"]
+		else:
+			for ck: Vector2i in (clear_idx["grid"] as Dictionary).keys():
+				var cp := (Vector2(ck) + Vector2(0.5, 0.5)) * TrackBuilder.CLEAR_CELL
+				for dx in [-1, 0, 1]:
+					for dz in [-1, 0, 1]:
+						base_t[Vector2i(int(floor((cp.x + dx * 30.0) / CityTiles.TILE)), int(floor((cp.y + dz * 30.0) / CityTiles.TILE)))] = true
+			clear_idx["_touched_tiles"] = base_t
+	if bays.is_empty():
+		return base_t
+	var touched := base_t.duplicate()
+	for bay: Dictionary in bays:
+		var bp: Vector3 = bay["pos"]
+		touched[Vector2i(int(floor(bp.x / CityTiles.TILE)), int(floor(bp.z / CityTiles.TILE)))] = true
+	return touched
+
+
 # Hide streetlamps / street trees that would stand on (or overhang) laid tram track.
 # Re-run after every track rebuild; original transforms are kept in metadata so removed track restores them.
 static func apply_track_clearance(city_root: Node3D, clear_idx: Dictionary, bays: Array = []) -> void:
 	if city_root == null:
 		return
+	var rname := str(city_root.name)
+	if rname.begins_with("Tile_"):
+		var rparts := rname.split("_")
+		if rparts.size() == 3:
+			var rtk := Vector2i(int(rparts[1]), int(rparts[2]))
+			var rhit := _touched_tiles(clear_idx, bays).has(rtk)
+			if not rhit and not bool(city_root.get_meta("clear_hidden", false)):
+				return
+			city_root.set_meta("clear_hidden", rhit)
 	var tiles := city_root.get_node_or_null("CityTiles")
 	if tiles != null:
 		# Only tiles a track or station bay reaches (or that still hide something from before) need a pass
-		var touched := {}
-		if not clear_idx.is_empty():
-			for ck: Vector2i in (clear_idx["grid"] as Dictionary).keys():
-				var cp := (Vector2(ck) + Vector2(0.5, 0.5)) * TrackBuilder.CLEAR_CELL
-				for dx in [-1, 0, 1]:
-					for dz in [-1, 0, 1]:
-						touched[Vector2i(int(floor((cp.x + dx * 30.0) / CityTiles.TILE)), int(floor((cp.y + dz * 30.0) / CityTiles.TILE)))] = true
-		for bay: Dictionary in bays:
-			var bp: Vector3 = bay["pos"]
-			touched[Vector2i(int(floor(bp.x / CityTiles.TILE)), int(floor(bp.z / CityTiles.TILE)))] = true
+		var touched := _touched_tiles(clear_idx, bays)
 		for tile: Node in tiles.get_children():
 			if not (tile is Node3D):
 				continue
@@ -2070,6 +2128,9 @@ static func _clearance_hidden_set(mmi: MultiMeshInstance3D, clear_idx: Dictionar
 static func _apply_hidden(mmi: MultiMeshInstance3D, hidden: Dictionary, group: int) -> void:
 	if mmi == null or mmi.multimesh == null:
 		return
+	if hidden.is_empty() and not bool(mmi.get_meta("has_hidden", false)):
+		return
+	mmi.set_meta("has_hidden", not hidden.is_empty())
 	var base := _base_tfs(mmi)
 	var mm := mmi.multimesh
 	for i in range(base.size()):
@@ -2107,7 +2168,6 @@ static func apply_station_bays(city_root: Node3D, bays: Array) -> void:
 		return
 	city_root.set_meta("last_bays_sig", sig)
 	_build_kerbs(city_root, city_root.get_meta("kerb_roads"), bays, city_root.get_meta("road_mat"))
-	Terrain.drape_subtree(city_root)
 
 
 # Station bays that touch a tile (its kerbs are only rebuilt when one of these changes)
@@ -2294,28 +2354,30 @@ static func _build_kerbs(parent: Node3D, roads: Array, bays: Array, road_mat: Ma
 	if has_curb:
 		var curb_mi := MeshInstance3D.new()
 		curb_mi.name = "GraniteCurbs"
-		curb_mi.mesh = curb_st.commit()
-		var c_mat := StandardMaterial3D.new()
-		c_mat.albedo_color = Color(0.60, 0.59, 0.56)
-		c_mat.roughness = 0.78
-		c_mat.metallic_specular = 0.22
-		c_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-		curb_mi.material_override = c_mat
+		curb_mi.mesh = Terrain.commit_draped(curb_st, curb_mi)
+		if _curb_mat_cache == null:
+			_curb_mat_cache = StandardMaterial3D.new()
+			_curb_mat_cache.albedo_color = Color(0.60, 0.59, 0.56)
+			_curb_mat_cache.roughness = 0.78
+			_curb_mat_cache.metallic_specular = 0.22
+			_curb_mat_cache.cull_mode = BaseMaterial3D.CULL_DISABLED
+		curb_mi.material_override = _curb_mat_cache
 		curb_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(curb_mi)
 		var w_mi := MeshInstance3D.new()
 		w_mi.name = "Sidewalks"
-		w_mi.mesh = walk_st.commit()
-		var w_mat := ShaderMaterial.new()
-		w_mat.shader = load("res://shaders/sidewalk_strip.gdshader") as Shader
-		w_mi.material_override = w_mat
+		w_mi.mesh = Terrain.commit_draped(walk_st, w_mi)
+		if _sidewalk_mat_cache == null:
+			_sidewalk_mat_cache = ShaderMaterial.new()
+			_sidewalk_mat_cache.shader = load("res://shaders/sidewalk_strip.gdshader") as Shader
+		w_mi.material_override = _sidewalk_mat_cache
 		w_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(w_mi)
 		_build_furniture(parent, furn)
 	if has_bay:
 		var bay_mi := MeshInstance3D.new()
 		bay_mi.name = "StationKerbBays"
-		bay_mi.mesh = bay_st.commit()
+		bay_mi.mesh = Terrain.commit_draped(bay_st, bay_mi)
 		bay_mi.material_override = road_mat
 		bay_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(bay_mi)
@@ -2509,13 +2571,18 @@ static func _build_furniture(parent: Node3D, furn: Dictionary) -> void:
 			mm.mesh = _furn_mesh(key)
 			mm.instance_count = ctfs.size()
 			for i in range(ctfs.size()):
-				mm.set_instance_transform(i, ctfs[i])
+				var ftf: Transform3D = ctfs[i]
+				if Terrain.active:
+					ftf.origin.y += Terrain.surface(ftf.origin.x, ftf.origin.z)
+				mm.set_instance_transform(i, ftf)
 			var mmi := MultiMeshInstance3D.new()
 			mmi.name = "Furniture_%s_%d_%d" % [key, ck.x, ck.y]
 			mmi.multimesh = mm
 			mmi.material_override = mat
 			mmi.visibility_range_end = 220.0
 			mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			if Terrain.active:
+				mmi.set_meta("on_terrain", true)
 			root.add_child(mmi)
 
 

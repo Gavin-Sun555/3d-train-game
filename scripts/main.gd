@@ -8,6 +8,14 @@ const BED_STYLE_NAMES := [
 	"碎石工字枕木",
 	"高架单轨梁 (单轨系统)",
 ]
+const BED_STYLE_NAMES_EN := [
+	"Turf Tie-Track",
+	"Asphalt Grooved Rail",
+	"Flush Lawn Track",
+	"Granite Transitway",
+	"Ballasted Timber Ties",
+	"Elevated Monorail Beam",
+]
 
 const MAP_ORDER: Array[String] = ["grid", "seattle"]
 
@@ -16,8 +24,11 @@ const MAP_PRESETS := {
 		"key": "grid",
 		"index": "01",
 		"title": "网格新城",
+		"title_en": "Grid City",
 		"subtitle": "9×9 棋盘街区 · 跨河绿带 · 中央广场",
+		"subtitle_en": "9×9 Grid · River Greenway · Central Plaza",
 		"desc": "规整开阔的 1km² 棋盘街网与滨河绿廊，适合从零规划草皮工字轨、柏油嵌轨与多线换乘。",
+		"desc_en": "Clean 1 km² street grid and river parkway, ideal for planning turf/grooved tracks and multi-line transfers from scratch.",
 		"data_path": "res://data/grid_city.json",
 		"default_target": Vector3(0.0, 0.0, 0.0),
 		"default_height": 560.0,
@@ -26,8 +37,11 @@ const MAP_PRESETS := {
 		"key": "seattle",
 		"index": "02",
 		"title": "西雅图 · 城区",
+		"title_en": "Seattle · Downtown",
 		"subtitle": "市中心 · 联合湖 · 弗里蒙特 · 华盛顿大学 · 国会山 · 体育场区",
+		"subtitle_en": "Downtown · Lake Union · Fremont · UW · Capitol Hill · SODO",
 		"desc": "基于真实 OSM 数据：从弗里蒙特、华盛顿大学到 T-Mobile 球场，约 5 万栋按真实高度与屋顶还原的建筑，高架单轨与湖岸城景。",
+		"desc_en": "Real OSM layout from Fremont & UW to T-Mobile Park: ~50k buildings with real heights & roofs, elevated monorail, and waterfront views.",
 		"data_path": "res://data/seattle_expanded.json",
 		"default_target": Vector3(0.0, 0.0, 120.0),
 		"default_height": 600.0,
@@ -55,6 +69,32 @@ enum BuildTool {
 
 const LANE_CFGS: Array[Vector2i] = [Vector2i(1, 0), Vector2i(2, 0), Vector2i(3, 0), Vector2i(4, 0), Vector2i(1, 1), Vector2i(2, 2), Vector2i(3, 3)]
 const LANE_CFG_LABELS: Array[String] = ["单向1", "单向2", "单向3", "单向4", "双向1+1", "双向2+2", "双向3+3"]
+const LANE_CFG_LABELS_EN: Array[String] = ["1-Way 1", "1-Way 2", "1-Way 3", "1-Way 4", "2-Way 1+1", "2-Way 2+2", "2-Way 3+3"]
+
+
+static func _bed_style_name(idx: int) -> String:
+	var i := clampi(idx, 0, BED_STYLE_NAMES.size() - 1)
+	return BED_STYLE_NAMES_EN[i] if L10n.is_en() else BED_STYLE_NAMES[i]
+
+
+static func _lane_cfg_label(idx: int) -> String:
+	var i := clampi(idx, 0, LANE_CFG_LABELS.size() - 1)
+	return LANE_CFG_LABELS_EN[i] if L10n.is_en() else LANE_CFG_LABELS[i]
+
+
+static func _map_title(map_key: String) -> String:
+	var p: Dictionary = MAP_PRESETS.get(map_key, {})
+	return str(p.get("title_en", p.get("title", map_key))) if L10n.is_en() else str(p.get("title", map_key))
+
+
+static func _map_subtitle(map_key: String) -> String:
+	var p: Dictionary = MAP_PRESETS.get(map_key, {})
+	return str(p.get("subtitle_en", p.get("subtitle", ""))) if L10n.is_en() else str(p.get("subtitle", ""))
+
+
+static func _map_desc(map_key: String) -> String:
+	var p: Dictionary = MAP_PRESETS.get(map_key, {})
+	return str(p.get("desc_en", p.get("desc", ""))) if L10n.is_en() else str(p.get("desc", ""))
 
 enum CamMode {
 	CAB = 0,
@@ -164,17 +204,23 @@ var _plan_model_idx := 0
 var _plan_fleet_count := 3
 var _plan_sections := 2
 var _plan_express := false # 快车：四轨区段走内侧快车道，四轨站优先发车 / 越行慢车
+var _plan_signal_priority := false # 信号优先（TSP）：进路口自动延长绿灯或提前切绿
 var _btn_plan_service: Button
+var _btn_plan_tsp: Button
 var _editing_line_id := -1 # line being edited in the planner (-1: drafting a new line)
 var _draft_insert_idx := -1 # stations clicked on the map go in after this draft index (-1: at the end)
 var _draft_list_vbox: VBoxContainer
 var _btn_commit_line: Button
 var _btn_cancel_edit: Button
 
-# Time of day (continuous 0..24h)
+# Time of day (continuous 0..24h) & Weather
 var _time_hours := 13.5
 var _night_factor := 0.0
 var _updating_slider := false
+var _weather_mode: int = WeatherSystem.WeatherType.SUNNY
+var _weather: WeatherSystem
+var _btn_weather: Button
+var _settings_weather_btns: Array[Button] = []
 
 # Camera state
 var _cam_mode: int = CamMode.CHASE
@@ -251,12 +297,23 @@ var _lines_list_vbox: VBoxContainer
 
 var _run_top_panel: PanelContainer
 var _cam_panel: PanelContainer
+var _cam_btns: Array[Button] = []
 var _drv_panel: PanelContainer
 var _lbl_net_stats: Label
 var _lbl_tram_info: Label
 var _lbl_station_next: Label
 var _lbl_hazard_hint: Label
 var _btn_pax_rate: Button
+var _ui_canvas: CanvasLayer
+var _ai_style_btns: Array[Button] = []
+var _line_ai_style_btns: Array[Button] = []
+var _lbl_line_ai_group: Label
+var _btn_ai_spd_down: Button
+var _btn_ai_spd_val: Button
+var _btn_ai_spd_up: Button
+var _btn_line_tsp: Button
+var _btn_global_tsp: Button
+var _btn_stats_global_tsp: Button
 var _lbl_speed: Label
 var _lbl_speed_limit: Label
 var _lbl_notch: Label
@@ -300,9 +357,14 @@ var _shot_dir := ""
 var _shot_step := 0
 var _shot_frames_wait := 0
 var _startup_loading := false
-var _startup_overlay: Control
+var _startup_overlay: ColorRect
+var _startup_title_lbl: Label
 var _startup_status_lbl: Label
+var _startup_pct_lbl: Label
+var _startup_spinner_lbl: Label
 var _startup_bar: ProgressBar
+var _loading_spin_t := 0.0
+const LOADING_SPIN_FRAMES := ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 
 func _enter_tree() -> void:
@@ -312,6 +374,7 @@ func _enter_tree() -> void:
 
 
 func _ready() -> void:
+	L10n.init_from_settings()
 	_apply_app_branding()
 	_setup_font()
 	_load_tram_catalogue()
@@ -346,12 +409,12 @@ func _ready() -> void:
 
 func _async_startup_load() -> void:
 	_apply_app_branding()
-	_set_startup_progress(15.0, "正在初始化 3D 渲染与音频系统...")
+	_set_startup_progress(15.0, L10n.t("正在初始化 3D 渲染与音频系统...", "Initializing 3D renderer & audio..."))
 	await get_tree().process_frame
 	_apply_app_branding()
 	await get_tree().process_frame
 
-	_set_startup_progress(32.0, "正在解析西雅图城区街道路网...")
+	_set_startup_progress(32.0, L10n.t("正在解析西雅图城区街道路网...", "Parsing Seattle street network..."))
 	await get_tree().process_frame
 	var preset: Dictionary = MAP_PRESETS["seattle"]
 	_current_map_key = "seattle"
@@ -365,17 +428,18 @@ func _async_startup_load() -> void:
 	_plan_height = float(preset["default_height"])
 	_snap_camera_next = true
 	_graph.load_from_map_data(_map_data, true)
+	Terrain.grade_for_tracks(_graph)
 
-	_set_startup_progress(58.0, "正在构建建筑、公园绿地与 Lake Union 湖岸...")
+	_set_startup_progress(58.0, L10n.t("正在构建建筑、公园绿地与 Lake Union 湖岸...", "Building city blocks, parks & Lake Union waterfront..."))
 	await get_tree().process_frame
 	_build_city_world()
 
-	_set_startup_progress(86.0, "正在铺设轨道、道岔与车站...")
+	_set_startup_progress(86.0, L10n.t("正在铺设轨道、道岔与车站...", "Laying tracks, switches & stations..."))
 	await get_tree().process_frame
 	_rebuild_tracks_and_operations(false)
 	_set_time_hours(_time_hours)
 
-	_set_startup_progress(100.0, "准备就绪")
+	_set_startup_progress(100.0, L10n.t("准备就绪", "Ready"))
 	await get_tree().process_frame
 	_startup_loading = false
 	if _startup_overlay != null:
@@ -386,10 +450,85 @@ func _async_startup_load() -> void:
 
 
 func _set_startup_progress(val: float, msg: String) -> void:
+	var clamped := clampf(val, 0.0, 100.0)
 	if _startup_bar != null:
-		_startup_bar.value = val
+		_startup_bar.value = clamped
+	if _startup_pct_lbl != null:
+		_startup_pct_lbl.text = "%d%%" % int(round(clamped))
 	if _startup_status_lbl != null:
 		_startup_status_lbl.text = msg
+	_tick_loading_spinner(0.06)
+
+
+func _tick_loading_spinner(delta: float) -> void:
+	_loading_spin_t += delta * 11.0
+	if _startup_spinner_lbl != null:
+		_startup_spinner_lbl.text = LOADING_SPIN_FRAMES[int(floor(_loading_spin_t)) % LOADING_SPIN_FRAMES.size()]
+
+
+func _begin_loading_overlay(title_text: String, initial_msg: String, opaque: bool = false) -> void:
+	_startup_loading = true
+	if _sound != null:
+		_sound.set_menu_silenced(true)
+	if _startup_overlay != null:
+		_startup_overlay.color = Color(0.05, 0.08, 0.12, 1.0 if opaque else 0.90)
+		_startup_overlay.visible = true
+	if _startup_title_lbl != null:
+		_startup_title_lbl.text = title_text
+	_set_startup_progress(4.0, initial_msg)
+
+
+func _end_loading_overlay() -> void:
+	_set_startup_progress(100.0, L10n.t("准备就绪", "Ready"))
+	if _startup_overlay != null:
+		_startup_overlay.visible = false
+	_startup_loading = false
+	if _sound != null:
+		_sound.set_menu_silenced(_in_home_menu or _game_mode != GameMode.RUN)
+
+
+# Pre-build nearby outer CityTiles + warm TrafficSim caches + render warmup frames behind the loading overlay
+# so Metal shader compilation & initial chunk uploads finish BEFORE gameplay starts!
+func _prewarm_city_and_gpu(focus_pos: Vector3, is_run_mode: bool, pct_start: float, pct_end: float) -> void:
+	var tile_end := lerpf(pct_start, pct_end, 0.78) if is_run_mode else pct_end
+	if _city_tiles != null:
+		var prewarm_r := 2350.0
+		var need_n := mini(45, _city_tiles.near_unbuilt_count(focus_pos, prewarm_r))
+		if need_n > 0:
+			var done_n := 0
+			var last_built := _city_tiles.built_count()
+			var max_ticks := 600 # safety bound
+			var tick := 0
+			while tick < max_ticks and done_n < need_n:
+				tick += 1
+				var still_going := _city_tiles.prewarm_step(focus_pos, prewarm_r)
+				var now_built := _city_tiles.built_count()
+				if now_built > last_built:
+					done_n += (now_built - last_built)
+					last_built = now_built
+				var frac := clampf(float(done_n) / float(maxi(1, need_n)), 0.0, 1.0)
+				_set_startup_progress(
+					lerpf(pct_start, tile_end, frac),
+					L10n.t("正在预热周边城市区块与渲染缓存 (%d/%d)...", "Pre-warming city chunks & caches (%d/%d)...") % [mini(done_n, need_n), need_n]
+				)
+				await get_tree().process_frame
+				if not still_going:
+					break
+	if is_run_mode:
+		_set_startup_progress(lerpf(tile_end, pct_end, 0.25), L10n.t("正在预热信号灯与道路净空缓存...", "Pre-warming traffic signals & clearance..."))
+		await get_tree().process_frame
+		if _traffic_sim != null:
+			_traffic_sim.prewarm_near(_graph, focus_pos, 520.0)
+		_snap_camera_next = true
+		_update_camera(0.016)
+		_update_run_hud()
+		# Render 6 real frames behind the loading overlay so Metal compiles PSOs & uploads GPU buffers!
+		for wi in range(6):
+			_set_startup_progress(
+				lerpf(tile_end, pct_end, 0.35 + 0.65 * (float(wi + 1) / 6.0)),
+				L10n.t("正在预热 GPU 着色器与渲染管线...", "Warming GPU shaders & render pipeline...")
+			)
+			await get_tree().process_frame
 
 
 func _apply_app_branding() -> void:
@@ -455,7 +594,8 @@ func _load_map_world(map_key: String, use_starter: bool, seed_pax: bool) -> void
 	_snap_camera_next = true
 
 	_graph.load_from_map_data(_map_data, use_starter)
-	if not same_city:
+	var grade_changed := Terrain.grade_for_tracks(_graph)
+	if not same_city or grade_changed:
 		_build_city_world()
 	else:
 		_refresh_land_layers_if_needed()
@@ -494,18 +634,18 @@ func _setup_environment() -> void:
 
 	_sun = DirectionalLight3D.new()
 	_sun.shadow_enabled = true
-	# 4 cascades + split blending: much finer texels near the camera, so shadow edges don't swim
-	# while the camera travels with the tram; normal bias stops large flat surfaces self-shadowing.
-	_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
-	_sun.directional_shadow_split_1 = 0.06
-	_sun.directional_shadow_split_2 = 0.18
-	_sun.directional_shadow_split_3 = 0.45
-	_sun.directional_shadow_blend_splits = true
-	_sun.directional_shadow_max_distance = 300.0
+	# 2 cascades over 220m: ~2.5cm texels within 48m of the tram, cutting shadow passes in half!
+	_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+	_sun.directional_shadow_split_1 = 0.22
+	_sun.directional_shadow_blend_splits = false
+	_sun.directional_shadow_max_distance = 220.0
 	_sun.shadow_bias = 0.06
 	_sun.shadow_normal_bias = 1.6
 	_sun.shadow_blur = 0.9
 	add_child(_sun)
+
+	_weather = WeatherSystem.new()
+	add_child(_weather)
 
 	_building_mat = ShaderMaterial.new()
 	_building_mat.shader = load("res://shaders/building.gdshader") as Shader
@@ -576,6 +716,8 @@ func _setup_scene_nodes() -> void:
 
 
 func _build_city_world() -> void:
+	if _city_tiles != null:
+		_city_tiles.finish_pending()
 	for c in _city_root.get_children():
 		_city_root.remove_child(c)
 		c.queue_free()
@@ -609,13 +751,16 @@ func _build_city_world() -> void:
 		_city_root.add_child(_city_tiles)
 		_city_tiles.on_tile_built = _on_city_tile_built
 		_city_tiles.setup(_effective_land_data(), {"building": _building_mat, "road": _road_mat, "globe": _globe_mat})
+		_city_tiles.set_track_context(_graph.get_meta("track_clear_idx", {}), _graph.get_meta("station_bays", []))
 	_loaded_city_map_key = _current_map_key
 
 
 # A streamed map tile is in: clear it for player tracks / station bays and hook up its night lighting
 func _on_city_tile_built(tile: Node3D) -> void:
 	var bays: Array = _graph.get_meta("station_bays", [])
-	CityBuilder.apply_track_clearance(tile, _graph.get_meta("track_clear_idx", {}), bays)
+	var cur_ver := _city_tiles.track_ctx_ver if _city_tiles != null else -1
+	if int(tile.get_meta("clear_ctx_ver", -2)) != cur_ver:
+		CityBuilder.apply_track_clearance(tile, _graph.get_meta("track_clear_idx", {}), bays)
 	CityBuilder.apply_station_bays(tile, CityBuilder._bays_near(tile, bays))
 	var i := 0
 	while i < _city_lights.size():
@@ -627,7 +772,9 @@ func _on_city_tile_built(tile: Node3D) -> void:
 		if l is OmniLight3D:
 			_city_lights.append(l)
 	if tile.has_meta("shop_mat"):
-		_night_mats.append(tile.get_meta("shop_mat"))
+		var sm_t = tile.get_meta("shop_mat")
+		if sm_t != null and not _night_mats.has(sm_t):
+			_night_mats.append(sm_t)
 	var lamp_e := _night_factor * 2.05
 	for l in tile.get_meta("lights", []):
 		if l is OmniLight3D:
@@ -710,6 +857,8 @@ func _refresh_land_layers(roads: bool, buildings: bool) -> void:
 	if _city_tiles != null:
 		_city_tiles.finish_pending() # the builders' shared mesh caches are not touched by two threads at once
 	if roads:
+		Terrain.rebuild_ground(_city_root)
+		CityBuilder.rebuild_area_layer(_city_root, d.get("fill_areas", d_full.get("areas", [])))
 		CityBuilder.rebuild_road_layer(_city_root, d.get("roads", []), d.get("crosswalks", []), _road_mat)
 	if buildings:
 		var sm := CityBuilder.rebuild_building_layer(_city_root, d.get("buildings", []), d.get("storefronts", []), _building_mat)
@@ -836,45 +985,45 @@ func _land_chain_click(xz: Vector2, is_road: bool) -> void:
 		var snap0 := _graph.find_closest_node(xz, 9.0)
 		if snap0 >= 0:
 			_land_prev_xz = _graph.nodes[snap0]["pos"]
-		_show_toast("已选起点，继续点击下一点%s（Esc 结束）" % ("修建道路" if is_road else "铺设空地专用轨道"))
+		_show_toast(L10n.t("已选起点，继续点击下一点%s（Esc 结束）", "Start set — click next point to build %s (Esc to finish)") % (L10n.t("修建道路", "road") if is_road else L10n.t("铺设空地专用轨道", "open-ground track")))
 		return
 	var pa := _node_or_point_pos(_land_prev_nid, _land_prev_xz)
 	var snap_b := _graph.find_closest_node(xz, 9.0)
 	var pb: Vector2 = _graph.nodes[snap_b]["pos"] if snap_b >= 0 else xz
 	if pa.distance_to(pb) < 10.0:
-		_show_toast("⚠ 两点距离太近（至少 10m）")
+		_show_toast(L10n.t("⚠ 两点距离太近（至少 10m）", "⚠ Points too close (minimum 10 m)"))
 		return
 	var bi := _strip_hits_building(pa.lerp(pb, 0.04), pb.lerp(pa, 0.04), hw + 0.5)
 	if bi >= 0:
-		_show_toast("⚠ 路线穿过建筑，请先用【拆除建筑】腾出空地，或绕开建筑")
+		_show_toast(L10n.t("⚠ 路线穿过建筑，请先用【拆除建筑】腾出空地，或绕开建筑", "⚠ Path hits a building — demolish it first or route around"))
 		return
 	if is_road:
 		for cr: Dictionary in _segment_crossings(pa, pb, _land_prev_nid, snap_b):
-			_show_toast("⚠ 新建道路不能直接与 %s 交叉：请把道路连接到路口或路段上（点在路上即可接出）" % str(_graph.edges[int(cr["eid"])]["name"]))
+			_show_toast(L10n.t("⚠ 新建道路不能直接与 %s 交叉：请把道路连接到路口或路段上（点在路上即可接出）", "⚠ Cannot cross %s directly — connect to a junction or mid-block") % L10n.street_display_name(str(_graph.edges[int(cr["eid"])]["name"])))
 			return
 	else:
 		for cr2: Dictionary in _segment_crossings(pa, pb, _land_prev_nid, snap_b):
 			if bool(cr2["has_track"]):
-				_show_toast("⚠ 专用轨道不能与既有轨道平面交叉，请连接到其路口或改走他处")
+				_show_toast(L10n.t("⚠ 专用轨道不能与既有轨道平面交叉，请连接到其路口或改走他处", "⚠ Dedicated track cannot cross existing tracks at grade — connect at a junction"))
 				return
 	# Resolve both ends to graph nodes (junction, a cut in a street, or a new free node)
 	var na := _land_prev_nid
 	if na < 0:
 		var ra := _graph.node_for_point(_land_prev_xz, 9.0)
 		if ra.has("error"):
-			_show_toast("⚠ 起点落在车站或道岔上，请换个位置")
+			_show_toast(L10n.t("⚠ 起点落在车站或道岔上，请换个位置", "⚠ Start point falls on a station or switch — pick another spot"))
 			_land_prev_has = false
 			return
 		na = int(ra["nid"])
 	var rb := _graph.node_for_point(xz, 9.0)
 	if rb.has("error"):
-		_show_toast("⚠ 终点落在车站或道岔上，请换个位置")
+		_show_toast(L10n.t("⚠ 终点落在车站或道岔上，请换个位置", "⚠ End point falls on a station or switch — pick another spot"))
 		return
 	var nb := int(rb["nid"])
 	var crossings := _segment_crossings(_graph.nodes[na]["pos"], _graph.nodes[nb]["pos"], na, nb).size()
 	var eid := _graph.add_road(na, nb, lane_cfg.x, lane_cfg.y, not is_road, _build_track_mode)
 	if eid < 0:
-		_show_toast("⚠ 这两点已经相连或无法连接")
+		_show_toast(L10n.t("⚠ 这两点已经相连或无法连接", "⚠ Points are already connected or invalid"))
 		return
 	if not is_road:
 		_graph.set_track_on_edge(eid, _build_bed_style, _build_track_mode)
@@ -882,20 +1031,20 @@ func _land_chain_click(xz: Vector2, is_road: bool) -> void:
 	_land_prev_xz = _graph.nodes[nb]["pos"]
 	_after_land_edit(is_road, false)
 	if is_road:
-		_show_toast("已新建道路（%s · %.0fm）· 继续点击延伸，Esc 结束" % [LANE_CFG_LABELS[_road_lane_idx], float(_graph.edges[eid]["length"])])
+		_show_toast(L10n.t("已新建道路（%s · %.0fm）· 继续点击延伸，Esc 结束", "Built road (%s · %.0fm) · Click to extend, Esc to finish") % [_lane_cfg_label(_road_lane_idx), float(_graph.edges[eid]["length"])])
 	else:
-		var xing := " · 平交穿越 %d 条道路" % crossings if crossings > 0 else ""
-		_show_toast("已铺设空地专用轨道【%s · %s】%.0fm%s · 继续点击延伸，Esc 结束" % [_track_mode_tag(false), BED_STYLE_NAMES[_build_bed_style], float(_graph.edges[eid]["length"]), xing])
+		var xing := (L10n.t(" · 平交穿越 %d 条道路", " · %d level crossing(s)") % crossings) if crossings > 0 else ""
+		_show_toast(L10n.t("已铺设空地专用轨道【%s · %s】%.0fm%s · 继续点击延伸，Esc 结束", "Laid open-ground track [%s · %s] %.0fm%s · Click to extend, Esc to finish") % [_track_mode_tag(false), _bed_style_name(_build_bed_style), float(_graph.edges[eid]["length"]), xing])
 
 
-func _rebuild_tracks_and_operations(seed_pax: bool = false) -> void:
+func _rebuild_tracks_and_operations(seed_pax: bool = false, defer_ops: bool = false) -> void:
 	# Seattle: offer the real Seattle Center Monorail as a playable line once per save (5th Ave & Stewart
 	# -> 5th Ave N & Harrison). Kept off any street the player already built on.
 	if _current_map_key == "seattle" and not _graph.monorail_seeded:
 		_graph.monorail_seeded = true
 		var mono_lid := _graph.seed_seattle_monorail(Vector2(-7.57, 583.6), Vector2(-737.9, -424.2), "seattle-alweg-red")
 		if mono_lid > 0:
-			_show_toast("🚝 西雅图中心单轨已作为一条线路加入，可在线路列表中选择并驾驶")
+			_show_toast(L10n.t("🚝 西雅图中心单轨已作为一条线路加入，可在线路列表中选择并驾驶", "🚝 Seattle Center Monorail added — select it from the line list to drive!"))
 	for c in _track_root.get_children():
 		c.queue_free()
 
@@ -906,8 +1055,12 @@ func _rebuild_tracks_and_operations(seed_pax: bool = false) -> void:
 		_grass_track_mat
 	)
 	_station_views = built["stations"]
+	if _pax_sim != null:
+		_pax_sim.rebind_station_views(_station_views)
 	_put_tracks_on_terrain()
 	_sync_landmark_monorail()
+	if _city_tiles != null:
+		_city_tiles.set_track_context(_graph.get_meta("track_clear_idx", {}), _graph.get_meta("station_bays", []))
 	CityBuilder.apply_track_clearance(_city_root, _graph.get_meta("track_clear_idx", {}), _graph.get_meta("station_bays", []))
 	CityBuilder.apply_station_bays(_city_root, _graph.get_meta("station_bays", []))
 	_track_lights.clear()
@@ -916,7 +1069,7 @@ func _rebuild_tracks_and_operations(seed_pax: bool = false) -> void:
 
 	_clear_accident_fx()
 	# Do NOT spawn/simulate trams, traffic cars, or pedestrians while on the Home Screen or in BUILD/PLAN mode!
-	if _game_mode == GameMode.RUN and not _in_home_menu:
+	if not defer_ops and _game_mode == GameMode.RUN and not _in_home_menu:
 		_transit_sim.visible = true
 		_pax_sim.visible = true
 		_traffic_sim.visible = true
@@ -975,9 +1128,9 @@ func _switch_line(delta_i: int) -> void:
 	if tr.is_empty():
 		return
 	if int(tr["line_id"]) == before:
-		_show_toast("当前只有一条线路在运营")
+		_show_toast(L10n.t("当前只有一条线路在运营", "Only one line is currently operating"))
 	else:
-		_show_toast("已切换到线路：%s（%d 列车）" % [str(tr["line_name"]), _transit_sim.line_tram_indices(int(tr["line_id"])).size()])
+		_show_toast(L10n.t("已切换到线路：%s（%d 列车）", "Switched to %s (%d trams)") % [L10n.line_display_name(str(tr["line_name"])), _transit_sim.line_tram_indices(int(tr["line_id"])).size()])
 
 
 func _get_traffic_focus_pos() -> Vector3:
@@ -1020,14 +1173,165 @@ func _enter_home_screen() -> void:
 
 
 func _select_home_map_card(map_key: String) -> void:
+	if _startup_loading:
+		return
 	_selected_home_map = map_key
 	_reset_confirm_timer = 0.0
 	if _current_map_key != map_key:
-		_load_map_world(map_key, true, false)
+		if DisplayServer.get_name() == "headless":
+			_load_map_world(map_key, true, false)
+			_refresh_home_screen_ui()
+		else:
+			_async_select_home_map_card(map_key)
+		return
 	_refresh_home_screen_ui()
 
 
+func _async_select_home_map_card(map_key: String) -> void:
+	var title := _map_title(map_key)
+	_begin_loading_overlay(L10n.t("正在切换地图 · %s", "Switching Map · %s") % title, L10n.t("正在解析城市场景与道路网...", "Parsing city scene & street network..."))
+	await get_tree().process_frame
+	_set_startup_progress(35.0, L10n.t("正在构建 %s 城区场景...", "Building %s city scene...") % title)
+	await get_tree().process_frame
+	_load_map_world(map_key, true, false)
+	_set_startup_progress(88.0, L10n.t("正在刷新地图预览...", "Refreshing map preview..."))
+	await get_tree().process_frame
+	_refresh_home_screen_ui()
+	_end_loading_overlay()
+
+
+func _apply_run_signal_priority(run_data: Dictionary) -> void:
+	if run_data.has("global_signal_priority"):
+		_graph.global_signal_priority = bool(run_data["global_signal_priority"])
+	var line_tsp_raw = run_data.get("line_signal_priority", {})
+	if line_tsp_raw is Dictionary:
+		for k in (line_tsp_raw as Dictionary).keys():
+			_graph.set_line_signal_priority(int(k), bool((line_tsp_raw as Dictionary)[k]))
+
+
+func _async_enter_saved_world(
+	map_key: String,
+	save_data: Dictionary,
+	run_data: Dictionary,
+	target_mode: int,
+	toast_msg: String,
+	save_as_current: bool = false
+) -> void:
+	var title := _map_title(map_key)
+	_begin_loading_overlay(L10n.t("正在进入 %s", "Entering %s") % title, L10n.t("正在读取存档数据...", "Loading save data..."))
+	await get_tree().process_frame
+
+	if _current_map_key != map_key or _map_data.is_empty():
+		_set_startup_progress(14.0, L10n.t("正在载入 %s 城市地形与建筑数据...", "Loading %s terrain & buildings...") % title)
+		await get_tree().process_frame
+		_load_map_world(map_key, false, false)
+
+	_set_startup_progress(26.0, L10n.t("正在解析轨道网络与线路规划...", "Parsing track network & lines..."))
+	await get_tree().process_frame
+	var net: Dictionary = save_data.get("network", {})
+	_graph.import_state(net)
+
+	_set_startup_progress(36.0, L10n.t("正在整平轨道地势与纵断面坡度...", "Grading trackbeds & elevation..."))
+	await get_tree().process_frame
+	var grade_changed := Terrain.grade_for_tracks(_graph)
+	if grade_changed:
+		_set_startup_progress(46.0, L10n.t("正在按整平后地形重建城区地面、公园与道路...", "Rebuilding city ground, parks & roads..."))
+		await get_tree().process_frame
+		_build_city_world()
+	elif _graph.land_edit_signature() != _built_land_sig:
+		_set_startup_progress(46.0, L10n.t("正在同步道路与建筑改造层...", "Syncing road & lot edits..."))
+		await get_tree().process_frame
+		_refresh_land_layers_if_needed()
+
+	_pax_sim.set_spawn_level(int(save_data.get("pax_spawn_level", 3)))
+	_pax_sim.total_delivered = int(save_data.get("total_delivered", 0))
+	if _btn_pax_rate != null:
+		_btn_pax_rate.text = L10n.t("客流: %s (P)", "Pax: %s (P)") % PassengerSim.spawn_level_name(_pax_sim.spawn_level)
+	_set_time_hours(float(save_data.get("time_hours", 13.5)))
+	_set_weather_mode(int(save_data.get("weather", WeatherSystem.WeatherType.SUNNY)), false)
+	if not run_data.is_empty():
+		_apply_run_signal_priority(run_data)
+
+	_set_startup_progress(58.0, L10n.t("正在铺设轨道、道岔与车站...", "Laying tracks, switches & stations..."))
+	await get_tree().process_frame
+	_rebuild_tracks_and_operations(not _graph.lines.is_empty(), true)
+	if save_as_current:
+		SaveManager.save_current(map_key, save_data)
+
+	var enter_run := (target_mode == GameMode.RUN)
+	if enter_run:
+		_set_startup_progress(68.0, L10n.t("正在编组上线电车与站台客流...", "Spawning fleet & station passengers..."))
+		await get_tree().process_frame
+		_transit_sim.line_ai_styles.clear()
+		_transit_sim.rebuild_fleet(_graph, _tram_models, _night_factor)
+		_pax_sim.reset_for_stations(_station_views)
+		_pax_sim.seed_initial_passengers(_graph, 20)
+		if not run_data.is_empty():
+			_set_startup_progress(74.0, L10n.t("正在恢复运行存档列车位置与配置...", "Restoring run save state & settings..."))
+			await get_tree().process_frame
+			_pax_sim.set_spawn_level(int(run_data.get("pax_spawn_level", _pax_sim.spawn_level)))
+			_pax_sim.total_delivered = int(run_data.get("total_delivered", 0))
+			if _btn_pax_rate != null:
+				_btn_pax_rate.text = L10n.t("客流: %s (P)", "Pax: %s (P)") % PassengerSim.spawn_level_name(_pax_sim.spawn_level)
+			_set_time_hours(float(run_data.get("time_hours", _time_hours)))
+			_set_weather_mode(int(run_data.get("weather", _weather_mode)), false)
+			_apply_run_signal_priority(run_data)
+			_transit_sim.import_run_state(run_data.get("transit", {}), _graph)
+		_set_startup_progress(79.0, L10n.t("正在构建交通信号系统与街道车流...", "Building signals & street traffic..."))
+		await get_tree().process_frame
+		var focus_pos := _get_traffic_focus_pos()
+		_traffic_sim.rebuild_traffic(_graph, focus_pos)
+		_ops_dirty = false
+		_set_game_mode(GameMode.RUN)
+		await _prewarm_city_and_gpu(focus_pos, true, 82.0, 99.0)
+	else:
+		_set_game_mode(target_mode)
+		await _prewarm_city_and_gpu(_plan_target, false, 78.0, 99.0)
+
+	_end_loading_overlay()
+	if not toast_msg.is_empty():
+		_show_toast(toast_msg)
+
+
+func _async_enter_fresh_world(
+	map_key: String,
+	use_starter: bool,
+	seed_pax: bool,
+	target_mode: int,
+	toast_msg: String,
+	set_chase: bool = false,
+	save_progress: bool = false
+) -> void:
+	var title := _map_title(map_key)
+	_begin_loading_overlay(L10n.t("正在进入 %s", "Entering %s") % title, L10n.t("正在准备地图与道路网...", "Preparing map & road network..."))
+	await get_tree().process_frame
+
+	_set_startup_progress(35.0, L10n.t("正在构建 %s 城区与轨道网络...", "Building %s city & track network...") % title)
+	await get_tree().process_frame
+	_load_map_world(map_key, use_starter, seed_pax)
+	_pax_sim.total_delivered = 0
+
+	if target_mode == GameMode.RUN:
+		_set_startup_progress(64.0, L10n.t("正在编组上线电车、乘客与街道交通...", "Spawning fleet, passengers & street traffic..."))
+		await get_tree().process_frame
+		_set_game_mode(GameMode.RUN)
+		if set_chase:
+			_set_cam_mode(CamMode.CHASE)
+		await _prewarm_city_and_gpu(_get_traffic_focus_pos(), true, 75.0, 99.0)
+	else:
+		_set_game_mode(target_mode)
+		if save_progress:
+			_save_current_progress(false)
+		await _prewarm_city_and_gpu(_plan_target, false, 75.0, 99.0)
+
+	_end_loading_overlay()
+	if not toast_msg.is_empty():
+		_show_toast(toast_msg)
+
+
 func _start_map_continue_or_new() -> void:
+	if _startup_loading:
+		return
 	var mkey := _selected_home_map
 	var latest_run := SaveManager.get_latest_run_slot(mkey)
 	var saved := SaveManager.load_current(mkey)
@@ -1044,33 +1348,50 @@ func _start_map_continue_or_new() -> void:
 		var bp_data: Dictionary = latest_run["blueprint_data"]
 		var run_data: Dictionary = latest_run["run_data"]
 		_active_plan_slot_idx = int(latest_run["slot_idx"])
-		_apply_loaded_save_state(mkey, bp_data)
-		_set_game_mode(GameMode.RUN)
-		_pax_sim.set_spawn_level(int(run_data.get("pax_spawn_level", _pax_sim.spawn_level)))
-		_pax_sim.total_delivered = int(run_data.get("total_delivered", 0))
-		if _btn_pax_rate != null:
-			_btn_pax_rate.text = "客流: %s (P)" % PassengerSim.SPAWN_LEVEL_NAMES[_pax_sim.spawn_level]
-		_set_time_hours(float(run_data.get("time_hours", _time_hours)))
-		_transit_sim.import_run_state(run_data.get("transit", {}), _graph)
-		_show_toast("✓ 已继续驾驶【%s】运行存档（槽位 %02d · 已送达 %d 人）" % [
-			str(MAP_PRESETS[mkey]["title"]),
+		var msg := L10n.t("✓ 已继续驾驶【%s】运行存档（槽位 %02d · 已送达 %d 人）", "✓ Resumed [%s] run save (Slot %02d · %d delivered)") % [
+			_map_title(mkey),
 			_active_plan_slot_idx + 1,
-			_pax_sim.total_delivered,
-		])
+			int(run_data.get("total_delivered", 0)),
+		]
+		if DisplayServer.get_name() == "headless":
+			_apply_loaded_save_state(mkey, bp_data)
+			_apply_run_signal_priority(run_data)
+			_set_game_mode(GameMode.RUN)
+			_pax_sim.set_spawn_level(int(run_data.get("pax_spawn_level", _pax_sim.spawn_level)))
+			_pax_sim.total_delivered = int(run_data.get("total_delivered", 0))
+			if _btn_pax_rate != null:
+				_btn_pax_rate.text = L10n.t("客流: %s (P)", "Pax: %s (P)") % PassengerSim.spawn_level_name(_pax_sim.spawn_level)
+			_set_time_hours(float(run_data.get("time_hours", _time_hours)))
+			_set_weather_mode(int(run_data.get("weather", _weather_mode)), false)
+			_transit_sim.import_run_state(run_data.get("transit", {}), _graph)
+			_show_toast(msg)
+		else:
+			_async_enter_saved_world(mkey, bp_data, run_data, GameMode.RUN, msg)
 	elif not saved.is_empty():
-		_apply_loaded_save_state(mkey, saved)
-		var start_mode := GameMode.RUN if not _graph.lines.is_empty() else GameMode.BUILD
-		_set_game_mode(start_mode)
-		_show_toast("✓ 已继续【%s】上次进度" % str(MAP_PRESETS[mkey]["title"]))
+		var net_lines: Array = (saved.get("network", {}) as Dictionary).get("lines", [])
+		var start_mode := GameMode.RUN if not net_lines.is_empty() else GameMode.BUILD
+		var msg := L10n.t("✓ 已继续【%s】上次进度", "✓ Resumed [%s] last progress") % _map_title(mkey)
+		if DisplayServer.get_name() == "headless":
+			_apply_loaded_save_state(mkey, saved)
+			_set_game_mode(GameMode.RUN if not _graph.lines.is_empty() else GameMode.BUILD)
+			_show_toast(msg)
+		else:
+			_async_enter_saved_world(mkey, saved, {}, start_mode, msg)
 	else:
-		_load_map_world(mkey, false, false)
-		_pax_sim.total_delivered = 0
-		_set_game_mode(GameMode.BUILD)
-		_save_current_progress(false)
-		_show_toast("已进入【%s】空白沙盒 · 左键铺设轨道，按下触摸板左右滑动平移地图" % str(MAP_PRESETS[mkey]["title"]))
+		var msg := L10n.t("已进入【%s】空白沙盒 · 左键铺设轨道，按下触摸板左右滑动平移地图", "Entered [%s] sandbox · Click to lay tracks, drag to pan map") % _map_title(mkey)
+		if DisplayServer.get_name() == "headless":
+			_load_map_world(mkey, false, false)
+			_pax_sim.total_delivered = 0
+			_set_game_mode(GameMode.BUILD)
+			_save_current_progress(false)
+			_show_toast(msg)
+		else:
+			_async_enter_fresh_world(mkey, false, false, GameMode.BUILD, msg, false, true)
 
 
 func _start_map_demo_network() -> void:
+	if _startup_loading:
+		return
 	var mkey := _selected_home_map
 	var had_existing := bool(SaveManager.get_current_summary(mkey)["exists"])
 	_is_demo_readonly = had_existing
@@ -1081,25 +1402,30 @@ func _start_map_demo_network() -> void:
 	_home_overlay.visible = false
 	_hud_layer_ctrl.visible = true
 	_nav_bar.visible = true
-
-	_load_map_world(mkey, true, true)
-	_pax_sim.total_delivered = 0
-	_set_game_mode(GameMode.RUN)
-	_set_cam_mode(CamMode.CHASE)
-	_show_toast("✓ 已进入【%s】示例线网！注意弯道/道岔限速与路口小车（超速翻车或撞车将结束本局）" % str(MAP_PRESETS[mkey]["title"]))
+	var msg := L10n.t("✓ 已进入【%s】示例线网！注意弯道/道岔限速与路口小车（超速翻车或撞车将结束本局）", "✓ Entered [%s] Demo Network! Watch curve/switch speed limits and crossing traffic.") % _map_title(mkey)
+	if DisplayServer.get_name() == "headless":
+		_load_map_world(mkey, true, true)
+		_pax_sim.total_delivered = 0
+		_set_game_mode(GameMode.RUN)
+		_set_cam_mode(CamMode.CHASE)
+		_show_toast(msg)
+	else:
+		_async_enter_fresh_world(mkey, true, true, GameMode.RUN, msg, true, false)
 
 
 func _handle_home_reset_button() -> void:
+	if _startup_loading:
+		return
 	var mkey := _selected_home_map
 	if _reset_confirm_timer <= 0.0:
 		_reset_confirm_timer = 3.6
-		_btn_home_reset.text = "确认清空重开？"
+		_btn_home_reset.text = L10n.t("确认清空重开？", "Confirm Reset?")
 		return
 
 	_reset_confirm_timer = 0.0
 	var prev := SaveManager.load_current(mkey)
 	if not prev.is_empty():
-		SaveManager.push_autosave(mkey, "重开前自动备份", prev)
+		SaveManager.push_autosave(mkey, L10n.t("重开前自动备份", "Pre-reset Backup"), prev)
 	SaveManager.delete_current(mkey)
 
 	_is_demo_readonly = false
@@ -1110,11 +1436,15 @@ func _handle_home_reset_button() -> void:
 	_home_overlay.visible = false
 	_hud_layer_ctrl.visible = true
 	_nav_bar.visible = true
-	_load_map_world(mkey, false, false)
-	_pax_sim.total_delivered = 0
-	_set_game_mode(GameMode.BUILD)
-	_save_current_progress(false)
-	_show_toast("已清空并重新开始【%s】" % str(MAP_PRESETS[mkey]["title"]))
+	var msg := L10n.t("已清空并重新开始【%s】", "Reset [%s] map") % _map_title(mkey)
+	if DisplayServer.get_name() == "headless":
+		_load_map_world(mkey, false, false)
+		_pax_sim.total_delivered = 0
+		_set_game_mode(GameMode.BUILD)
+		_save_current_progress(false)
+		_show_toast(msg)
+	else:
+		_async_enter_fresh_world(mkey, false, false, GameMode.BUILD, msg, false, true)
 
 
 func _apply_loaded_save_state(map_key: String, save_data: Dictionary) -> void:
@@ -1122,12 +1452,17 @@ func _apply_loaded_save_state(map_key: String, save_data: Dictionary) -> void:
 		_load_map_world(map_key, false, false)
 	var net: Dictionary = save_data.get("network", {})
 	_graph.import_state(net)
-	_refresh_land_layers_if_needed()
+	if Terrain.grade_for_tracks(_graph):
+		_build_city_world()
+	else:
+		_refresh_land_layers_if_needed()
 	_pax_sim.set_spawn_level(int(save_data.get("pax_spawn_level", 3)))
 	_pax_sim.total_delivered = int(save_data.get("total_delivered", 0))
 	if _btn_pax_rate != null:
-		_btn_pax_rate.text = "客流: %s (P)" % PassengerSim.SPAWN_LEVEL_NAMES[_pax_sim.spawn_level]
+		_btn_pax_rate.text = L10n.t("客流: %s (P)", "Pax: %s (P)") % PassengerSim.spawn_level_name(_pax_sim.spawn_level)
 	_set_time_hours(float(save_data.get("time_hours", 13.5)))
+	_set_weather_mode(int(save_data.get("weather", WeatherSystem.WeatherType.SUNNY)), false)
+	_transit_sim.line_ai_styles.clear()
 	_rebuild_tracks_and_operations(not _graph.lines.is_empty())
 
 
@@ -1138,15 +1473,16 @@ func _build_current_save_payload(slot_name: String) -> Dictionary:
 		_graph,
 		_pax_sim.spawn_level,
 		_time_hours,
-		_pax_sim.total_delivered
+		_pax_sim.total_delivered,
+		_weather_mode
 	)
 
 
 func _save_current_progress(show_msg: bool = false) -> void:
-	var payload := _build_current_save_payload("当前进度")
+	var payload := _build_current_save_payload(L10n.t("当前进度", "Current Progress"))
 	SaveManager.save_current(_current_map_key, payload)
 	if show_msg:
-		_show_toast("✓ 已自动保存当前进度")
+		_show_toast(L10n.t("✓ 已自动保存当前进度", "✓ Progress autosaved"))
 
 
 func _open_slot_modal(map_key: String, show_auto_tab: bool = false, tab_mode: int = -1) -> void:
@@ -1167,7 +1503,10 @@ func _refresh_home_screen_ui() -> void:
 		var badge_lbl: Label = _home_card_badges.get(mkey)
 		if badge_lbl != null:
 			if bool(summary["exists"]):
-				badge_lbl.text = "● 已有进度：轨道 %d 段 · 车站 %d 座 · 线路 %d 条\n   上次保存：%s" % [
+				badge_lbl.text = L10n.t(
+					"● 已有进度：轨道 %d 段 · 车站 %d 座 · 线路 %d 条\n   上次保存：%s",
+					"● Saved: %d track segs · %d stations · %d lines\n   Last saved: %s"
+				) % [
 					int(summary["tracks"]),
 					int(summary["stations"]),
 					int(summary["lines"]),
@@ -1175,7 +1514,10 @@ func _refresh_home_screen_ui() -> void:
 				]
 				badge_lbl.add_theme_color_override("font_color", Color(0.46, 0.92, 0.70))
 			else:
-				badge_lbl.text = "○ 暂无本地存档\n   可点击【开始建设】从零规划，或进入【示例线网】试驾"
+				badge_lbl.text = L10n.t(
+					"○ 暂无本地存档\n   可点击【开始建设】从零规划，或进入【示例线网】试驾",
+					"○ No local save yet\n   Click [Start Building] or [Try Demo Network]"
+				)
 				badge_lbl.add_theme_color_override("font_color", Color(0.72, 0.78, 0.84))
 
 		var card_pc: PanelContainer = _home_card_panels.get(mkey)
@@ -1198,16 +1540,16 @@ func _refresh_home_screen_ui() -> void:
 	var latest_run := SaveManager.get_latest_run_slot(_selected_home_map)
 	var has_run := bool(latest_run.get("exists", false))
 	var has_cur := bool(sel_sum["exists"]) or has_run
-	var map_title := str(MAP_PRESETS[_selected_home_map]["title"])
+	var map_title := _map_title(_selected_home_map)
 	if has_run:
-		_btn_home_primary.text = "▶ 继续驾驶（%s · 运行档）" % map_title
+		_btn_home_primary.text = L10n.t("▶ 继续驾驶（%s · 运行档）", "▶ Resume Run (%s)") % map_title
 	elif has_cur:
-		_btn_home_primary.text = "▶ 继续游戏（%s）" % map_title
+		_btn_home_primary.text = L10n.t("▶ 继续游戏（%s）", "▶ Continue (%s)") % map_title
 	else:
-		_btn_home_primary.text = "▶ 开始建设（%s）" % map_title
+		_btn_home_primary.text = L10n.t("▶ 开始建设（%s）", "▶ Start Building (%s)") % map_title
 	_btn_home_reset.visible = has_cur
 	if _reset_confirm_timer <= 0.0:
-		_btn_home_reset.text = "重新开始"
+		_btn_home_reset.text = L10n.t("重新开始", "Reset Map")
 
 
 # Label that takes the spare row width but never forces the row wider (long text ends in "…")
@@ -1222,8 +1564,8 @@ func _fit_label(lbl: Label) -> void:
 func _refresh_slot_modal_ui() -> void:
 	if _slot_modal == null or not _slot_modal.visible:
 		return
-	var map_title := str(MAP_PRESETS[_slot_modal_map_key]["title"])
-	_lbl_slot_title.text = "存档管理 · %s" % map_title
+	var map_title := _map_title(_slot_modal_map_key)
+	_lbl_slot_title.text = L10n.t("存档管理 · %s", "Save Manager · %s") % map_title
 	_highlight_active_btn(_btn_tab_manual, _slot_tab_mode == 0)
 	_highlight_active_btn(_btn_tab_auto, _slot_tab_mode == 1)
 
@@ -1263,7 +1605,7 @@ func _refresh_slot_modal_ui() -> void:
 		if exists:
 			var meta_lbl := Label.new()
 			_fit_label(meta_lbl)
-			meta_lbl.text = "      轨道 %d · 车站 %d · 线路 %d · %s" % [
+			meta_lbl.text = L10n.t("      轨道 %d · 车站 %d · 线路 %d · %s", "      Tracks %d · Stations %d · Lines %d · %s") % [
 				int(s_info["tracks"]),
 				int(s_info["stations"]),
 				int(s_info["lines"]),
@@ -1275,7 +1617,7 @@ func _refresh_slot_modal_ui() -> void:
 
 		if can_save_here:
 			var idx_save := idx
-			var save_btn := _make_btn("覆盖" if exists else "保存规划", func():
+			var save_btn := _make_btn(L10n.t("覆盖", "Overwrite") if exists else L10n.t("保存规划", "Save Plan"), func():
 				var custom_nm := _edit_slot_name.text.strip_edges()
 				var payload := _build_current_save_payload(custom_nm)
 				if SaveManager.save_manual_slot(_current_map_key, idx_save, custom_nm, payload):
@@ -1284,7 +1626,7 @@ func _refresh_slot_modal_ui() -> void:
 					SaveManager.save_current(_current_map_key, payload)
 					_edit_slot_name.text = ""
 					_refresh_slot_modal_ui()
-					_show_toast("✓ 已保存建设规划至槽位 %02d" % (idx_save + 1))
+					_show_toast(L10n.t("✓ 已保存建设规划至槽位 %02d", "✓ Plan saved to Slot %02d") % (idx_save + 1))
 			)
 			hbox.add_child(save_btn)
 
@@ -1292,9 +1634,11 @@ func _refresh_slot_modal_ui() -> void:
 			var idx_load := idx
 			var is_auto_load := is_auto_tab
 			var mkey_load := _slot_modal_map_key
-			hbox.add_child(_make_btn("读取", func():
+			hbox.add_child(_make_btn(L10n.t("读取", "Load"), func():
+				if _startup_loading:
+					return
 				if not _in_home_menu and not _is_demo_readonly:
-					SaveManager.push_autosave(_current_map_key, "读档前自动备份", _build_current_save_payload("读档前备份"))
+					SaveManager.push_autosave(_current_map_key, L10n.t("读档前自动备份", "Pre-load Backup"), _build_current_save_payload(L10n.t("读档前备份", "Pre-load Backup")))
 				var loaded := SaveManager.load_slot(mkey_load, is_auto_load, idx_load)
 				if not loaded.is_empty():
 					if not is_auto_load:
@@ -1304,22 +1648,29 @@ func _refresh_slot_modal_ui() -> void:
 					_slot_modal.visible = false
 					_home_overlay.visible = false
 					_hud_layer_ctrl.visible = true
-					_apply_loaded_save_state(mkey_load, loaded)
-					SaveManager.save_current(mkey_load, loaded)
-					_set_game_mode(GameMode.RUN if not _graph.lines.is_empty() else GameMode.BUILD)
-					_show_toast("✓ 已读取建设规划：%s" % str(loaded.get("name", "")))
+					_nav_bar.visible = true
+					var net_lines: Array = (loaded.get("network", {}) as Dictionary).get("lines", [])
+					var t_mode := GameMode.RUN if not net_lines.is_empty() else GameMode.BUILD
+					var msg := L10n.t("✓ 已读取建设规划：%s", "✓ Loaded plan: %s") % str(loaded.get("name", ""))
+					if DisplayServer.get_name() == "headless":
+						_apply_loaded_save_state(mkey_load, loaded)
+						SaveManager.save_current(mkey_load, loaded)
+						_set_game_mode(GameMode.RUN if not _graph.lines.is_empty() else GameMode.BUILD)
+						_show_toast(msg)
+					else:
+						_async_enter_saved_world(mkey_load, loaded, {}, t_mode, msg, true)
 			))
 
 			var idx_del := idx
 			var is_auto_del := is_auto_tab
 			var mkey_del := _slot_modal_map_key
-			var del_btn := _make_btn("删除", func():
+			var del_btn := _make_btn(L10n.t("删除", "Delete"), func():
 				SaveManager.delete_slot(mkey_del, is_auto_del, idx_del)
 				_refresh_slot_modal_ui()
-				_show_toast("已删除槽位 %02d（关联运行存档已同步删除）" % (idx_del + 1))
+				_show_toast(L10n.t("已删除槽位 %02d（关联运行存档已同步删除）", "Deleted Slot %02d (and linked run saves)") % (idx_del + 1))
 			)
 			if not is_auto_del:
-				del_btn.tooltip_text = "删除该建设规划及其 3 个运行档"
+				del_btn.tooltip_text = L10n.t("删除该建设规划及其 3 个运行档", "Delete this plan save and its 3 run saves")
 			hbox.add_child(del_btn)
 
 			# Embedded linked driving run saves (up to 3 per manual blueprint save)
@@ -1334,7 +1685,7 @@ func _refresh_slot_modal_ui() -> void:
 					row_vbox.add_child(sub_row)
 
 					var indent := Label.new()
-					indent.text = "   ↳ 运行档%d" % (si + 1)
+					indent.text = L10n.t("   ↳ 运行档%d", "   ↳ Run %d") % (si + 1)
 					indent.add_theme_font_size_override("font_size", 12)
 					indent.add_theme_color_override("font_color", Color(0.46, 0.86, 0.96) if rexists else Color(0.50, 0.56, 0.62))
 					sub_row.add_child(indent)
@@ -1343,10 +1694,10 @@ func _refresh_slot_modal_ui() -> void:
 					_fit_label(r_lbl)
 					r_lbl.add_theme_font_size_override("font_size", 12)
 					if rexists:
-						r_lbl.text = "送达 %d 人 · %s" % [int(rs.get("delivered", 0)), str(rs.get("saved_at", ""))]
+						r_lbl.text = L10n.t("送达 %d 人 · %s", "%d delivered · %s") % [int(rs.get("delivered", 0)), str(rs.get("saved_at", ""))]
 						r_lbl.add_theme_color_override("font_color", Color(0.84, 0.94, 1.0))
 					else:
-						r_lbl.text = "空"
+						r_lbl.text = L10n.t("空", "Empty")
 						r_lbl.add_theme_color_override("font_color", Color(0.52, 0.56, 0.62))
 					r_lbl.tooltip_text = r_lbl.text
 					sub_row.add_child(r_lbl)
@@ -1354,7 +1705,7 @@ func _refresh_slot_modal_ui() -> void:
 					if can_save_here and _game_mode == GameMode.RUN and not _transit_sim.trams.is_empty():
 						var p_s := idx
 						var s_s := si
-						sub_row.add_child(_make_btn("覆盖" if rexists else "保存运行", func():
+						sub_row.add_child(_make_btn(L10n.t("覆盖", "Overwrite") if rexists else L10n.t("保存运行", "Save Run"), func():
 							_save_run_progress_to_slot(p_s, s_s)
 							_refresh_slot_modal_ui()
 						))
@@ -1363,7 +1714,9 @@ func _refresh_slot_modal_ui() -> void:
 						var p_l := idx
 						var s_l := si
 						var mkey_rl := _slot_modal_map_key
-						sub_row.add_child(_make_btn("继续驾驶", func():
+						sub_row.add_child(_make_btn(L10n.t("继续驾驶", "Resume"), func():
+							if _startup_loading:
+								return
 							var bp := SaveManager.load_slot(mkey_rl, false, p_l)
 							var rd := SaveManager.load_run_slot(mkey_rl, p_l, s_l)
 							if not bp.is_empty() and not rd.is_empty():
@@ -1374,25 +1727,73 @@ func _refresh_slot_modal_ui() -> void:
 								_home_overlay.visible = false
 								_hud_layer_ctrl.visible = true
 								_nav_bar.visible = true
-								_apply_loaded_save_state(mkey_rl, bp)
-								_set_game_mode(GameMode.RUN)
-								_set_time_hours(float(rd.get("time_hours", _time_hours)))
-								_pax_sim.set_spawn_level(int(rd.get("pax_spawn_level", _pax_sim.spawn_level)))
-								_pax_sim.total_delivered = int(rd.get("total_delivered", 0))
-								if _btn_pax_rate != null:
-									_btn_pax_rate.text = "客流: %s (P)" % PassengerSim.SPAWN_LEVEL_NAMES[_pax_sim.spawn_level]
-								_transit_sim.import_run_state(rd.get("transit", {}), _graph)
-								_show_toast("✓ 已继续驾驶规划 %02d · 运行档 %d（送达 %d 人）" % [p_l + 1, s_l + 1, _pax_sim.total_delivered])
+								var msg := L10n.t("✓ 已继续驾驶规划 %02d · 运行档 %d（送达 %d 人）", "✓ Resumed Plan %02d · Run %d (%d delivered)") % [p_l + 1, s_l + 1, int(rd.get("total_delivered", 0))]
+								if DisplayServer.get_name() == "headless":
+									_apply_loaded_save_state(mkey_rl, bp)
+									_apply_run_signal_priority(rd)
+									_set_game_mode(GameMode.RUN)
+									_set_time_hours(float(rd.get("time_hours", _time_hours)))
+									_set_weather_mode(int(rd.get("weather", _weather_mode)), false)
+									_pax_sim.set_spawn_level(int(rd.get("pax_spawn_level", _pax_sim.spawn_level)))
+									_pax_sim.total_delivered = int(rd.get("total_delivered", 0))
+									if _btn_pax_rate != null:
+										_btn_pax_rate.text = L10n.t("客流: %s (P)", "Pax: %s (P)") % PassengerSim.spawn_level_name(_pax_sim.spawn_level)
+									_transit_sim.import_run_state(rd.get("transit", {}), _graph)
+									_show_toast(msg)
+								else:
+									_async_enter_saved_world(mkey_rl, bp, rd, GameMode.RUN, msg)
 						))
 
 						var p_d := idx
 						var s_d := si
 						var mkey_rd := _slot_modal_map_key
-						sub_row.add_child(_make_btn("删除", func():
+						sub_row.add_child(_make_btn(L10n.t("删除", "Delete"), func():
 							SaveManager.delete_run_slot(mkey_rd, p_d, s_d)
 							_refresh_slot_modal_ui()
-							_show_toast("已删除规划 %02d · 运行档 %d" % [p_d + 1, s_d + 1])
+							_show_toast(L10n.t("已删除规划 %02d · 运行档 %d", "Deleted Plan %02d · Run %d") % [p_d + 1, s_d + 1])
 						))
+
+
+func _request_game_mode(mode: int) -> void:
+	if _startup_loading:
+		return
+	if mode == GameMode.RUN and _game_mode != GameMode.RUN and DisplayServer.get_name() != "headless":
+		_async_enter_run_mode()
+		return
+	_set_game_mode(mode)
+
+
+func _async_enter_run_mode() -> void:
+	var need_rebuild := _ops_dirty or _transit_sim.trams.is_empty()
+	_begin_loading_overlay(L10n.t("正在进入运行与驾驶模式", "Entering Run & Drive Mode"), L10n.t("正在准备运营环境...", "Preparing simulation..."))
+	await get_tree().process_frame
+
+	if need_rebuild:
+		_draft_station_ids.clear()
+		_editing_line_id = -1
+		_draft_insert_idx = -1
+		_route_preview_mi.mesh = null
+		_set_startup_progress(22.0, L10n.t("正在编组上线电车与编译线路...", "Spawning fleet & compiling routes..."))
+		await get_tree().process_frame
+		_transit_sim.rebuild_fleet(_graph, _tram_models, _night_factor)
+
+		_set_startup_progress(45.0, L10n.t("正在初始化站台候车客流...", "Seeding station passengers..."))
+		await get_tree().process_frame
+		_pax_sim.reset_for_stations(_station_views)
+		_pax_sim.seed_initial_passengers(_graph, 20)
+
+		_set_startup_progress(62.0, L10n.t("正在构建交通信号系统与街道车流...", "Building signals & street traffic..."))
+		await get_tree().process_frame
+		_traffic_sim.rebuild_traffic(_graph, _get_traffic_focus_pos())
+		_ops_dirty = false
+	else:
+		_set_startup_progress(45.0, L10n.t("正在恢复列车运营与视角...", "Restoring operations & camera..."))
+		await get_tree().process_frame
+
+	_set_game_mode(GameMode.RUN)
+	var focus_pos := _get_traffic_focus_pos()
+	await _prewarm_city_and_gpu(focus_pos, true, 66.0 if need_rebuild else 55.0, 99.0)
+	_end_loading_overlay()
 
 
 func _set_game_mode(mode: int) -> void:
@@ -1406,14 +1807,14 @@ func _set_game_mode(mode: int) -> void:
 	_last_ann_door_open = false
 	if _btn_quick_save_run != null:
 		_btn_quick_save_run.visible = (_game_mode == GameMode.RUN)
-	_sound.set_menu_silenced(_in_home_menu or _game_mode != GameMode.RUN)
+	_sound.set_menu_silenced(_startup_loading or _in_home_menu or _game_mode != GameMode.RUN)
 
 	if _game_mode == GameMode.RUN:
 		_transit_sim.visible = true
 		_pax_sim.visible = true
 		_traffic_sim.visible = true
-		_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
-		if prev_mode != GameMode.RUN or _ops_dirty:
+		_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+		if _ops_dirty or _transit_sim.trams.is_empty():
 			_draft_station_ids.clear()
 			_editing_line_id = -1
 			_draft_insert_idx = -1
@@ -1441,7 +1842,7 @@ func _set_game_mode(mode: int) -> void:
 		_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
 		_sun.directional_shadow_max_distance = 540.0
 	else:
-		_sun.directional_shadow_max_distance = 540.0 if _cam_mode == CamMode.BIRD else 290.0
+		_sun.directional_shadow_max_distance = 480.0 if _cam_mode == CamMode.BIRD else 220.0
 
 	_overlay_root.visible = (not _in_home_menu) and (_game_mode != GameMode.RUN)
 	_build_panel.visible = (_game_mode == GameMode.BUILD)
@@ -1472,6 +1873,34 @@ func _set_time_hours(h: float) -> void:
 		_updating_slider = false
 
 
+func _set_weather_mode(mode: int, show_msg: bool = true) -> void:
+	_weather_mode = clampi(mode, 0, 2)
+	if _weather != null:
+		_weather.set_weather(_weather_mode)
+	_apply_lighting_from_clock()
+	_refresh_weather_buttons()
+	if show_msg:
+		var msg_desc := L10n.t("蓝天晴朗", "Clear skies") if _weather_mode == WeatherSystem.WeatherType.SUNNY else (
+			L10n.t("多云阴沉 · 柔和漫射光", "Overcast clouds · soft diffuse light") if _weather_mode == WeatherSystem.WeatherType.CLOUDY else
+			L10n.t("细雨绵绵 · 开启雨景与雨声", "Steady rainfall · rain visuals & ambience")
+		)
+		_show_toast(L10n.t("天气已切换为：%s（%s）", "Weather set to: %s (%s)") % [WeatherSystem.weather_button_label(_weather_mode), msg_desc])
+
+
+func _cycle_weather_mode() -> void:
+	_set_weather_mode((_weather_mode + 1) % 3, true)
+
+
+func _refresh_weather_buttons() -> void:
+	if _btn_weather != null and is_instance_valid(_btn_weather):
+		_btn_weather.text = WeatherSystem.weather_button_label(_weather_mode)
+		_highlight_active_btn(_btn_weather, _weather_mode != WeatherSystem.WeatherType.SUNNY)
+	for wi in range(_settings_weather_btns.size()):
+		var wb := _settings_weather_btns[wi]
+		if wb != null and is_instance_valid(wb):
+			_highlight_active_btn(wb, _weather_mode == wi)
+
+
 func _apply_lighting_from_clock() -> void:
 	var env := _world_env.environment
 	var sky_mat := env.sky.sky_material as ProceduralSkyMaterial
@@ -1484,36 +1913,105 @@ func _apply_lighting_from_clock() -> void:
 	var dusk_fac := smoothstep(20.0, 1.0, elev_deg) * smoothstep(-6.0, 1.0, elev_deg)
 	_night_factor = smoothstep(9.0, -5.0, elev_deg)
 
-	sky_mat.sky_top_color = Color(0.025, 0.035, 0.065).lerp(Color(0.32, 0.52, 0.78), day_fac).lerp(Color(0.18, 0.26, 0.46), dusk_fac * 0.75)
-	sky_mat.sky_horizon_color = Color(0.055, 0.075, 0.12).lerp(Color(0.76, 0.82, 0.89), day_fac).lerp(Color(0.94, 0.58, 0.36), dusk_fac * 0.85)
+	var is_cloudy := (_weather_mode == WeatherSystem.WeatherType.CLOUDY)
+	var is_rainy := (_weather_mode == WeatherSystem.WeatherType.RAINY)
+	var overcast_amt := 1.0 if is_rainy else (0.72 if is_cloudy else 0.0)
+
+	# Base sunny sky colors
+	var sunny_top := Color(0.025, 0.035, 0.065).lerp(Color(0.32, 0.52, 0.78), day_fac).lerp(Color(0.18, 0.26, 0.46), dusk_fac * 0.75)
+	var sunny_hor := Color(0.055, 0.075, 0.12).lerp(Color(0.76, 0.82, 0.89), day_fac).lerp(Color(0.94, 0.58, 0.36), dusk_fac * 0.85)
+	# Overcast / Rainy sky colors (cool moody grey-blue in daytime, dark slate at night)
+	var cloud_top := Color(0.028, 0.036, 0.052).lerp(Color(0.42, 0.46, 0.52), day_fac).lerp(Color(0.30, 0.30, 0.34), dusk_fac * 0.65)
+	var cloud_hor := Color(0.058, 0.070, 0.095).lerp(Color(0.64, 0.67, 0.71), day_fac).lerp(Color(0.54, 0.46, 0.43), dusk_fac * 0.60)
+	var rain_top := Color(0.018, 0.024, 0.038).lerp(Color(0.28, 0.33, 0.39), day_fac).lerp(Color(0.20, 0.22, 0.27), dusk_fac * 0.55)
+	var rain_hor := Color(0.042, 0.054, 0.076).lerp(Color(0.48, 0.53, 0.59), day_fac).lerp(Color(0.35, 0.34, 0.38), dusk_fac * 0.50)
+
+	if is_rainy:
+		sky_mat.sky_top_color = rain_top
+		sky_mat.sky_horizon_color = rain_hor
+		sky_mat.sky_curve = 0.30
+		sky_mat.sun_angle_max = 88.0
+	elif is_cloudy:
+		sky_mat.sky_top_color = cloud_top
+		sky_mat.sky_horizon_color = cloud_hor
+		sky_mat.sky_curve = 0.22
+		sky_mat.sun_angle_max = 62.0
+	else:
+		sky_mat.sky_top_color = sunny_top
+		sky_mat.sky_horizon_color = sunny_hor
+		sky_mat.sky_curve = 0.12
+		sky_mat.sun_angle_max = 30.0
+
 	# Below the horizon the sky continues as distant haze over Elliott Bay (no dark band past the far plane)
 	sky_mat.ground_horizon_color = sky_mat.sky_horizon_color.lerp(Color(0.30, 0.40, 0.46), 0.25 * day_fac)
-	sky_mat.ground_bottom_color = Color(0.03, 0.03, 0.04).lerp(Color(0.28, 0.28, 0.27), day_fac)
+	sky_mat.ground_bottom_color = Color(0.03, 0.03, 0.04).lerp(Color(0.28, 0.28, 0.27) if not is_rainy else Color(0.18, 0.20, 0.22), day_fac)
 
 	if elev_deg > -2.5:
 		_sun.rotation_degrees = Vector3(-maxf(elev_deg, 2.0), azim_deg, 0.0)
-		_sun.light_color = Color(1.0, 0.97, 0.92).lerp(Color(1.0, 0.66, 0.38), dusk_fac)
-		_sun.light_energy = lerpf(0.08, 2.35, smoothstep(-2.5, 18.0, elev_deg))
+		var base_sun_col := Color(1.0, 0.97, 0.92).lerp(Color(1.0, 0.66, 0.38), dusk_fac)
+		var base_sun_e := lerpf(0.08, 2.35, smoothstep(-2.5, 18.0, elev_deg))
+		if is_rainy:
+			_sun.light_color = base_sun_col.lerp(Color(0.76, 0.82, 0.90), 0.78)
+			_sun.light_energy = base_sun_e * 0.20
+			_sun.shadow_opacity = 0.32
+		elif is_cloudy:
+			_sun.light_color = base_sun_col.lerp(Color(0.86, 0.89, 0.93), 0.58)
+			_sun.light_energy = base_sun_e * 0.38
+			_sun.shadow_opacity = 0.50
+		else:
+			_sun.light_color = base_sun_col
+			_sun.light_energy = base_sun_e
+			_sun.shadow_opacity = 1.0
 	else:
 		_sun.rotation_degrees = Vector3(-48.0, 125.0, 0.0)
 		_sun.light_color = Color(0.68, 0.72, 0.82)
-		_sun.light_energy = 0.24
+		_sun.light_energy = 0.14 if is_rainy else (0.18 if is_cloudy else 0.24)
+		_sun.shadow_opacity = 0.45 if overcast_amt > 0.0 else 1.0
 
-	env.ambient_light_color = Color(0.20, 0.22, 0.26).lerp(Color(0.76, 0.77, 0.79), day_fac).lerp(Color(0.56, 0.49, 0.47), dusk_fac * 0.55)
-	env.ambient_light_energy = lerpf(0.45, 0.70, day_fac)
+	if is_rainy:
+		env.ambient_light_color = Color(0.15, 0.17, 0.22).lerp(Color(0.56, 0.61, 0.68), day_fac)
+		env.ambient_light_energy = lerpf(0.42, 0.76, day_fac)
+		env.fog_enabled = true
+		env.fog_mode = Environment.FOG_MODE_DEPTH
+		env.fog_depth_begin = 38.0
+		env.fog_depth_end = 310.0
+		env.fog_density = 0.68
+		env.fog_sky_affect = 0.55
+		env.fog_light_color = sky_mat.sky_horizon_color
+	elif is_cloudy:
+		env.ambient_light_color = Color(0.18, 0.20, 0.24).lerp(Color(0.70, 0.73, 0.77), day_fac)
+		env.ambient_light_energy = lerpf(0.44, 0.82, day_fac)
+		env.fog_enabled = true
+		env.fog_mode = Environment.FOG_MODE_DEPTH
+		env.fog_depth_begin = 115.0
+		env.fog_depth_end = 560.0
+		env.fog_density = 0.40
+		env.fog_sky_affect = 0.35
+		env.fog_light_color = sky_mat.sky_horizon_color
+	else:
+		env.ambient_light_color = Color(0.20, 0.22, 0.26).lerp(Color(0.76, 0.77, 0.79), day_fac).lerp(Color(0.56, 0.49, 0.47), dusk_fac * 0.55)
+		env.ambient_light_energy = lerpf(0.45, 0.70, day_fac)
+		env.fog_enabled = false
 
 	var sky_refl := Color(0.10, 0.12, 0.18).lerp(
 		Color(0.62, 0.70, 0.78).lerp(Color(0.86, 0.64, 0.48), dusk_fac),
 		day_fac
 	)
-	_building_mat.set_shader_parameter("night_factor", _night_factor)
+	if is_rainy:
+		sky_refl = sky_refl.lerp(Color(0.40, 0.45, 0.52), 0.65 * day_fac)
+	elif is_cloudy:
+		sky_refl = sky_refl.lerp(Color(0.56, 0.60, 0.65), 0.55 * day_fac)
+
+	var bldg_night := maxf(_night_factor, 0.14 if is_rainy else 0.0)
+	_building_mat.set_shader_parameter("night_factor", bldg_night)
 	for nm in _night_mats:
-		nm.set_shader_parameter("night_factor", _night_factor)
+		nm.set_shader_parameter("night_factor", bldg_night)
 	_building_mat.set_shader_parameter("env_sky_tint", Vector3(sky_refl.r, sky_refl.g, sky_refl.b))
 	if _spheres_mat != null:
-		_spheres_mat.set_shader_parameter("night_factor", _night_factor)
+		_spheres_mat.set_shader_parameter("night_factor", bldg_night)
 
-	_globe_mat.emission_energy_multiplier = _night_factor * 2.8
+	var eff_lamp_fac := maxf(_night_factor, 0.38 if is_rainy else 0.0)
+	_globe_mat.emission_energy_multiplier = eff_lamp_fac * 2.8
 	var lamp_e := _night_factor * 2.05
 	var show_lamps := (lamp_e > 0.02)
 	for cl in _city_lights:
@@ -1526,7 +2024,9 @@ func _apply_lighting_from_clock() -> void:
 			tl.light_energy = lamp_e * 1.15
 
 	if _transit_sim != null:
-		_transit_sim.apply_night_lights(_night_factor)
+		_transit_sim.apply_night_lights(eff_lamp_fac)
+	if _weather != null:
+		_weather.update_lighting(_night_factor)
 
 	if _lbl_clock != null:
 		var hh := int(floor(_time_hours)) % 24
@@ -1605,7 +2105,7 @@ func _unhandled_input(event: InputEvent) -> void:
 							var hsp: SpotLight3D = tr_l["tram_info"].get("head_spot")
 							if is_instance_valid(hsp):
 								hsp.light_energy = 4.2 if hi else 1.2
-							_show_toast("💡 远光前照灯：%s" % ("已开启" if hi else "已切回近光"))
+							_show_toast(L10n.t("💡 远光前照灯：%s", "💡 High-Beam Headlight: %s") % (L10n.t("已开启", "ON") if hi else L10n.t("已切回近光", "Low Beam")))
 						return
 					elif hit_ctrl == "btn_wiper":
 						_sound.play_notch_click()
@@ -1613,15 +2113,15 @@ func _unhandled_input(event: InputEvent) -> void:
 						if not tr_w.is_empty():
 							var won := not bool(tr_w.get("wipers_on", false))
 							tr_w["wipers_on"] = won
-							_show_toast("🌧 前挡风玻璃雨刮：%s" % ("已开启" if won else "已关闭"))
+							_show_toast(L10n.t("🌧 前挡风玻璃雨刮：%s", "🌧 Windshield Wipers: %s") % (L10n.t("已开启", "ON") if won else L10n.t("已关闭", "OFF")))
 						return
 					elif hit_ctrl == "btn_panto":
 						_sound.play_notch_click()
-						_show_toast("⚡ 受电弓状态：已升弓受流（750V DC 正常）")
+						_show_toast(L10n.t("⚡ 受电弓状态：已升弓受流（750V DC 正常）", "⚡ Pantograph: Raised (750V DC Normal)"))
 						return
 					elif hit_ctrl == "btn_sand":
 						_sound.play_notch_click()
-						_show_toast("🏜 轨道撒砂防滑系统已触发（增粘防滑）")
+						_show_toast(L10n.t("🏜 轨道撒砂防滑系统已触发（增粘防滑）", "🏜 Track Sander activated (traction boost)"))
 						return
 					elif hit_ctrl == "btn_rev":
 						_sound.play_notch_click()
@@ -1630,7 +2130,7 @@ func _unhandled_input(event: InputEvent) -> void:
 					elif hit_ctrl == "btn_eb":
 						_sound.play_notch_click()
 						_transit_sim.manual_set_notch(0)
-						_show_toast("⚠ 已拍下驾驶台【紧急制动 EB】按钮！")
+						_show_toast(L10n.t("⚠ 已拍下驾驶台【紧急制动 EB】按钮！", "⚠ Emergency Brake (EB) triggered!"))
 						return
 				_lmb_down = true
 				_lmb_drag_active = false
@@ -1704,16 +2204,16 @@ func _unhandled_input(event: InputEvent) -> void:
 				_land_prev_has = false
 				_land_prev_nid = -1
 				_preview_mi.mesh = null
-				_show_toast("已结束本次连续施工")
+				_show_toast(L10n.t("已结束本次连续施工", "Finished chained construction"))
 			elif _game_mode == GameMode.BUILD and _path_start_node >= 0:
 				_path_start_node = -1
 				_preview_mi.mesh = null
-				_show_toast("已取消连线铺轨起点")
+				_show_toast(L10n.t("已取消连线铺轨起点", "Cancelled pathfind start node"))
 			else:
 				_enter_home_screen()
 			return
 		elif k == KEY_TAB:
-			_set_game_mode((_game_mode + 1) % 3)
+			_request_game_mode((_game_mode + 1) % 3)
 			return
 		elif k == KEY_N:
 			_set_time_hours(22.0 if _night_factor < 0.5 else 13.5)
@@ -1742,10 +2242,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				if _build_tool == BuildTool.CROSSOVER:
 					_build_crossover_type = NetworkGraph.CrossoverType.DOUBLE if _build_crossover_type == NetworkGraph.CrossoverType.SINGLE else NetworkGraph.CrossoverType.SINGLE
 					_refresh_build_buttons()
-					_show_toast("渡线类型已切换为：%s" % ("双渡线 (交叉渡线)" if _build_crossover_type == NetworkGraph.CrossoverType.DOUBLE else "单渡线"))
+					_show_toast(L10n.t("渡线类型已切换为：%s", "Crossover type: %s") % (L10n.t("双渡线 (交叉渡线)", "Scissors Crossover") if _build_crossover_type == NetworkGraph.CrossoverType.DOUBLE else L10n.t("单渡线", "Single Crossover")))
 				else:
 					_build_station_side = -_build_station_side
-					_show_toast("站台方向已切换至轨道%s侧" % ("右" if _build_station_side > 0 else "左"))
+					_show_toast(L10n.t("站台方向已切换至轨道%s侧", "Platform side flipped to %s") % (L10n.t("右", "right") if _build_station_side > 0 else L10n.t("左", "left")))
 		elif _game_mode == GameMode.PLAN:
 			if k == KEY_BACKSPACE and not _draft_station_ids.is_empty():
 				_draft_undo_last()
@@ -1753,7 +2253,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			# RUN & DRIVE Mode Controls:
 			# W / S = Throttle / Brake; Arrow Keys (Up/Down/Left/Right) = Move/Rotate Camera View!
 			if _run_paused and k in [KEY_Q, KEY_W, KEY_S, KEY_SPACE, KEY_O, KEY_B, KEY_R, KEY_X, KEY_G, KEY_H, KEY_K, KEY_J, KEY_U]:
-				_show_toast("⏸ 已暂停：按 V 继续运营后再操作列车")
+				_show_toast(L10n.t("⏸ 已暂停：按 V 继续运营后再操作列车", "⏸ Paused: press V to resume before controlling tram"))
 				return
 			match k:
 				KEY_1: _set_cam_mode(CamMode.CAB)
@@ -1768,7 +2268,7 @@ func _unhandled_input(event: InputEvent) -> void:
 					_switch_line(1)
 				KEY_P:
 					var lvl := _pax_sim.cycle_spawn_level()
-					_btn_pax_rate.text = "客流: %s (P)" % PassengerSim.SPAWN_LEVEL_NAMES[lvl]
+					_btn_pax_rate.text = L10n.t("客流: %s (P)", "Pax: %s (P)") % PassengerSim.spawn_level_name(lvl)
 				KEY_Q:
 					_transit_sim.manual_drive = not _transit_sim.manual_drive
 				KEY_W:
@@ -1809,7 +2309,7 @@ func _unhandled_input(event: InputEvent) -> void:
 # Manual driving: throw the next switch ahead for this train's route
 func _do_throw_switch() -> void:
 	if not _transit_sim.manual_drive:
-		_show_toast("⚠ 自动运营时道岔由调度按进路自动排列；切换手动驾驶 (Q) 后可手动干预道岔")
+		_show_toast(L10n.t("⚠ 自动运营时道岔由调度按进路自动排列；切换手动驾驶 (Q) 后可手动干预道岔", "⚠ Switches are dispatcher-controlled in AI mode; take manual control (Q) to throw switches"))
 		return
 	var res := _transit_sim.manual_throw_switch(_graph)
 	var swi := _transit_sim.switch_ahead_info(_transit_sim.get_active_tram(), _transit_sim.active_tram_idx)
@@ -1817,19 +2317,19 @@ func _do_throw_switch() -> void:
 	match res:
 		"diverge", "straight":
 			_sound.play_notch_click()
-			var dir_txt := "侧向/渡线" if res == "diverge" else "直向"
+			var dir_txt := L10n.t("侧向/渡线", "Diverging") if res == "diverge" else L10n.t("直向", "Straight")
 			if ovr:
-				_show_toast("⚠ 手动干预：道岔扳向【%s】，与本次进路不符，信号保持红灯；再按 G 恢复自动进路" % dir_txt)
+				_show_toast(L10n.t("⚠ 手动干预：道岔扳向【%s】，与本次进路不符，信号保持红灯；再按 G 恢复自动进路", "⚠ Manual override: switch set [%s] (mismatches route, signal stays red); press G again to restore") % dir_txt)
 			else:
-				_show_toast("✅ 道岔恢复按进路自动排列【%s】，锁闭后信号开放" % dir_txt)
+				_show_toast(L10n.t("✅ 道岔恢复按进路自动排列【%s】，锁闭后信号开放", "✅ Switch aligned [%s] for route — signal clears once locked") % dir_txt)
 		"busy":
-			_show_toast("⚠ 前方道岔已被其他列车的进路占用，请在信号机前停车等待")
+			_show_toast(L10n.t("⚠ 前方道岔已被其他列车的进路占用，请在信号机前停车等待", "⚠ Switch ahead is reserved by another train — wait at the signal"))
 		"locked":
-			_show_toast("⚠ 列车正在道岔上，道岔已锁闭不能扳动")
+			_show_toast(L10n.t("⚠ 列车正在道岔上，道岔已锁闭不能扳动", "⚠ Train is currently on the switch — cannot throw while locked"))
 		"trailing":
-			_show_toast("⚠ 前方道岔对本车是顺向（渡线从另一股道汇入），只能直向通过，不能扳向侧向")
+			_show_toast(L10n.t("⚠ 前方道岔对本车是顺向（渡线从另一股道汇入），只能直向通过，不能扳向侧向", "⚠ Trailing switch ahead — can only pass straight"))
 		_:
-			_show_toast("前方 260 m 内没有道岔")
+			_show_toast(L10n.t("前方 260 m 内没有道岔", "No switch within 260 m ahead"))
 
 
 func _do_toggle_switch_lock() -> void:
@@ -1843,14 +2343,14 @@ func _do_toggle_switch_lock() -> void:
 				for g in _transit_sim.player_lock:
 					if float(g.target) > 0.5:
 						any_div = true
-				pos_txt = "（当前：%s）" % ("侧向/渡线" if any_div else "直向")
-			_show_toast("🔒 已锁定前方道岔%s：调度不会再扳动它，本车驶出该道岔后自动解锁；再按 J 手动解锁" % pos_txt)
+				pos_txt = L10n.t("（当前：%s）", " (%s)") % (L10n.t("侧向/渡线", "Diverging") if any_div else L10n.t("直向", "Straight"))
+			_show_toast(L10n.t("🔒 已锁定前方道岔%s：调度不会再扳动它，本车驶出该道岔后自动解锁；再按 J 手动解锁", "🔒 Switch ahead locked%s — unlocks after clearing, or press J to unlock") % pos_txt)
 		"unlocked":
-			_show_toast("🔓 已解除道岔锁定，道岔恢复由调度按进路排列")
+			_show_toast(L10n.t("🔓 已解除道岔锁定，道岔恢复由调度按进路排列", "🔓 Switch unlocked — returned to automatic routing"))
 		"busy":
-			_show_toast("⚠ 前方道岔已被锁定")
+			_show_toast(L10n.t("⚠ 前方道岔已被锁定", "⚠ Switch ahead is already locked"))
 		_:
-			_show_toast("前方 %d m 内没有道岔" % int(TransitSim.SW_SCAN_AHEAD))
+			_show_toast(L10n.t("前方 %d m 内没有道岔", "No switch within %d m ahead") % int(TransitSim.SW_SCAN_AHEAD))
 
 
 func _do_toggle_auto_switches() -> void:
@@ -1858,35 +2358,35 @@ func _do_toggle_auto_switches() -> void:
 	_transit_sim.set_auto_switches(on)
 	_sound.play_notch_click()
 	if on:
-		_show_toast("✅ AI 自动道岔已开启：调度按各列车进路自动排列道岔")
+		_show_toast(L10n.t("✅ AI 自动道岔已开启：调度按各列车进路自动排列道岔", "✅ AI Auto Switches: ON — dispatcher routes switches automatically"))
 	else:
-		_show_toast("⚠ AI 自动道岔已关闭：所有道岔保持不动，只能按 G 手动扳动；进路不符时信号保持红灯，AI 列车会停车等待")
+		_show_toast(L10n.t("⚠ AI 自动道岔已关闭：所有道岔保持不动，只能按 G 手动扳动；进路不符时信号保持红灯，AI 列车会停车等待", "⚠ AI Auto Switches: OFF — switches hold position; throw manually with G"))
 
 
 func _do_toggle_hold_manual() -> void:
 	match _transit_sim.manual_toggle_hold():
 		"held":
 			_sound.play_notch_click()
-			_show_toast("📌 已保留手动：切换到其他列车后，本车原地停车待命（不交给 AI）；切回本车即可继续手动驾驶")
+			_show_toast(L10n.t("📌 已保留手动：切换到其他列车后，本车原地停车待命（不交给 AI）；切回本车即可继续手动驾驶", "📌 Held Manual: this tram stays parked in standby when you switch trams"))
 		"released":
-			_show_toast("已取消保留手动：切换到其他列车后，本车交回 AI 自动运营")
+			_show_toast(L10n.t("已取消保留手动：切换到其他列车后，本车交回 AI 自动运营", "Released Hold Manual: tram will return to AI when you switch away"))
 		"moving":
-			_show_toast("⚠ 请先停车，再保留手动")
+			_show_toast(L10n.t("⚠ 请先停车，再保留手动", "⚠ Stop completely before holding manual"))
 		"not_manual":
-			_show_toast("⚠ 先接管手动驾驶 (Q) 并停车，才能把本车保留为手动")
+			_show_toast(L10n.t("⚠ 先接管手动驾驶 (Q) 并停车，才能把本车保留为手动", "⚠ Switch to manual control (Q) and stop first"))
 
 
 func _toggle_run_pause() -> void:
 	if _game_mode != GameMode.RUN or _in_home_menu or _game_over:
 		return
 	_set_run_paused(not _run_paused)
-	_show_toast("⏸ 运营已暂停（V 继续）" if _run_paused else "▶ 继续运营")
+	_show_toast(L10n.t("⏸ 运营已暂停（V 继续）", "⏸ Paused (press V to resume)") if _run_paused else L10n.t("▶ 继续运营", "▶ Resumed"))
 
 
 func _set_run_paused(p: bool) -> void:
 	_run_paused = p
 	if _btn_pause != null:
-		_btn_pause.text = "▶ 继续 (V)" if p else "⏸ 暂停 (V)"
+		_btn_pause.text = L10n.t("▶ 继续 (V)", "▶ Resume (V)") if p else L10n.t("⏸ 暂停 (V)", "⏸ Pause (V)")
 		_highlight_active_btn(_btn_pause, p)
 	if _lbl_paused != null:
 		_lbl_paused.visible = p and _game_mode == GameMode.RUN
@@ -1897,12 +2397,12 @@ func _do_toggle_reverser() -> void:
 	match _transit_sim.manual_toggle_reverser():
 		"reverse":
 			_sound.play_notch_click()
-			_show_toast("⏪ 已挂倒档 R：牵引时列车向后行驶（限速 %d km/h）；停车后再按 X 回到前进档" % int(TransitSim.REVERSE_MAX_KMH))
+			_show_toast(L10n.t("⏪ 已挂倒档 R：牵引时列车向后行驶（限速 %d km/h）；停车后再按 X 回到前进档", "⏪ Reverse Gear (R): limit %d km/h · Stop and press X for Forward") % int(TransitSim.REVERSE_MAX_KMH))
 		"forward":
 			_sound.play_notch_click()
-			_show_toast("⏩ 已回到前进档")
+			_show_toast(L10n.t("⏩ 已回到前进档", "⏩ Forward Gear"))
 		"moving":
-			_show_toast("⚠ 请先停车再切换前进 / 倒档")
+			_show_toast(L10n.t("⚠ 请先停车再切换前进 / 倒档", "⚠ Come to a stop before changing Forward / Reverse"))
 
 
 # Manual cab change: the driver walks to the other cab; at a terminal the tram then departs back the way it came
@@ -1913,23 +2413,23 @@ func _do_cab_change() -> void:
 			_sound.play_notch_click()
 			var tr_ok := _transit_sim.get_active_tram()
 			if str(tr_ok.get("term_stage", "")) == "board_only":
-				_show_toast("🔄 已换端：请开门 (O) 让返程新乘客上车，关门后即可发车！")
+				_show_toast(L10n.t("🔄 已换端：请开门 (O) 让返程新乘客上车，关门后即可发车！", "🔄 Cab changed: open doors (O) to board return passengers, then depart!"))
 			else:
-				_show_toast("🔄 已换端：现在从另一端驾驶室驾驶，前方为返程方向（出站后经渡线进入对向轨道）")
+				_show_toast(L10n.t("🔄 已换端：现在从另一端驾驶室驾驶，前方为返程方向（出站后经渡线进入对向轨道）", "🔄 Cab changed: driving from opposite cab for return trip"))
 		"moving":
-			_show_toast("⚠ 换端前请先停车（速度降到 0）")
+			_show_toast(L10n.t("⚠ 换端前请先停车（速度降到 0）", "⚠ Stop completely before changing cab"))
 		"doors":
-			_show_toast("⚠ 换端前请先关闭车门 (O)")
+			_show_toast(L10n.t("⚠ 换端前请先关闭车门 (O)", "⚠ Close doors (O) before changing cab"))
 		"pax_onboard":
 			var tr_p := _transit_sim.get_active_tram()
 			var left_n := (tr_p.get("pax_dests", []) as Array).size()
-			_show_toast("⚠ 终点站仍有 %d 名乘客未下车：请先开门 (O) 全员清客后再关门换端！" % left_n)
+			_show_toast(L10n.t("⚠ 终点站仍有 %d 名乘客未下车：请先开门 (O) 全员清客后再关门换端！", "⚠ %d passenger(s) still onboard at terminus — open doors (O) to alight everyone first!") % left_n)
 		"not_terminal":
 			var d := _transit_sim.turnback_distance_ahead(_transit_sim.get_active_tram())
 			if d > 0.0:
-				_show_toast("⚠ 只能在终点站换端：再向前行驶约 %d m 进入终点站后停车" % int(round(maxf(1.0, d - 55.0))))
+				_show_toast(L10n.t("⚠ 只能在终点站换端：再向前行驶约 %d m 进入终点站后停车", "⚠ Cab change only at terminus (~%d m ahead)") % int(round(maxf(1.0, d - 55.0))))
 			else:
-				_show_toast("⚠ 只能在终点站换端折返（环线中途不能掉头）")
+				_show_toast(L10n.t("⚠ 只能在终点站换端折返（环线中途不能掉头）", "⚠ Cab change is only allowed at a turnback terminus"))
 
 
 func _pick_cab_control(screen_pos: Vector2) -> String:
@@ -1981,15 +2481,15 @@ func _update_cab_hover_tip(screen_pos: Vector2) -> void:
 		_lbl_cab_tip.visible = false
 		return
 	var tip_map := {
-		"throttle": "▲▼ 按住上下推拉【主控牵引/制动手柄】",
-		"btn_doors": "● 点击【DOORS 车门开关】",
-		"btn_bell": "● 点击【BELL 叮叮铜铃】",
-		"btn_light": "● 点击【LIGHT 远近光前照灯】",
-		"btn_wiper": "● 点击【WIPER 挡风玻璃雨刮】",
-		"btn_panto": "● 点击【PANTO 受电弓状态检查】",
-		"btn_sand": "● 点击【SAND 轨道撒砂防滑】",
-		"btn_rev": "● 点击【F/N/R 换向/换端开关】",
-		"btn_eb": "⚠ 点击【EB STOP 紧急制动】",
+		"throttle": L10n.t("▲▼ 按住上下推拉【主控牵引/制动手柄】", "▲▼ Drag [Master Controller Lever]"),
+		"btn_doors": L10n.t("● 点击【DOORS 车门开关】", "● Click [DOORS]"),
+		"btn_bell": L10n.t("● 点击【BELL 叮叮铜铃】", "● Click [BELL]"),
+		"btn_light": L10n.t("● 点击【LIGHT 远近光前照灯】", "● Click [HEADLIGHT]"),
+		"btn_wiper": L10n.t("● 点击【WIPER 挡风玻璃雨刮】", "● Click [WIPERS]"),
+		"btn_panto": L10n.t("● 点击【PANTO 受电弓状态检查】", "● Click [PANTOGRAPH]"),
+		"btn_sand": L10n.t("● 点击【SAND 轨道撒砂防滑】", "● Click [SANDER]"),
+		"btn_rev": L10n.t("● 点击【F/N/R 换向/换端开关】", "● Click [F/N/R CAB SWITCH]"),
+		"btn_eb": L10n.t("⚠ 点击【EB STOP 紧急制动】", "⚠ Click [EB EMERGENCY STOP]"),
 	}
 	_lbl_cab_tip.text = str(tip_map.get(hit, ""))
 	_lbl_cab_tip.position = screen_pos + Vector2(16, -24)
@@ -2037,10 +2537,10 @@ func _rotate_run_camera_by_delta(rel: Vector2) -> void:
 
 func _track_mode_tag(long: bool = true) -> String:
 	if _build_track_mode == NetworkGraph.TrackMode.QUAD:
-		return "四轨快慢线" if long else "四轨"
+		return L10n.t("四轨快慢线", "4-Track Express/Local") if long else L10n.t("四轨", "4-Track")
 	if _build_track_mode == NetworkGraph.TrackMode.DOUBLE:
-		return "双线并行" if long else "双线"
-	return "单线"
+		return L10n.t("双线并行", "Double Track") if long else L10n.t("双线", "Double")
+	return L10n.t("单线", "Single")
 
 
 func _track_preview_width() -> float:
@@ -2062,6 +2562,8 @@ func _screen_to_ground_xz(screen_pos: Vector2) -> Variant:
 func _put_tracks_on_terrain() -> void:
 	if not Terrain.active:
 		return
+	if Terrain.grade_for_tracks(_graph):
+		_refresh_land_layers(true, false)
 	Terrain.drape_subtree(_track_root)
 	for sv in _station_views.values():
 		if sv is Dictionary:
@@ -2087,8 +2589,8 @@ func _update_build_hover_preview(screen_pos: Vector2) -> void:
 		var prev_w := _track_preview_width()
 		var mode_tag := _track_mode_tag()
 		_set_ribbon_preview(_preview_mi, [eid], Color(0.20, 0.92, 0.56, 0.72), prev_w)
-		var ed_name: String = str(_graph.edges[eid]["name"])
-		_lbl_build_hint.text = "悬停街道：%s · 单击铺设【%s · %s】（按下触摸板左右滑动拖动地图）" % [ed_name, mode_tag, BED_STYLE_NAMES[_build_bed_style]]
+		var ed_name: String = L10n.street_display_name(str(_graph.edges[eid]["name"]))
+		_lbl_build_hint.text = L10n.t("悬停街道：%s · 单击铺设【%s · %s】（按下触摸板左右滑动拖动地图）", "Street: %s · Click to lay [%s · %s] (drag to pan)") % [ed_name, mode_tag, _bed_style_name(_build_bed_style)]
 
 	elif _build_tool == BuildTool.TRACK_PATH:
 		var nid := _graph.find_closest_node(xz, 26.0)
@@ -2100,18 +2602,18 @@ func _update_build_hover_preview(screen_pos: Vector2) -> void:
 			var prev_w := _track_preview_width()
 			var mode_tag := _track_mode_tag()
 			_set_ribbon_preview(_preview_mi, path_eids, Color(0.22, 0.85, 0.98, 0.78), prev_w)
-			_lbl_build_hint.text = "自动寻路：%d 段街道 · 单击铺设【%s · %s】（Esc 取消起点）" % [path_eids.size(), mode_tag, BED_STYLE_NAMES[_build_bed_style]]
+			_lbl_build_hint.text = L10n.t("自动寻路：%d 段街道 · 单击铺设【%s · %s】（Esc 取消起点）", "Pathfind: %d segs · Click to lay [%s · %s] (Esc to cancel)") % [path_eids.size(), mode_tag, _bed_style_name(_build_bed_style)]
 		else:
 			var np: Vector2 = _graph.nodes[nid]["pos"]
 			_set_point_box_preview(_preview_mi, Vector3(np.x, 0.6, np.y), Vector3(6.0, 1.2, 6.0), Color(0.22, 0.85, 0.98, 0.80))
-			_lbl_build_hint.text = "路口：%s · 单击选为连线铺轨起点" % str(_graph.nodes[nid]["name"])
+			_lbl_build_hint.text = L10n.t("路口：%s · 单击选为连线铺轨起点", "Junction: %s · Click to set pathfind start") % L10n.street_display_name(str(_graph.nodes[nid]["name"]))
 
 	elif _build_tool == BuildTool.CROSSOVER:
 		var hit := _graph.find_closest_edge(xz, 22.0, true)
-		var xo_name := "交叉渡线 (剪刀)" if _build_crossover_type == NetworkGraph.CrossoverType.DOUBLE else "单渡线"
+		var xo_name := L10n.t("交叉渡线 (剪刀)", "Scissors Crossover") if _build_crossover_type == NetworkGraph.CrossoverType.DOUBLE else L10n.t("单渡线", "Single Crossover")
 		if hit.is_empty():
 			_preview_mi.mesh = null
-			_lbl_build_hint.text = "请将光标移至【已铺设双线轨道】的街道上修建%s（按 R 切换单/交叉渡线）" % xo_name
+			_lbl_build_hint.text = L10n.t("请将光标移至【已铺设双线轨道】的街道上修建%s（按 R 切换单/交叉渡线）", "Hover a [Double Track] street to place %s (Press R to toggle)") % xo_name
 			return
 		var eid := int(hit["edge_id"])
 		var t_hit := float(hit["t"])
@@ -2120,18 +2622,18 @@ func _update_build_hover_preview(screen_pos: Vector2) -> void:
 			var rsn := str(place.get("reason", ""))
 			if rsn == "on_station":
 				_set_oriented_box_preview(_preview_mi, (place["pos"] as Vector3) + Vector3(0.0, 0.35, 0.0), place["fwd"] as Vector3, Vector3(5.8, 0.7, float(place["x_half"]) * 2.0 + 1.0), Color(0.95, 0.28, 0.22, 0.78))
-				_lbl_build_hint.text = "⚠ 禁止在车站站台上修建道岔/渡线，请移至出站并线后的轨道位置！"
+				_lbl_build_hint.text = L10n.t("⚠ 禁止在车站站台上修建道岔/渡线，请移至出站并线后的轨道位置！", "⚠ Cannot place crossover on a station platform — move clear of the station!")
 			else:
 				var is_dbl := _graph.is_multi_track(eid)
 				_set_ribbon_preview(_preview_mi, [eid], Color(0.95, 0.45, 0.22, 0.70), 6.2)
-				var why := "长度不足" if is_dbl else "单线轨道"
+				var why := L10n.t("长度不足", "segment too short") if is_dbl else L10n.t("单线轨道", "single track")
 				if _graph.is_quad(eid):
-					why = "四轨区段不设渡线，请在两端的双线区段修建"
-				_lbl_build_hint.text = "⚠ 仅限有效长度充足的【双线轨道】可修建渡线（当前：%s）" % why
+					why = L10n.t("四轨区段不设渡线，请在两端的双线区段修建", "no crossovers on 4-track; build on adjacent double-track")
+				_lbl_build_hint.text = L10n.t("⚠ 仅限有效长度充足的【双线轨道】可修建渡线（当前：%s）", "⚠ Crossovers require a long enough [Double Track] (%s)") % why
 			return
 		var xo_len := float(place["x_half"]) * 2.0 + 1.2
 		_set_oriented_box_preview(_preview_mi, (place["pos"] as Vector3) + Vector3(0.0, 0.35, 0.0), place["fwd"] as Vector3, Vector3(5.8, 0.7, xo_len), Color(0.96, 0.78, 0.22, 0.82))
-		_lbl_build_hint.text = "单击在 %s 光标处修建【%s】（可紧贴出站并线后修建，按 R 切换单/交叉渡线）" % [str(_graph.edges[eid]["name"]), xo_name]
+		_lbl_build_hint.text = L10n.t("单击在 %s 光标处修建【%s】（可紧贴出站并线后修建，按 R 切换单/交叉渡线）", "Click to build [%s] on %s (Press R to toggle)") % ([L10n.street_display_name(str(_graph.edges[eid]["name"])), xo_name] if not L10n.is_en() else [xo_name, L10n.street_display_name(str(_graph.edges[eid]["name"]))])
 
 	elif _build_tool == BuildTool.STATION:
 		var near_sid := _graph.find_closest_station(xz, 8.5)
@@ -2140,12 +2642,12 @@ func _update_build_hover_preview(screen_pos: Vector2) -> void:
 			var st_fwd_ex: Vector3 = _graph.stations[near_sid]["fwd"]
 			var st_len_ex := float(_graph.stations[near_sid].get("platform_len", 27.0))
 			_set_oriented_box_preview(_preview_mi, sp_ex + Vector3(0.0, 1.5, 0.0), st_fwd_ex, Vector3(3.6, 3.0, st_len_ex + 0.6), Color(0.28, 0.78, 0.98, 0.75))
-			_lbl_build_hint.text = "已对准车站【%s】（%.0fm 站台）· 单击可选中并在左侧修改站名" % [str(_graph.stations[near_sid]["name"]), st_len_ex]
+			_lbl_build_hint.text = L10n.t("已对准车站【%s】（%.0fm 站台）· 单击可选中并在左侧修改站名", "Station [%s] (%.0fm) · Click to select & rename on the left") % [L10n.station_display_name(str(_graph.stations[near_sid]["name"])), st_len_ex]
 			return
 		var hit := _graph.find_closest_edge(xz, 22.0, true)
 		if hit.is_empty():
 			_preview_mi.mesh = null
-			_lbl_build_hint.text = "请将光标移至【已铺设轨道】的街道上建造车站（按 R 切换左右侧站台）"
+			_lbl_build_hint.text = L10n.t("请将光标移至【已铺设轨道】的街道上建造车站（按 R 切换左右侧站台）", "Hover a [Tracked] street to place a station (Press R to flip side)")
 			return
 		var eid := int(hit["edge_id"])
 		var plat_len := STATION_LEN_PRESETS[_build_station_len_idx]
@@ -2153,7 +2655,7 @@ func _update_build_hover_preview(screen_pos: Vector2) -> void:
 		var req_k_prev := _build_station_kind if is_dbl_chk else NetworkGraph.StationKind.SIDE_SINGLE
 		if TrackBuilder.station_overlaps_crossover(_graph, eid, float(hit["t"]), req_k_prev, plat_len):
 			_set_oriented_box_preview(_preview_mi, (hit["pos"] as Vector3) + Vector3(0.0, 0.4, 0.0), hit["fwd"] as Vector3, Vector3(4.8, 0.8, plat_len), Color(0.95, 0.28, 0.22, 0.78))
-			_lbl_build_hint.text = "⚠ 该位置与已有道岔/渡线重叠，不可在道岔上建造车站！"
+			_lbl_build_hint.text = L10n.t("⚠ 该位置与已有道岔/渡线重叠，不可在道岔上建造车站！", "⚠ Overlaps an existing crossover/switch — cannot build station here!")
 			return
 		var is_dbl := _graph.is_multi_track(eid)
 		var sep_prev := _graph.get_edge_track_half_sep(eid)
@@ -2164,20 +2666,20 @@ func _update_build_hover_preview(screen_pos: Vector2) -> void:
 			sep_prev = NetworkGraph.QUAD_LOCAL_HALF_SEP
 		if _graph.is_quad(eid) and _build_station_kind == NetworkGraph.StationKind.ISLAND:
 			_set_oriented_box_preview(_preview_mi, pos3 + Vector3(0.0, 0.4, 0.0), fwd3, Vector3(12.6, 0.8, plat_len), Color(0.25, 0.92, 0.62, 0.62))
-			_lbl_build_hint.text = "单击建造 %.0fm【四轨双岛式站台】（第1-2轨、第3-4轨之间各一岛，慢车道在站前外扩，快慢车同台换乘）" % plat_len
+			_lbl_build_hint.text = L10n.t("单击建造 %.0fm【四轨双岛式站台】（第1-2轨、第3-4轨之间各一岛，慢车道在站前外扩，快慢车同台换乘）", "Click to build %.0fm [4-Track Twin-Island] (express/local cross-platform transfer)") % plat_len
 		elif _graph.is_quad(eid) and _build_station_kind == NetworkGraph.StationKind.SIDE_DUAL:
 			_set_oriented_box_preview(_preview_mi, pos3 + Vector3(0.0, 0.4, 0.0), fwd3, Vector3(16.8, 0.7, plat_len), Color(0.25, 0.92, 0.62, 0.50))
-			_lbl_build_hint.text = "单击建造 %.0fm【四轨外侧侧式站台】（第1、4轨外侧设站台，仅慢车停靠，快车通过）" % plat_len
+			_lbl_build_hint.text = L10n.t("单击建造 %.0fm【四轨外侧侧式站台】（第1、4轨外侧设站台，仅慢车停靠，快车通过）", "Click to build %.0fm [4-Track Outer Side Platforms] (local stops only; express bypasses)") % plat_len
 		elif is_dbl and _build_station_kind == NetworkGraph.StationKind.ISLAND:
 			_set_oriented_box_preview(_preview_mi, pos3 + Vector3(0.0, 0.4, 0.0), fwd3, Vector3(3.1, 0.8, plat_len), Color(0.25, 0.92, 0.62, 0.78))
-			_lbl_build_hint.text = "单击建造 %.0fm【中央岛式站台】（双线将自动加宽至 ±3.05m，列车开内侧门）" % plat_len
+			_lbl_build_hint.text = L10n.t("单击建造 %.0fm【中央岛式站台】（双线将自动加宽至 ±3.05m，列车开内侧门）", "Click to build %.0fm [Center Island Platform] (tracks widen to ±3.05m)") % plat_len
 		elif is_dbl and _build_station_kind == NetworkGraph.StationKind.SIDE_DUAL:
 			_set_oriented_box_preview(_preview_mi, pos3 + Vector3(0.0, 0.4, 0.0), fwd3, Vector3(11.8, 0.7, plat_len), Color(0.25, 0.92, 0.62, 0.58))
-			_lbl_build_hint.text = "单击建造 %.0fm【对称双侧站台】（同时覆盖双线轨道左右两侧）" % plat_len
+			_lbl_build_hint.text = L10n.t("单击建造 %.0fm【对称双侧站台】（同时覆盖双线轨道左右两侧）", "Click to build %.0fm [Dual Side Platforms] (both sides of double track)") % plat_len
 		else:
 			var plat_pos := pos3 + right3 * (float(_build_station_side) * (2.9 + sep_prev)) + Vector3(0.0, 0.4, 0.0)
 			_set_oriented_box_preview(_preview_mi, plat_pos, fwd3, Vector3(3.0, 0.8, plat_len), Color(0.25, 0.92, 0.62, 0.78))
-			_lbl_build_hint.text = "单击在此建造 %.0fm 精细 3D 车站（按 R 切换左右侧站台）" % plat_len
+			_lbl_build_hint.text = L10n.t("单击在此建造 %.0fm 精细 3D 车站（按 R 切换左右侧站台）", "Click to build %.0fm 3D Station (Press R to flip side)") % plat_len
 
 	elif _build_tool == BuildTool.TRACK_OFFROAD or _build_tool == BuildTool.ROAD_BUILD:
 		var is_road := _build_tool == BuildTool.ROAD_BUILD
@@ -2187,7 +2689,7 @@ func _update_build_hover_preview(screen_pos: Vector2) -> void:
 		var pb: Vector2 = _graph.nodes[snap]["pos"] if snap >= 0 else xz
 		if not _land_prev_has:
 			_set_point_box_preview(_preview_mi, Vector3(pb.x, 0.6, pb.y), Vector3(w_prev, 1.2, w_prev), Color(0.22, 0.85, 0.98, 0.70))
-			_lbl_build_hint.text = ("单击选择新道路起点（%s）· 可点在路口或路段中间接出" % LANE_CFG_LABELS[_road_lane_idx]) if is_road else "单击选择空地专用轨道起点【%s】· 可从已有轨道的路口接出，穿过空地 / 拆除后的地块" % _track_mode_tag()
+			_lbl_build_hint.text = (L10n.t("单击选择新道路起点（%s）· 可点在路口或路段中间接出", "Click start point for New Road (%s) · Branch from junction or mid-block") % _lane_cfg_label(_road_lane_idx)) if is_road else (L10n.t("单击选择空地专用轨道起点【%s】· 可从已有轨道的路口接出，穿过空地 / 拆除后的地块", "Click start for Open-Ground Track [%s] · Branch from a junction across open land") % _track_mode_tag())
 			return
 		var pa := _node_or_point_pos(_land_prev_nid, _land_prev_xz)
 		var seg := pb - pa
@@ -2198,7 +2700,7 @@ func _update_build_hover_preview(screen_pos: Vector2) -> void:
 		var mid := (pa + pb) * 0.5
 		_set_oriented_box_preview(_preview_mi, Vector3(mid.x, 0.35, mid.y), Vector3(seg.x, 0.0, seg.y).normalized(), Vector3(w_prev, 0.5, seg.length()), col)
 		var n_x := _segment_crossings(pa, pb, _land_prev_nid, snap).size()
-		_lbl_build_hint.text = "%.0fm%s%s · 单击确认，Esc 结束" % [seg.length(), " · ⚠ 穿过建筑" if blocked else "", (" · 平交穿越 %d 条道路/轨道" % n_x) if n_x > 0 and not is_road else ""]
+		_lbl_build_hint.text = L10n.t("%.0fm%s%s · 单击确认，Esc 结束", "%.0fm%s%s · Click to place, Esc to finish") % [seg.length(), L10n.t(" · ⚠ 穿过建筑", " · ⚠ Hits building") if blocked else "", (L10n.t(" · 平交穿越 %d 条道路/轨道", " · Crosses %d road/track(s)") % n_x) if n_x > 0 and not is_road else ""]
 
 	elif _build_tool == BuildTool.ROAD_REMOVE or _build_tool == BuildTool.ROAD_LANES:
 		var hit_r := _graph.find_closest_edge(xz, 14.0, false)
@@ -2208,20 +2710,21 @@ func _update_build_hover_preview(screen_pos: Vector2) -> void:
 		var eid_r := int(hit_r["edge_id"])
 		var ed_r: Dictionary = _graph.edges[eid_r]
 		var lanes_now := "%d+%d" % [int(ed_r.get("lanes_f", 1)), int(ed_r.get("lanes_b", 1))]
+		var r_nm := L10n.street_display_name(str(ed_r["name"]))
 		if _build_tool == BuildTool.ROAD_REMOVE:
 			var has_t := _graph.built_tracks.has(eid_r)
 			_set_ribbon_preview(_preview_mi, [eid_r], Color(0.96, 0.26, 0.22, 0.72) if not has_t else Color(0.96, 0.62, 0.22, 0.6), float(ed_r["width"]))
-			_lbl_build_hint.text = ("单击拆除道路：%s（%s 车道 · %.0fm）" % [str(ed_r["name"]), lanes_now, float(ed_r["width"])]) if not has_t else "⚠ %s 上铺有轨道：请先拆除轨道再拆道路" % str(ed_r["name"])
+			_lbl_build_hint.text = (L10n.t("单击拆除道路：%s（%s 车道 · %.0fm）", "Click to demolish road: %s (%s lanes · %.0fm)") % [r_nm, lanes_now, float(ed_r["width"])]) if not has_t else (L10n.t("⚠ %s 上铺有轨道：请先拆除轨道再拆道路", "⚠ %s has tracks — remove tracks first") % r_nm)
 		else:
 			var cfg2 := LANE_CFGS[_road_lane_idx]
 			_set_ribbon_preview(_preview_mi, [eid_r], Color(0.30, 0.70, 0.98, 0.62), NetworkGraph.road_width_for(cfg2.x, cfg2.y))
-			_lbl_build_hint.text = "单击把 %s 改为【%s】（现为 %s 车道 · %.0fm → %.0fm）· 单向路再次单击可调转方向" % [str(ed_r["name"]), LANE_CFG_LABELS[_road_lane_idx], lanes_now, float(ed_r["width"]), NetworkGraph.road_width_for(cfg2.x, cfg2.y)]
+			_lbl_build_hint.text = L10n.t("单击把 %s 改为【%s】（现为 %s 车道 · %.0fm → %.0fm）· 单向路再次单击可调转方向", "Click to set %s to [%s] (now %s · %.0fm → %.0fm) · Click again to flip 1-way") % [r_nm, _lane_cfg_label(_road_lane_idx), lanes_now, float(ed_r["width"]), NetworkGraph.road_width_for(cfg2.x, cfg2.y)]
 
 	elif _build_tool == BuildTool.BUILDING_DEMOLISH:
 		var bi := _building_at(xz)
 		if bi < 0:
 			_preview_mi.mesh = null
-			_lbl_build_hint.text = "将光标移到要拆除的建筑上（地标建筑不可拆除）"
+			_lbl_build_hint.text = L10n.t("将光标移到要拆除的建筑上（地标建筑不可拆除）", "Hover a building to demolish (landmarks cannot be demolished)")
 			return
 		var poly := _building_poly(bi)
 		var mn := Vector2(1e9, 1e9)
@@ -2233,7 +2736,7 @@ func _update_build_hover_preview(screen_pos: Vector2) -> void:
 		var h := float(bd.get("h", 12.0))
 		var lm := str(bd.get("lm", "")) != ""
 		_set_point_box_preview(_preview_mi, Vector3((mn.x + mx.x) * 0.5, h * 0.5, (mn.y + mx.y) * 0.5), Vector3(mx.x - mn.x + 0.6, h + 0.6, mx.y - mn.y + 0.6), Color(0.96, 0.26, 0.22, 0.45) if not lm else Color(0.6, 0.6, 0.6, 0.35))
-		_lbl_build_hint.text = ("单击拆除这栋建筑（高 %.0fm），腾出空地可铺设专用轨道或新建道路" % h) if not lm else "地标建筑不可拆除"
+		_lbl_build_hint.text = (L10n.t("单击拆除这栋建筑（高 %.0fm），腾出空地可铺设专用轨道或新建道路", "Click to demolish building (height %.0fm) to clear space") % h) if not lm else L10n.t("地标建筑不可拆除", "Landmarks cannot be demolished")
 
 	elif _build_tool == BuildTool.DEMOLISH:
 		var sid := _graph.find_closest_station(xz, 18.0)
@@ -2242,19 +2745,19 @@ func _update_build_hover_preview(screen_pos: Vector2) -> void:
 			var st_fwd: Vector3 = _graph.stations[sid]["fwd"]
 			var st_len := float(_graph.stations[sid].get("platform_len", 27.0))
 			_set_oriented_box_preview(_preview_mi, sp + Vector3(0.0, 1.5, 0.0), st_fwd, Vector3(3.6, 3.0, st_len + 0.6), Color(0.96, 0.26, 0.22, 0.75))
-			_lbl_build_hint.text = "单击拆除车站：%s" % str(_graph.stations[sid]["name"])
+			_lbl_build_hint.text = L10n.t("单击拆除车站：%s", "Click to demolish station: %s") % L10n.station_display_name(str(_graph.stations[sid]["name"]))
 			return
 		var hit := _graph.find_closest_edge(xz, 18.0, true)
 		if not hit.is_empty():
 			_set_ribbon_preview(_preview_mi, [int(hit["edge_id"])], Color(0.96, 0.26, 0.22, 0.78), 3.8)
-			_lbl_build_hint.text = "单击拆除该段轨道"
+			_lbl_build_hint.text = L10n.t("单击拆除该段轨道", "Click to demolish this track segment")
 		else:
 			_preview_mi.mesh = null
 
 
 func _handle_map_left_click(screen_pos: Vector2) -> void:
 	if _overview_on and _game_mode != GameMode.RUN:
-		_show_toast("全城视图下不能建设 / 规划，放大后再操作")
+		_show_toast(L10n.t("全城视图下不能建设 / 规划，放大后再操作", "Zoom in from City Overview before building or planning"))
 		return
 	var xz_var = _screen_to_ground_xz(screen_pos)
 	if xz_var == null:
@@ -2265,19 +2768,19 @@ func _handle_map_left_click(screen_pos: Vector2) -> void:
 		var mode_tag := _track_mode_tag(false)
 		if _build_tool == BuildTool.TRACK_SINGLE or _build_tool == BuildTool.TRACK_PATH:
 			if _build_track_mode == NetworkGraph.TrackMode.QUAD and TrackBuilder.is_monorail_style(_build_bed_style):
-				_show_toast("⚠ 四轨快慢线仅适用于有轨电车（独立路权），单轨请选双线")
+				_show_toast(L10n.t("⚠ 四轨快慢线仅适用于有轨电车（独立路权），单轨请选双线", "⚠ 4-Track is for trams only; use Double Track for monorail"))
 				return
 		if _build_tool == BuildTool.TRACK_SINGLE:
 			var hit := _graph.find_closest_edge(xz, 22.0, false)
 			if not hit.is_empty():
 				var eid := int(hit["edge_id"])
 				if _build_track_mode == NetworkGraph.TrackMode.QUAD and float(_graph.edges[eid].get("width", 12.0)) < 13.0:
-					_show_toast("⚠ %s 路面太窄（%.0fm），四轨需要至少 13m 宽的道路或空地" % [str(_graph.edges[eid]["name"]), float(_graph.edges[eid].get("width", 12.0))])
+					_show_toast(L10n.t("⚠ %s 路面太窄（%.0fm），四轨需要至少 13m 宽的道路或空地", "⚠ %s is too narrow (%.0fm) — 4-Track needs ≥13m") % [L10n.street_display_name(str(_graph.edges[eid]["name"])), float(_graph.edges[eid].get("width", 12.0))])
 					return
 				_graph.set_track_on_edge(eid, _build_bed_style, _build_track_mode)
 				_rebuild_tracks_only_visual()
 				_mark_modified_and_quick_save()
-				_show_toast("已铺设【%s · %s】轨道：%s" % [mode_tag, BED_STYLE_NAMES[_build_bed_style], str(_graph.edges[eid]["name"])])
+				_show_toast(L10n.t("已铺设【%s · %s】轨道：%s", "Laid [%s · %s] track on %s") % [mode_tag, _bed_style_name(_build_bed_style), L10n.street_display_name(str(_graph.edges[eid]["name"]))])
 
 		elif _build_tool == BuildTool.TRACK_PATH:
 			var nid := _graph.find_closest_node(xz, 26.0)
@@ -2285,7 +2788,7 @@ func _handle_map_left_click(screen_pos: Vector2) -> void:
 				return
 			if _path_start_node < 0:
 				_path_start_node = nid
-				_show_toast("已选起点路口：%s，请点击终点路口自动寻路铺轨" % str(_graph.nodes[nid]["name"]))
+				_show_toast(L10n.t("已选起点路口：%s，请点击终点路口自动寻路铺轨", "Pathfind start: %s — click destination junction") % L10n.street_display_name(str(_graph.nodes[nid]["name"])))
 			elif nid != _path_start_node:
 				var eids := _graph.shortest_street_path(_path_start_node, nid, false)
 				for eid: int in eids:
@@ -2298,30 +2801,30 @@ func _handle_map_left_click(screen_pos: Vector2) -> void:
 					for eid_n: int in eids:
 						if float(_graph.edges[eid_n].get("width", 12.0)) < 13.0:
 							narrow += 1
-				var narrow_note := "（其中 %d 段路面较窄，四轨将占用全部路面）" % narrow if narrow > 0 else ""
-				_show_toast("已沿最短路径铺设 %d 段【%s · %s】轨道！%s" % [eids.size(), mode_tag, BED_STYLE_NAMES[_build_bed_style], narrow_note])
+				var narrow_note := (L10n.t("（其中 %d 段路面较窄，四轨将占用全部路面）", " (%d narrow segs full-width)") % narrow) if narrow > 0 else ""
+				_show_toast(L10n.t("已沿最短路径铺设 %d 段【%s · %s】轨道！%s", "Laid %d [%s · %s] track segments!%s") % [eids.size(), mode_tag, _bed_style_name(_build_bed_style), narrow_note])
 
 		elif _build_tool == BuildTool.CROSSOVER:
 			var hit := _graph.find_closest_edge(xz, 22.0, true)
 			if hit.is_empty():
-				_show_toast("请先铺设【双线轨道】，再点击该双线路段修建渡线 Crossover！")
+				_show_toast(L10n.t("请先铺设【双线轨道】，再点击该双线路段修建渡线！", "Lay [Double Track] first, then click it to place a crossover!"))
 				return
 			var eid := int(hit["edge_id"])
 			var t_hit := float(hit["t"])
 			var place := TrackBuilder.compute_crossover_placement(_graph, eid, t_hit, _build_crossover_type)
 			if not bool(place.get("valid", false)):
 				if str(place.get("reason", "")) == "on_station":
-					_show_toast("⚠ 不可在车站站台上修建道岔/渡线，请移至出站并线后的轨道位置！")
+					_show_toast(L10n.t("⚠ 不可在车站站台上修建道岔/渡线，请移至出站并线后的轨道位置！", "⚠ Cannot place crossover on a station platform!"))
 				else:
-					_show_toast("⚠ 四轨区段不设渡线，请在两端的双线区段修建" if _graph.is_quad(eid) else "⚠ 仅限有效长度充足的【双线轨道】可修建渡线！")
+					_show_toast(L10n.t("⚠ 四轨区段不设渡线，请在两端的双线区段修建", "⚠ No crossovers on 4-track — place on adjacent double-track") if _graph.is_quad(eid) else L10n.t("⚠ 仅限有效长度充足的【双线轨道】可修建渡线！", "⚠ Crossovers require a long enough [Double Track]!"))
 				return
 			if _graph.set_crossover_on_edge(eid, _build_crossover_type, float(place["t_clamped"])):
 				_rebuild_tracks_only_visual()
 				_mark_modified_and_quick_save()
-				var xo_name := "交叉渡线 (剪刀)" if _build_crossover_type == NetworkGraph.CrossoverType.DOUBLE else "单渡线"
+				var xo_name := L10n.t("交叉渡线 (剪刀)", "Scissors Crossover") if _build_crossover_type == NetworkGraph.CrossoverType.DOUBLE else L10n.t("单渡线", "Single Crossover")
 				if TrackBuilder.edge_system(_graph, eid) == 1:
-					xo_name = "双向单轨道岔 (两组梁式道岔)" if _build_crossover_type == NetworkGraph.CrossoverType.DOUBLE else "单向单轨道岔"
-				_show_toast("已在 %s 修建【%s】！" % [str(_graph.edges[eid]["name"]), xo_name])
+					xo_name = L10n.t("双向单轨道岔 (两组梁式道岔)", "Double Monorail Switch") if _build_crossover_type == NetworkGraph.CrossoverType.DOUBLE else L10n.t("单向单轨道岔", "Single Monorail Switch")
+				_show_toast(L10n.t("已在 %s 修建【%s】！", "Built [%s] on %s!") % ([L10n.street_display_name(str(_graph.edges[eid]["name"])), xo_name] if not L10n.is_en() else [xo_name, L10n.street_display_name(str(_graph.edges[eid]["name"]))]))
 
 		elif _build_tool == BuildTool.STATION:
 			var near_sid := _graph.find_closest_station(xz, 8.5)
@@ -2329,11 +2832,11 @@ func _handle_map_left_click(screen_pos: Vector2) -> void:
 				_editing_station_id = near_sid
 				if _edit_station_name != null:
 					_edit_station_name.text = str(_graph.stations[near_sid]["name"])
-				_show_toast("已选中车站【%s】，可在左侧「站名编辑」栏修改名称！" % str(_graph.stations[near_sid]["name"]))
+				_show_toast(L10n.t("已选中车站【%s】，可在左侧「站名编辑」栏修改名称！", "Selected [%s] — edit its name in the left panel!") % L10n.station_display_name(str(_graph.stations[near_sid]["name"])))
 				return
 			var hit := _graph.find_closest_edge(xz, 22.0, true)
 			if hit.is_empty():
-				_show_toast("请先在街道上铺设轨道，再在轨道旁建造车站！")
+				_show_toast(L10n.t("请先在街道上铺设轨道，再在轨道旁建造车站！", "Lay tracks on a street first before placing a station!"))
 				return
 			var eid := int(hit["edge_id"])
 			var t_hit := float(hit["t"])
@@ -2341,7 +2844,7 @@ func _handle_map_left_click(screen_pos: Vector2) -> void:
 			var is_dbl := _graph.is_multi_track(eid)
 			var req_k_chk := _build_station_kind if is_dbl else NetworkGraph.StationKind.SIDE_SINGLE
 			if TrackBuilder.station_overlaps_crossover(_graph, eid, t_hit, req_k_chk, plat_len):
-				_show_toast("⚠ 该位置与已有道岔/渡线重叠，不可在道岔上建造车站！")
+				_show_toast(L10n.t("⚠ 该位置与已有道岔/渡线重叠，不可在道岔上建造车站！", "⚠ Overlaps a crossover/switch — cannot build station here!"))
 				return
 			var custom_n := _edit_station_name.text.strip_edges() if (_edit_station_name != null and _editing_station_id < 0) else ""
 			if is_dbl and _build_station_kind == NetworkGraph.StationKind.SIDE_DUAL:
@@ -2354,10 +2857,10 @@ func _handle_map_left_click(screen_pos: Vector2) -> void:
 						_edit_station_name.text = str(_graph.stations[last_sid]["name"])
 					_rebuild_tracks_only_visual()
 					_mark_modified_and_quick_save()
-					var n1 := str(_graph.stations.get(sid1, {}).get("name", ""))
-					var n2 := str(_graph.stations.get(sid2, {}).get("name", ""))
+					var n1 := L10n.station_display_name(str(_graph.stations.get(sid1, {}).get("name", "")))
+					var n2 := L10n.station_display_name(str(_graph.stations.get(sid2, {}).get("name", "")))
 					var pair_lbl := n1 if n1 == n2 or n2.is_empty() else ("%s / %s" % [n1, n2])
-					_show_toast("已建成 %.0fm 对称双侧站台：%s" % [plat_len, pair_lbl])
+					_show_toast(L10n.t("已建成 %.0fm 对称双侧站台：%s", "Built %.0fm dual side platforms: %s") % [plat_len, pair_lbl])
 			else:
 				var req_kind := _build_station_kind if is_dbl else NetworkGraph.StationKind.SIDE_SINGLE
 				var sid := _graph.add_station_on_edge(eid, t_hit, _build_station_side, custom_n, req_kind, plat_len)
@@ -2367,11 +2870,11 @@ func _handle_map_left_click(screen_pos: Vector2) -> void:
 						_edit_station_name.text = str(_graph.stations[sid]["name"])
 					_rebuild_tracks_only_visual()
 					_mark_modified_and_quick_save()
-					_show_toast("已建成 %.0fm 车站：%s" % [plat_len, str(_graph.stations[sid]["name"])])
+					_show_toast(L10n.t("已建成 %.0fm 车站：%s", "Built %.0fm station: %s") % [plat_len, L10n.station_display_name(str(_graph.stations[sid]["name"]))])
 
 		elif _build_tool == BuildTool.TRACK_OFFROAD:
 			if TrackBuilder.is_monorail_style(_build_bed_style):
-				_show_toast("⚠ 空地直连仅用于地面有轨电车，单轨请沿道路铺设")
+				_show_toast(L10n.t("⚠ 空地直连仅用于地面有轨电车，单轨请沿道路铺设", "⚠ Open-ground track is for streetcars only; lay monorail along streets"))
 				return
 			_land_chain_click(xz, false)
 
@@ -2383,16 +2886,16 @@ func _handle_map_left_click(screen_pos: Vector2) -> void:
 			if hit_rr.is_empty():
 				return
 			var eid_rr := int(hit_rr["edge_id"])
-			var nm_rr := str(_graph.edges[eid_rr]["name"])
+			var nm_rr := L10n.street_display_name(str(_graph.edges[eid_rr]["name"]))
 			if bool(_graph.edges[eid_rr].get("no_cars", false)):
-				_show_toast("这是空地专用轨道：请用【拆除车站 / 轨道】拆除")
+				_show_toast(L10n.t("这是空地专用轨道：请用【拆除车站 / 轨道】拆除", "This is a dedicated track — use [Demolish Station / Track]"))
 				return
 			var res := _graph.remove_road(eid_rr)
 			if res == "has_track":
-				_show_toast("⚠ %s 上铺有轨道：请先拆除轨道再拆道路" % nm_rr)
+				_show_toast(L10n.t("⚠ %s 上铺有轨道：请先拆除轨道再拆道路", "⚠ %s has tracks — remove tracks first") % nm_rr)
 				return
 			_after_land_edit(true, false)
-			_show_toast("已拆除道路：%s" % nm_rr)
+			_show_toast(L10n.t("已拆除道路：%s", "Demolished road: %s") % nm_rr)
 
 		elif _build_tool == BuildTool.ROAD_LANES:
 			var hit_rl := _graph.find_closest_edge(xz, 14.0, false)
@@ -2407,33 +2910,33 @@ func _handle_map_left_click(screen_pos: Vector2) -> void:
 				lb = lf # same one-way setting clicked again: turn it around
 				lf = 0
 			if not _graph.set_road_lanes(eid_rl, lf, lb):
-				_show_toast("⚠ 专用轨道没有机动车道")
+				_show_toast(L10n.t("⚠ 专用轨道没有机动车道", "⚠ Dedicated tracks have no vehicle lanes"))
 				return
 			var w_new := float(_graph.edges[eid_rl]["width"])
 			var b_hit := _strip_hits_building((ed_l["pts"] as Array)[0], (ed_l["pts"] as Array)[(ed_l["pts"] as Array).size() - 1], w_new * 0.5) >= 0
 			_after_land_edit(true, false)
-			_show_toast("已把 %s 改为 %d+%d 车道（宽 %.0fm）%s" % [str(ed_l["name"]), lf, lb, w_new, " · ⚠ 路面已贴近建筑，可拆除建筑拓宽" if b_hit else ""])
+			_show_toast(L10n.t("已把 %s 改为 %d+%d 车道（宽 %.0fm）%s", "Set %s to %d+%d lanes (width %.0fm)%s") % [L10n.street_display_name(str(ed_l["name"])), lf, lb, w_new, L10n.t(" · ⚠ 路面已贴近建筑，可拆除建筑拓宽", " · ⚠ Close to buildings") if b_hit else ""])
 
 		elif _build_tool == BuildTool.BUILDING_DEMOLISH:
 			var bi_d := _building_at(xz)
 			if bi_d < 0:
 				return
 			if str(((_map_data["buildings"] as Array)[bi_d] as Dictionary).get("lm", "")) != "":
-				_show_toast("地标建筑不可拆除")
+				_show_toast(L10n.t("地标建筑不可拆除", "Landmarks cannot be demolished"))
 				return
 			_graph.demolish_building(bi_d)
 			_after_land_edit(false, true)
 			_preview_mi.mesh = null
-			_show_toast("已拆除建筑，腾出空地")
+			_show_toast(L10n.t("已拆除建筑，腾出空地", "Building demolished"))
 
 		elif _build_tool == BuildTool.DEMOLISH:
 			var sid := _graph.find_closest_station(xz, 18.0)
 			if sid >= 0:
-				var sname := str(_graph.stations[sid]["name"])
+				var sname := L10n.station_display_name(str(_graph.stations[sid]["name"]))
 				_graph.remove_station(sid)
 				_rebuild_tracks_only_visual()
 				_mark_modified_and_quick_save()
-				_show_toast("已拆除车站：%s" % sname)
+				_show_toast(L10n.t("已拆除车站：%s", "Demolished station: %s") % sname)
 				return
 			var hit := _graph.find_closest_edge(xz, 18.0, true)
 			if not hit.is_empty():
@@ -2443,21 +2946,21 @@ func _handle_map_left_click(screen_pos: Vector2) -> void:
 					_graph.crossover_t.erase(deid)
 					_rebuild_tracks_only_visual()
 					_mark_modified_and_quick_save()
-					_show_toast("已拆除该段渡线 Crossover（保留双线轨道）")
+					_show_toast(L10n.t("已拆除该段渡线（保留双线轨道）", "Removed crossover (double track kept)"))
 				elif bool(_graph.edges[deid].get("no_cars", false)):
 					_graph.remove_offroad_track(deid)
 					_after_land_edit(false, false)
-					_show_toast("已拆除空地专用轨道段")
+					_show_toast(L10n.t("已拆除空地专用轨道段", "Demolished open-ground track segment"))
 				else:
 					_graph.remove_track_on_edge(deid)
 					_rebuild_tracks_only_visual()
 					_mark_modified_and_quick_save()
-					_show_toast("已拆除轨道段")
+					_show_toast(L10n.t("已拆除轨道段", "Demolished track segment"))
 
 	elif _game_mode == GameMode.PLAN:
 		var sid := _graph.find_closest_station(xz, 32.0)
 		if sid < 0:
-			_show_toast("请点击已建成的 3D 车站将其加入新线路！（按下触摸板移动可拖动地图）")
+			_show_toast(L10n.t("请点击已建成的 3D 车站将其加入新线路！（按下触摸板移动可拖动地图）", "Click a built 3D station to add it to the line! (Drag to pan map)"))
 			return
 		_draft_insert_station(sid)
 
@@ -2478,8 +2981,12 @@ func _rebuild_tracks_only_visual() -> void:
 		_grass_track_mat
 	)
 	_station_views = built["stations"]
+	if _pax_sim != null:
+		_pax_sim.rebind_station_views(_station_views)
 	_put_tracks_on_terrain()
 	_sync_landmark_monorail()
+	if _city_tiles != null:
+		_city_tiles.set_track_context(_graph.get_meta("track_clear_idx", {}), _graph.get_meta("station_bays", []))
 	CityBuilder.apply_track_clearance(_city_root, _graph.get_meta("track_clear_idx", {}), _graph.get_meta("station_bays", []))
 	CityBuilder.apply_station_bays(_city_root, _graph.get_meta("station_bays", []))
 	_track_lights.clear()
@@ -2490,6 +2997,7 @@ func _rebuild_tracks_only_visual() -> void:
 
 func _process(delta: float) -> void:
 	if _startup_loading:
+		_tick_loading_spinner(delta)
 		return
 	var dt := minf(delta, 0.05)
 
@@ -2508,7 +3016,7 @@ func _process(delta: float) -> void:
 	if _reset_confirm_timer > 0.0:
 		_reset_confirm_timer -= dt
 		if _reset_confirm_timer <= 0.0 and _btn_home_reset != null:
-			_btn_home_reset.text = "重新开始"
+			_btn_home_reset.text = L10n.t("重新开始", "Reset Map")
 
 	_update_city_overview()
 	# Outer map tiles stream in on a worker thread on every screen (home backdrop included)
@@ -2521,6 +3029,9 @@ func _process(delta: float) -> void:
 		_sound.speed_mps = 0.0
 		_sound.traction_effort = 0.0
 		_sound.overspeed_squeal = 0.0
+		_sound.weather_rain_intensity = 0.0
+		if _weather != null:
+			_weather.set_paused(true)
 		_process_shot_tour()
 		return
 
@@ -2551,7 +3062,11 @@ func _process(delta: float) -> void:
 		_sound.speed_mps = 0.0
 		_sound.traction_effort = 0.0
 		_sound.overspeed_squeal = 0.0
+		_sound.weather_rain_intensity = 0.0
 		_update_home_backdrop_camera()
+		if _weather != null:
+			_weather.set_paused(false)
+			_weather.update_camera_follow(_camera, false)
 		_process_shot_tour()
 		return
 
@@ -2560,9 +3075,10 @@ func _process(delta: float) -> void:
 		_autosave_timer += dt
 		if _autosave_timer >= 120.0:
 			_autosave_timer = 0.0
-			var payload := _build_current_save_payload("定时自动存档")
+			var auto_nm := L10n.t("定时自动存档", "Scheduled Autosave")
+			var payload := _build_current_save_payload(auto_nm)
 			SaveManager.save_current(_current_map_key, payload)
-			SaveManager.push_autosave(_current_map_key, "定时自动存档", payload)
+			SaveManager.push_autosave(_current_map_key, auto_nm, payload)
 
 	if _slot_modal == null or not _slot_modal.visible:
 		_handle_bird_pan_keys(dt)
@@ -2582,7 +3098,7 @@ func _process(delta: float) -> void:
 		if _slot_modal == null or not _slot_modal.visible:
 			_handle_run_held_keys(dt)
 			_handle_run_arrow_camera_keys(dt)
-		_pax_sim.step_simulation(dt, _graph)
+		_pax_sim.step_simulation(dt, _graph, _camera.global_position if is_instance_valid(_camera) else _get_traffic_focus_pos())
 		_traffic_sim.step_traffic(
 			dt,
 			_graph,
@@ -2613,6 +3129,14 @@ func _process(delta: float) -> void:
 		_sound.overspeed_squeal = 0.0
 
 	_update_camera(dt)
+	var is_raining := (_weather_mode == WeatherSystem.WeatherType.RAINY)
+	var is_in_cab := (_game_mode == GameMode.RUN and (_cam_mode == CamMode.CAB or _cam_mode == CamMode.INTERIOR))
+	if _weather != null:
+		_weather.set_paused(paused_run)
+		_weather.update_camera_follow(_camera, is_in_cab)
+	if _sound != null:
+		_sound.weather_rain_intensity = 1.0 if (is_raining and _game_mode == GameMode.RUN and not paused_run) else 0.0
+		_sound.weather_rain_muffled = is_in_cab
 	_process_shot_tour()
 
 
@@ -2806,7 +3330,7 @@ func _set_overview(on: bool) -> void:
 		_sun.shadow_enabled = false
 		_preview_mi.mesh = null
 		if _game_mode != GameMode.RUN and _overview_toast_cd <= 0.0:
-			_show_toast("全城视图：放大后可以建设 / 规划")
+			_show_toast(L10n.t("全城视图：放大后可以建设 / 规划", "City Overview: zoom in to build or plan"))
 			_overview_toast_cd = 20.0
 	else:
 		_camera.far = _overview_saved_far
@@ -2827,6 +3351,8 @@ func _zoom_camera(step_dir: float) -> void:
 
 func _set_cam_mode(mode: int) -> void:
 	_cam_mode = mode
+	for i in range(_cam_btns.size()):
+		_highlight_active_btn(_cam_btns[i], i == _cam_mode)
 	_snap_camera_next = true
 	_cab_yaw = 0.0
 	_cab_pitch = deg_to_rad(-8.5) if mode == CamMode.CAB else deg_to_rad(-4.0)
@@ -2850,7 +3376,7 @@ func _set_cam_mode(mode: int) -> void:
 	else:
 		_camera.fov = 56.0
 	if mode != CamMode.BIRD and _game_mode == GameMode.RUN:
-		_sun.directional_shadow_max_distance = 290.0
+		_sun.directional_shadow_max_distance = 220.0
 
 
 func _update_camera(dt: float) -> void:
@@ -2893,11 +3419,16 @@ func _update_camera(dt: float) -> void:
 	elif _cam_mode == CamMode.DOOR_ACTION:
 		# Automatically pick platform side if docked near a station, and allow arrow-key orbit!
 		var side_sign := 1.0
-		var near_st := _transit_sim._find_station_at_current_pos(tr)
+		var near_st := _transit_sim._find_station_at_current_pos(tr, _transit_sim.manual_drive, _graph)
+		var near_sid := int(near_st.get("station_id", -1))
 		if int(near_st["stop_idx"]) >= 0:
 			var st_pos: Vector3 = (tr["stops"] as Array)[int(near_st["stop_idx"])]["pos"]
 			var local_st := front_sec.global_transform.affine_inverse() * st_pos
 			side_sign = 1.0 if local_st.x >= 0.0 else -1.0
+		elif near_sid >= 0 and _graph.stations.has(near_sid):
+			var st_pos_u: Vector3 = _graph.stations[near_sid]["pos"]
+			var local_st_u := front_sec.global_transform.affine_inverse() * st_pos_u
+			side_sign = 1.0 if local_st_u.x >= 0.0 else -1.0
 		var base_offset := Vector3(side_sign * 4.2, 1.78, -3.6).rotated(Vector3.UP, _door_cam_yaw)
 		base_offset.y += sin(_door_cam_pitch) * 3.2
 		var cam_pos := front_sec.global_transform * base_offset
@@ -2918,7 +3449,7 @@ func _update_camera(dt: float) -> void:
 			_camera.global_position = desired_pos
 			_snap_camera_next = false
 		else:
-			_camera.global_position = _camera.global_position.lerp(desired_pos, minf(1.0, dt * 10.0))
+			_camera.global_position = _camera.global_position.lerp(desired_pos, 1.0 - exp(-dt * 12.0))
 		_camera.look_at(focus, Vector3.UP)
 
 
@@ -3013,6 +3544,7 @@ void fragment() {
 # --- UI Construction & Callbacks ---
 func _build_ui() -> void:
 	var canvas := CanvasLayer.new()
+	_ui_canvas = canvas
 	add_child(canvas)
 
 	var master_root := Control.new()
@@ -3034,32 +3566,35 @@ func _build_ui() -> void:
 	# 1. Persistent Top Mode & Lighting Bar (Centered Top)
 	_nav_bar = _make_panel(Color(0.07, 0.09, 0.12, 0.90))
 	_nav_bar.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	_nav_bar.position = Vector2(-470, 12)
+	_nav_bar.position = Vector2(-510, 12)
 	_hud_layer_ctrl.add_child(_nav_bar)
 
 	var nav_hbox := HBoxContainer.new()
 	nav_hbox.add_theme_constant_override("separation", 7)
 	_nav_bar.add_child(nav_hbox)
 
-	nav_hbox.add_child(_make_btn("◀ 主页(Esc)", func(): _enter_home_screen()))
+	nav_hbox.add_child(_make_btn(L10n.t("◀ 主页(Esc)", "◀ Home (Esc)"), func(): _enter_home_screen()))
 	nav_hbox.add_child(VSeparator.new())
 
-	_btn_mode_build = _make_btn("[1] 建设轨道", func(): _set_game_mode(GameMode.BUILD))
-	_btn_mode_plan = _make_btn("[2] 规划线路", func(): _set_game_mode(GameMode.PLAN))
-	_btn_mode_run = _make_btn("[3] 运行与驾驶 (Tab)", func(): _set_game_mode(GameMode.RUN))
+	_btn_mode_build = _make_btn(L10n.t("[1] 建设轨道", "[1] Build Track"), func(): _request_game_mode(GameMode.BUILD))
+	_btn_mode_plan = _make_btn(L10n.t("[2] 规划线路", "[2] Plan Lines"), func(): _request_game_mode(GameMode.PLAN))
+	_btn_mode_run = _make_btn(L10n.t("[3] 运行与驾驶 (Tab)", "[3] Run & Drive (Tab)"), func(): _request_game_mode(GameMode.RUN))
 	nav_hbox.add_child(_btn_mode_build)
 	nav_hbox.add_child(_btn_mode_plan)
 	nav_hbox.add_child(_btn_mode_run)
 
 	nav_hbox.add_child(VSeparator.new())
-	nav_hbox.add_child(_make_btn("存档(F5/F9)", func(): _open_slot_modal(_current_map_key, false)))
-	_btn_quick_save_run = _make_btn("存运行档", func(): _open_slot_modal(_current_map_key, false))
+	nav_hbox.add_child(_make_btn(L10n.t("存档(F5/F9)", "Saves (F5)"), func(): _open_slot_modal(_current_map_key, false)))
+	_btn_quick_save_run = _make_btn(L10n.t("存运行档", "Save Run"), func(): _open_slot_modal(_current_map_key, false))
 	nav_hbox.add_child(_btn_quick_save_run)
-	nav_hbox.add_child(_make_btn("运营看板(T)", func(): _toggle_stats_modal()))
-	nav_hbox.add_child(_make_btn("音频设置", func(): _toggle_audio_modal()))
+	nav_hbox.add_child(_make_btn(L10n.t("运营看板(T)", "Ops Board (T)"), func(): _toggle_stats_modal()))
+	nav_hbox.add_child(_make_btn(L10n.t("游戏设置", "Settings"), func(): _toggle_audio_modal()))
 	nav_hbox.add_child(VSeparator.new())
-	nav_hbox.add_child(_make_btn("纯白天", func(): _set_time_hours(13.5)))
-	nav_hbox.add_child(_make_btn("纯夜景", func(): _set_time_hours(22.0)))
+	nav_hbox.add_child(_make_btn(L10n.t("纯白天", "Day"), func(): _set_time_hours(13.5)))
+	nav_hbox.add_child(_make_btn(L10n.t("纯夜景", "Night"), func(): _set_time_hours(22.0)))
+	_btn_weather = _make_btn(WeatherSystem.weather_button_label(_weather_mode), func(): _cycle_weather_mode())
+	_btn_weather.tooltip_text = L10n.t("点击切换天气：晴天 / 阴天 / 雨天（雨天带雨声，亦可在游戏设置中直选）", "Click to cycle weather: Sunny / Cloudy / Rainy (rain includes rainfall ambience)")
+	nav_hbox.add_child(_btn_weather)
 
 	_slider_time = HSlider.new()
 	_slider_time.min_value = 0.0; _slider_time.max_value = 24.0; _slider_time.step = 0.1
@@ -3104,7 +3639,7 @@ func _build_ui() -> void:
 	_lbl_paused.custom_minimum_size = Vector2(520, 80)
 	_lbl_paused.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_lbl_paused.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_lbl_paused.text = "⏸ 已暂停\n按 V 或点击【▶ 继续】恢复运营 · 视角仍可移动"
+	_lbl_paused.text = L10n.t("⏸ 已暂停\n按 V 或点击【▶ 继续】恢复运营 · 视角仍可移动", "⏸ PAUSED\nPress V or click [▶ Resume] to continue · Camera remains free")
 	_lbl_paused.add_theme_font_size_override("font_size", 22)
 	_lbl_paused.add_theme_color_override("font_color", Color(0.98, 0.96, 0.86))
 	_lbl_paused.add_theme_color_override("font_shadow_color", Color(0.0, 0.0, 0.0, 0.9))
@@ -3135,13 +3670,13 @@ func _build_ui() -> void:
 	_build_panel.add_child(b_vbox)
 
 	var b_title := Label.new()
-	b_title.text = "轨道与车站建设"
+	b_title.text = L10n.t("轨道与车站建设", "Track & Station Construction")
 	b_title.add_theme_font_size_override("font_size", 15)
 	b_title.add_theme_color_override("font_color", Color(0.50, 0.90, 0.72))
 	b_vbox.add_child(b_title)
 
 	var b_sub := Label.new()
-	b_sub.text = "点击建造类别展开二级选项 · 轨道类型铺设后锁定"
+	b_sub.text = L10n.t("点击建造类别展开二级选项 · 轨道类型铺设后锁定", "Click a category to expand options · Track type locks once laid")
 	b_sub.add_theme_font_size_override("font_size", 11)
 	b_sub.add_theme_color_override("font_color", Color(0.62, 0.68, 0.74))
 	b_vbox.add_child(b_sub)
@@ -3154,6 +3689,8 @@ func _build_ui() -> void:
 	_crossover_type_btns.clear()
 	_station_kind_btns.clear()
 	_station_len_btns.clear()
+	_road_tool_btns.clear()
+	_lane_cfg_btns.clear()
 
 	var make_sub_box := func() -> Array:
 		var sub_wrap := MarginContainer.new()
@@ -3186,7 +3723,7 @@ func _build_ui() -> void:
 		parent_v.add_child(l)
 
 	# --- Category 0: 修建轨道 (Track) ---
-	var cat_track_btn := _make_cat_btn("修建轨道", func():
+	var cat_track_btn := _make_cat_btn(L10n.t("修建轨道", "Build Track"), func():
 		_build_tool = _last_track_tool
 		_path_start_node = -1
 		_refresh_build_buttons()
@@ -3199,11 +3736,15 @@ func _build_ui() -> void:
 	var track_sv: VBoxContainer = track_sub_pair[1]
 	_build_cat_subpanels.append(track_sub_wrap)
 
-	add_sub_lbl.call(track_sv, "铺设方式")
+	add_sub_lbl.call(track_sv, L10n.t("铺设方式", "Laying Mode"))
 	var lay_row := HBoxContainer.new()
 	lay_row.add_theme_constant_override("separation", 6)
 	track_sv.add_child(lay_row)
-	for lay_pair: Array in [[BuildTool.TRACK_SINGLE, "单段铺设"], [BuildTool.TRACK_PATH, "两点寻路"], [BuildTool.TRACK_OFFROAD, "空地直连"]]:
+	for lay_pair: Array in [
+		[BuildTool.TRACK_SINGLE, L10n.t("单段铺设", "Single Seg")],
+		[BuildTool.TRACK_PATH, L10n.t("两点寻路", "Pathfind")],
+		[BuildTool.TRACK_OFFROAD, L10n.t("空地直连", "Open Ground")],
+	]:
 		var lay_val := int(lay_pair[0])
 		var lb := _make_btn(str(lay_pair[1]), func():
 			_build_tool = lay_val
@@ -3216,11 +3757,15 @@ func _build_ui() -> void:
 		lay_row.add_child(lb)
 		_track_lay_btns.append(lb)
 
-	add_sub_lbl.call(track_sv, "轨道制式")
+	add_sub_lbl.call(track_sv, L10n.t("轨道制式", "Track Layout"))
 	var tm_row := HBoxContainer.new()
 	tm_row.add_theme_constant_override("separation", 6)
 	track_sv.add_child(tm_row)
-	for t_pair: Array in [[NetworkGraph.TrackMode.SINGLE, "单线"], [NetworkGraph.TrackMode.DOUBLE, "双线并行"], [NetworkGraph.TrackMode.QUAD, "四轨快慢线"]]:
+	for t_pair: Array in [
+		[NetworkGraph.TrackMode.SINGLE, L10n.t("单线", "Single")],
+		[NetworkGraph.TrackMode.DOUBLE, L10n.t("双线并行", "Double")],
+		[NetworkGraph.TrackMode.QUAD, L10n.t("四轨快慢线", "4-Track")],
+	]:
 		var tm_val := int(t_pair[0])
 		var tmb := _make_btn(str(t_pair[1]), func():
 			_build_track_mode = tm_val
@@ -3231,19 +3776,19 @@ func _build_ui() -> void:
 		tm_row.add_child(tmb)
 		_track_mode_btns.append(tmb)
 
-	add_sub_lbl.call(track_sv, "轨道与道床类型")
+	add_sub_lbl.call(track_sv, L10n.t("轨道与道床类型", "Track & Trackbed Style"))
 	var bed_grid := GridContainer.new()
 	bed_grid.columns = 2
 	bed_grid.add_theme_constant_override("h_separation", 6)
 	bed_grid.add_theme_constant_override("v_separation", 5)
 	track_sv.add_child(bed_grid)
 	var bed_short_names := [
-		"独立工字草皮",
-		"柏油槽型嵌轨",
-		"齐平绿茵草皮",
-		"花岗岩专用道",
-		"碎石工字枕木",
-		"高架单轨梁",
+		L10n.t("独立工字草皮", "Turf Tie-Track"),
+		L10n.t("柏油槽型嵌轨", "Asphalt Grooved"),
+		L10n.t("齐平绿茵草皮", "Flush Lawn"),
+		L10n.t("花岗岩专用道", "Granite ROW"),
+		L10n.t("碎石工字枕木", "Ballasted Ties"),
+		L10n.t("高架单轨梁", "Elevated Monorail"),
 	]
 	for bi in range(BED_STYLE_NAMES.size()):
 		var b_copy := bi
@@ -3257,7 +3802,7 @@ func _build_ui() -> void:
 		_bed_btns.append(bb)
 
 	# --- Category 1: 修建渡线 (Crossover) ---
-	var cat_xo_btn := _make_cat_btn("修建渡线 (Crossover)", func():
+	var cat_xo_btn := _make_cat_btn(L10n.t("修建渡线", "Build Crossover"), func():
 		_build_tool = BuildTool.CROSSOVER
 		_path_start_node = -1
 		_refresh_build_buttons()
@@ -3270,11 +3815,14 @@ func _build_ui() -> void:
 	var xo_sv: VBoxContainer = xo_sub_pair[1]
 	_build_cat_subpanels.append(xo_sub_wrap)
 
-	add_sub_lbl.call(xo_sv, "渡线类型（按 R 键切换）")
+	add_sub_lbl.call(xo_sv, L10n.t("渡线类型（按 R 键切换）", "Crossover Type (Press R to toggle)"))
 	var xo_row := HBoxContainer.new()
 	xo_row.add_theme_constant_override("separation", 6)
 	xo_sv.add_child(xo_row)
-	for xo_pair: Array in [[NetworkGraph.CrossoverType.SINGLE, "单渡线"], [NetworkGraph.CrossoverType.DOUBLE, "交叉双渡线"]]:
+	for xo_pair: Array in [
+		[NetworkGraph.CrossoverType.SINGLE, L10n.t("单渡线", "Single")],
+		[NetworkGraph.CrossoverType.DOUBLE, L10n.t("交叉双渡线", "Scissors")],
+	]:
 		var xo_val := int(xo_pair[0])
 		var xob := _make_btn(str(xo_pair[1]), func():
 			_build_crossover_type = xo_val
@@ -3287,7 +3835,7 @@ func _build_ui() -> void:
 		_crossover_type_btns.append(xob)
 
 	var xo_tip := Label.new()
-	xo_tip.text = "点击双线轨道即可放置，自动避让站台与合并过渡段"
+	xo_tip.text = L10n.t("点击双线轨道即可放置，自动避让站台与合并过渡段", "Click any double-track segment to place; avoids platforms & merge tapers automatically")
 	xo_tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	xo_tip.custom_minimum_size = Vector2(310, 0)
 	xo_tip.add_theme_font_size_override("font_size", 11)
@@ -3295,7 +3843,7 @@ func _build_ui() -> void:
 	xo_sv.add_child(xo_tip)
 
 	# --- Category 2: 修建车站 (Station) ---
-	var cat_st_btn := _make_cat_btn("修建车站", func():
+	var cat_st_btn := _make_cat_btn(L10n.t("修建车站", "Build Station"), func():
 		_build_tool = BuildTool.STATION
 		_path_start_node = -1
 		_refresh_build_buttons()
@@ -3308,14 +3856,14 @@ func _build_ui() -> void:
 	var st_sv: VBoxContainer = st_sub_pair[1]
 	_build_cat_subpanels.append(st_sub_wrap)
 
-	add_sub_lbl.call(st_sv, "站台形式（按 R 键换侧）")
+	add_sub_lbl.call(st_sv, L10n.t("站台形式（按 R 键换侧）", "Platform Type (Press R to flip side)"))
 	var sk_row := HBoxContainer.new()
 	sk_row.add_theme_constant_override("separation", 5)
 	st_sv.add_child(sk_row)
 	for sk_pair: Array in [
-		[NetworkGraph.StationKind.SIDE_SINGLE, "单侧"],
-		[NetworkGraph.StationKind.SIDE_DUAL, "对称双侧"],
-		[NetworkGraph.StationKind.ISLAND, "中央岛式"],
+		[NetworkGraph.StationKind.SIDE_SINGLE, L10n.t("单侧", "Single Side")],
+		[NetworkGraph.StationKind.SIDE_DUAL, L10n.t("对称双侧", "Dual Side")],
+		[NetworkGraph.StationKind.ISLAND, L10n.t("中央岛式", "Island")],
 	]:
 		var sk_val := int(sk_pair[0])
 		var skb := _make_btn(str(sk_pair[1]), func():
@@ -3328,13 +3876,18 @@ func _build_ui() -> void:
 		sk_row.add_child(skb)
 		_station_kind_btns.append(skb)
 
-	add_sub_lbl.call(st_sv, "站台长度")
+	add_sub_lbl.call(st_sv, L10n.t("站台长度", "Platform Length"))
 	var sl_row := HBoxContainer.new()
 	sl_row.add_theme_constant_override("separation", 5)
 	st_sv.add_child(sl_row)
+	var sl_labels := [
+		L10n.t("27m (2节)", "27m (2-car)"),
+		L10n.t("38m (3节)", "38m (3-car)"),
+		L10n.t("50m (4节)", "50m (4-car)"),
+	]
 	for li in range(STATION_LEN_PRESETS.size()):
 		var li_copy := li
-		var slb := _make_btn(STATION_LEN_LABELS[li], func():
+		var slb := _make_btn(sl_labels[li], func():
 			_build_station_len_idx = li_copy
 			_build_tool = BuildTool.STATION
 			_path_start_node = -1
@@ -3344,19 +3897,19 @@ func _build_ui() -> void:
 		sl_row.add_child(slb)
 		_station_len_btns.append(slb)
 
-	add_sub_lbl.call(st_sv, "站名（点击已有车站或新建后修改）")
+	add_sub_lbl.call(st_sv, L10n.t("站名（点击已有车站或新建后修改）", "Station Name (click existing or new station)"))
 	var rename_row := HBoxContainer.new()
 	rename_row.add_theme_constant_override("separation", 6)
 	st_sv.add_child(rename_row)
 	_edit_station_name = LineEdit.new()
-	_edit_station_name.placeholder_text = "输入站名..."
+	_edit_station_name.placeholder_text = L10n.t("输入站名...", "Enter station name...")
 	_edit_station_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_edit_station_name.text_submitted.connect(func(_txt: String): _apply_station_rename())
 	rename_row.add_child(_edit_station_name)
-	rename_row.add_child(_make_btn("改名", func(): _apply_station_rename()))
+	rename_row.add_child(_make_btn(L10n.t("改名", "Rename"), func(): _apply_station_rename()))
 
 	# --- Category 3: 拆除 (Demolish) ---
-	var cat_dem_btn := _make_cat_btn("拆除车站 / 轨道", func():
+	var cat_dem_btn := _make_cat_btn(L10n.t("拆除车站 / 轨道", "Demolish Station / Track"), func():
 		_build_tool = BuildTool.DEMOLISH
 		_path_start_node = -1
 		_refresh_build_buttons()
@@ -3370,7 +3923,7 @@ func _build_ui() -> void:
 	_build_cat_subpanels.append(dem_sub_wrap)
 
 	var dem_tip := Label.new()
-	dem_tip.text = "将鼠标移到已有车站、渡线或轨道段上，单击高亮红框即可拆除"
+	dem_tip.text = L10n.t("将鼠标移到已有车站、渡线或轨道段上，单击高亮红框即可拆除", "Hover an existing station, crossover, or track segment and click to demolish")
 	dem_tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	dem_tip.custom_minimum_size = Vector2(310, 0)
 	dem_tip.add_theme_font_size_override("font_size", 11)
@@ -3378,7 +3931,7 @@ func _build_ui() -> void:
 	dem_sv.add_child(dem_tip)
 
 	# --- Category 4: 道路与地块 (roads, lanes, buildings) ---
-	var cat_road_btn := _make_cat_btn("道路与地块", func():
+	var cat_road_btn := _make_cat_btn(L10n.t("道路与地块", "Roads & Lots"), func():
 		if _build_tool < BuildTool.ROAD_BUILD:
 			_build_tool = BuildTool.ROAD_BUILD
 		_land_prev_has = false
@@ -3391,11 +3944,16 @@ func _build_ui() -> void:
 	var road_sub_wrap: Control = road_sub_pair[0]
 	var road_sv: VBoxContainer = road_sub_pair[1]
 	_build_cat_subpanels.append(road_sub_wrap)
-	add_sub_lbl.call(road_sv, "工具")
+	add_sub_lbl.call(road_sv, L10n.t("工具", "Tool"))
 	var rt_row := HBoxContainer.new()
 	rt_row.add_theme_constant_override("separation", 5)
 	road_sv.add_child(rt_row)
-	for rt_pair: Array in [[BuildTool.ROAD_BUILD, "新建道路"], [BuildTool.ROAD_REMOVE, "拆除道路"], [BuildTool.ROAD_LANES, "修改车道"], [BuildTool.BUILDING_DEMOLISH, "拆除建筑"]]:
+	for rt_pair: Array in [
+		[BuildTool.ROAD_BUILD, L10n.t("新建道路", "New Road")],
+		[BuildTool.ROAD_REMOVE, L10n.t("拆除道路", "Del Road")],
+		[BuildTool.ROAD_LANES, L10n.t("修改车道", "Lanes")],
+		[BuildTool.BUILDING_DEMOLISH, L10n.t("拆除建筑", "Demolish")],
+	]:
 		var rt_val := int(rt_pair[0])
 		var rtb := _make_btn(str(rt_pair[1]), func():
 			_build_tool = rt_val
@@ -3406,7 +3964,7 @@ func _build_ui() -> void:
 		rtb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		rt_row.add_child(rtb)
 		_road_tool_btns.append(rtb)
-	add_sub_lbl.call(road_sv, "车道（新建 / 修改道路时使用）")
+	add_sub_lbl.call(road_sv, L10n.t("车道（新建 / 修改道路时使用）", "Lanes (for New Road / Edit Lanes)"))
 	var lane_grid := GridContainer.new()
 	lane_grid.columns = 4
 	lane_grid.add_theme_constant_override("h_separation", 5)
@@ -3414,7 +3972,7 @@ func _build_ui() -> void:
 	road_sv.add_child(lane_grid)
 	for li in range(LANE_CFGS.size()):
 		var li_c := li
-		var lcb := _make_btn(LANE_CFG_LABELS[li], func():
+		var lcb := _make_btn(_lane_cfg_label(li), func():
 			_road_lane_idx = li_c
 			if _build_tool != BuildTool.ROAD_BUILD and _build_tool != BuildTool.ROAD_LANES:
 				_build_tool = BuildTool.ROAD_BUILD
@@ -3424,7 +3982,7 @@ func _build_ui() -> void:
 		lane_grid.add_child(lcb)
 		_lane_cfg_btns.append(lcb)
 	var road_tip := Label.new()
-	road_tip.text = "新建道路 / 空地直连轨道：依次点击各点连续施工（可从路口或路段中间接出），Esc 结束；不可穿过建筑，可先拆除建筑腾出空地"
+	road_tip.text = L10n.t("新建道路 / 空地直连轨道：依次点击各点连续施工（可从路口或路段中间接出），Esc 结束；不可穿过建筑，可先拆除建筑腾出空地", "New Road / Open-Ground Track: click points to chain segments (can branch from junctions or mid-block), Esc to finish. Clear buildings first if blocked.")
 	road_tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	road_tip.custom_minimum_size = Vector2(310, 0)
 	road_tip.add_theme_font_size_override("font_size", 11)
@@ -3439,21 +3997,21 @@ func _build_ui() -> void:
 	_lbl_build_hint.custom_minimum_size = Vector2(336, 36)
 	_lbl_build_hint.add_theme_font_size_override("font_size", 12)
 	_lbl_build_hint.add_theme_color_override("font_color", Color(0.80, 0.85, 0.90))
-	_lbl_build_hint.text = "提示：按下触摸板/左键拖动可平移地图，滚轮缩放，单击施工。"
+	_lbl_build_hint.text = L10n.t("提示：按下触摸板/左键拖动可平移地图，滚轮缩放，单击施工。", "Tip: Drag to pan map, scroll to zoom, click to build.")
 	b_vbox.add_child(_lbl_build_hint)
 
 	var util_row := HBoxContainer.new()
 	util_row.add_theme_constant_override("separation", 6)
 	b_vbox.add_child(util_row)
-	var save_u := _make_btn("存档管理(F5)", func(): _open_slot_modal(_current_map_key, false))
+	var save_u := _make_btn(L10n.t("存档管理(F5)", "Saves (F5)"), func(): _open_slot_modal(_current_map_key, false))
 	save_u.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	util_row.add_child(save_u)
-	var clr_u := _make_btn("清空全部重建", func():
+	var clr_u := _make_btn(L10n.t("清空全部重建", "Clear All"), func():
 		_graph.clear_player_network()
 		_refresh_land_layers_if_needed()
 		_rebuild_tracks_and_operations(false)
 		_mark_modified_and_quick_save()
-		_show_toast("已清空全城轨道与线路，可从零自由建设！")
+		_show_toast(L10n.t("已清空全城轨道与线路，可从零自由建设！", "Cleared all tracks & lines. Ready to build from scratch!"))
 	)
 	clr_u.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	util_row.add_child(clr_u)
@@ -3470,7 +4028,7 @@ func _build_ui() -> void:
 	_plan_panel.add_child(p_vbox)
 
 	var p_title := Label.new()
-	p_title.text = "公交化电车线路规划与选车配车"
+	p_title.text = L10n.t("公交化电车线路规划与选车配车", "Line Planner & Fleet Assignment")
 	p_title.add_theme_font_size_override("font_size", 15)
 	p_title.add_theme_color_override("font_color", Color(0.48, 0.84, 0.98))
 	p_vbox.add_child(p_title)
@@ -3494,10 +4052,10 @@ func _build_ui() -> void:
 	var draft_btns := HBoxContainer.new()
 	draft_btns.add_theme_constant_override("separation", 6)
 	p_vbox.add_child(draft_btns)
-	draft_btns.add_child(_make_btn("撤销上一站 (Bksp)", func():
+	draft_btns.add_child(_make_btn(L10n.t("撤销上一站 (Bksp)", "Undo Stop (Bksp)"), func():
 		_draft_undo_last()
 	))
-	draft_btns.add_child(_make_btn("清空选站", func():
+	draft_btns.add_child(_make_btn(L10n.t("清空选站", "Clear Stops"), func():
 		_draft_station_ids.clear()
 		_draft_insert_idx = -1
 		_refresh_plan_ui()
@@ -3506,16 +4064,16 @@ func _build_ui() -> void:
 	var flt_row := HBoxContainer.new()
 	flt_row.add_theme_constant_override("separation", 6)
 	p_vbox.add_child(flt_row)
-	flt_row.add_child(_make_btn("全部车型(17)", func(): _set_era_filter("all")))
-	flt_row.add_child(_make_btn("现代电车(8)", func(): _set_era_filter("modern")))
-	flt_row.add_child(_make_btn("古典老车(6)", func(): _set_era_filter("vintage")))
-	flt_row.add_child(_make_btn("单轨(3)", func(): _set_era_filter("monorail")))
+	flt_row.add_child(_make_btn(L10n.t("全部车型(17)", "All (17)"), func(): _set_era_filter("all")))
+	flt_row.add_child(_make_btn(L10n.t("现代电车(8)", "Modern (8)"), func(): _set_era_filter("modern")))
+	flt_row.add_child(_make_btn(L10n.t("古典老车(6)", "Vintage (6)"), func(): _set_era_filter("vintage")))
+	flt_row.add_child(_make_btn(L10n.t("单轨(3)", "Monorail (3)"), func(): _set_era_filter("monorail")))
 
 	var car_sel_row := HBoxContainer.new()
 	car_sel_row.add_theme_constant_override("separation", 6)
 	p_vbox.add_child(car_sel_row)
-	car_sel_row.add_child(_make_btn("◀ 上一款", func(): _step_plan_model(-1)))
-	car_sel_row.add_child(_make_btn("下一款 ▶", func(): _step_plan_model(1)))
+	car_sel_row.add_child(_make_btn(L10n.t("◀ 上一款", "◀ Prev Model"), func(): _step_plan_model(-1)))
+	car_sel_row.add_child(_make_btn(L10n.t("下一款 ▶", "Next Model ▶"), func(): _step_plan_model(1)))
 
 	_lbl_model_card = Label.new()
 	_lbl_model_card.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -3525,17 +4083,24 @@ func _build_ui() -> void:
 	var cfg_row := HBoxContainer.new()
 	cfg_row.add_theme_constant_override("separation", 6)
 	p_vbox.add_child(cfg_row)
-	cfg_row.add_child(_make_btn("配车 -", func(): _plan_fleet_count = maxi(1, _plan_fleet_count - 1); _refresh_plan_ui()))
-	cfg_row.add_child(_make_btn("配车 +", func(): _plan_fleet_count = mini(8, _plan_fleet_count + 1); _refresh_plan_ui()))
-	cfg_row.add_child(_make_btn("编组 -", func(): _plan_sections = maxi(1, _plan_sections - 1); _refresh_plan_ui()))
-	cfg_row.add_child(_make_btn("编组 +", func(): _plan_sections = mini(_max_sections_for_draft(), _plan_sections + 1); _refresh_plan_ui()))
+	cfg_row.add_child(_make_btn(L10n.t("配车 -", "Fleet -"), func(): _plan_fleet_count = maxi(1, _plan_fleet_count - 1); _refresh_plan_ui()))
+	cfg_row.add_child(_make_btn(L10n.t("配车 +", "Fleet +"), func(): _plan_fleet_count = mini(15, _plan_fleet_count + 1); _refresh_plan_ui()))
+	cfg_row.add_child(_make_btn(L10n.t("编组 -", "Cars -"), func(): _plan_sections = maxi(1, _plan_sections - 1); _refresh_plan_ui()))
+	cfg_row.add_child(_make_btn(L10n.t("编组 +", "Cars +"), func(): _plan_sections = mini(_max_sections_for_draft(), _plan_sections + 1); _refresh_plan_ui()))
 
-	_btn_plan_service = _make_btn("运行类别：普通慢车", func():
+	_btn_plan_service = _make_btn(L10n.t("运行类别：普通慢车", "Service: Local"), func():
 		_plan_express = not _plan_express
 		_refresh_plan_ui()
 	)
-	_btn_plan_service.tooltip_text = "快车：在四轨区段走中间快车道，在四轨双岛站优先发车并越行慢车；慢车：走外侧慢车道，遇快车待避"
+	_btn_plan_service.tooltip_text = L10n.t("快车：在四轨区段走中间快车道，在四轨双岛站优先发车并越行慢车；慢车：走外侧慢车道，遇快车待避", "Express uses inner 4-track rails and overtakes locals at twin-island stops; Local uses outer rails and yields to express.")
 	p_vbox.add_child(_btn_plan_service)
+
+	_btn_plan_tsp = _make_btn(L10n.t("信号优先：关", "Signal Priority: OFF"), func():
+		_plan_signal_priority = not _plan_signal_priority
+		_refresh_plan_ui()
+	)
+	_btn_plan_tsp.tooltip_text = L10n.t("开启后，该线路电车接近路口信号灯时自动触发公交信号优先（延长绿灯 / 提前清空横向车流切绿）", "When enabled, trams on this line trigger Transit Signal Priority at intersections (extend green / early green).")
+	p_vbox.add_child(_btn_plan_tsp)
 
 	_lbl_fleet_cfg = Label.new()
 	p_vbox.add_child(_lbl_fleet_cfg)
@@ -3543,16 +4108,16 @@ func _build_ui() -> void:
 	var commit_row := HBoxContainer.new()
 	commit_row.add_theme_constant_override("separation", 6)
 	p_vbox.add_child(commit_row)
-	_btn_commit_line = _make_btn("✓ 确认开通此线路", func(): _commit_draft_line())
+	_btn_commit_line = _make_btn(L10n.t("✓ 确认开通此线路", "✓ Launch Line"), func(): _commit_draft_line())
 	_btn_commit_line.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	commit_row.add_child(_btn_commit_line)
-	_btn_cancel_edit = _make_btn("取消编辑", func(): _cancel_line_edit(true))
+	_btn_cancel_edit = _make_btn(L10n.t("取消编辑", "Cancel Edit"), func(): _cancel_line_edit(true))
 	_btn_cancel_edit.visible = false
 	commit_row.add_child(_btn_cancel_edit)
 
 	p_vbox.add_child(HSeparator.new())
 	var exist_lbl := Label.new()
-	exist_lbl.text = "已开通运营线路："
+	exist_lbl.text = L10n.t("已开通运营线路：", "Active Lines:")
 	p_vbox.add_child(exist_lbl)
 
 	_lines_list_vbox = VBoxContainer.new()
@@ -3562,7 +4127,7 @@ func _build_ui() -> void:
 	# 4. RUN & DRIVE MODE PANELS
 	_run_top_panel = _make_panel(Color(0.07, 0.09, 0.12, 0.88))
 	_run_top_panel.position = Vector2(16, 72)
-	_run_top_panel.custom_minimum_size = Vector2(475, 156)
+	_run_top_panel.custom_minimum_size = Vector2(495, 178)
 	_hud_layer_ctrl.add_child(_run_top_panel)
 
 	var rt_vbox := VBoxContainer.new()
@@ -3588,40 +4153,145 @@ func _build_ui() -> void:
 	var rt_btns := HBoxContainer.new()
 	rt_btns.add_theme_constant_override("separation", 6)
 	rt_vbox.add_child(rt_btns)
-	rt_btns.add_child(_make_btn("◀ 上一线路", func(): _switch_line(-1)))
-	rt_btns.add_child(_make_btn("下一线路(L) ▶", func(): _switch_line(1)))
-	rt_btns.add_child(_make_btn("◀ 本线上一列", func(): _transit_sim.cycle_active_tram(-1)))
-	rt_btns.add_child(_make_btn("本线下一列(F) ▶", func(): _transit_sim.cycle_active_tram(1)))
-	_btn_pax_rate = _make_btn("客流: 3档 标准 (P)", func():
+	rt_btns.add_child(_make_btn(L10n.t("◀ 上一线路", "◀ Prev Line"), func(): _switch_line(-1)))
+	rt_btns.add_child(_make_btn(L10n.t("下一线路(L) ▶", "Next Line (L) ▶"), func(): _switch_line(1)))
+	rt_btns.add_child(_make_btn(L10n.t("◀ 本线上一列", "◀ Prev Tram"), func(): _transit_sim.cycle_active_tram(-1)))
+	rt_btns.add_child(_make_btn(L10n.t("本线下一列(F) ▶", "Next Tram (F) ▶"), func(): _transit_sim.cycle_active_tram(1)))
+	_btn_pax_rate = _make_btn(L10n.t("客流: %s (P)", "Pax: %s (P)") % PassengerSim.spawn_level_name(_pax_sim.spawn_level if _pax_sim != null else 3), func():
 		var lvl := _pax_sim.cycle_spawn_level()
-		_btn_pax_rate.text = "客流: %s (P)" % PassengerSim.SPAWN_LEVEL_NAMES[lvl]
+		_btn_pax_rate.text = L10n.t("客流: %s (P)", "Pax: %s (P)") % PassengerSim.spawn_level_name(lvl)
 		_mark_modified_and_quick_save()
 	)
 	rt_btns.add_child(_btn_pax_rate)
 
+	var ai_row := HBoxContainer.new()
+	ai_row.add_theme_constant_override("separation", 5)
+	rt_vbox.add_child(ai_row)
+
+	var ai_lbl := Label.new()
+	ai_lbl.text = L10n.t("本车AI运营：", "Tram AI:")
+	ai_lbl.add_theme_font_size_override("font_size", 13)
+	ai_lbl.add_theme_color_override("font_color", Color(0.76, 0.86, 0.94))
+	ai_row.add_child(ai_lbl)
+
+	_ai_style_btns.clear()
+	var ai_style_defs := [
+		[L10n.t("缓慢", "Slow"), TransitSim.AIStyle.SLOW, L10n.t("缓慢模式：停稳后过2~3秒再开门、人上好后过几秒再关门、有乘客赶来会等待，开关门与加减速平缓柔和", "Slow: waits 2-3s before opening doors, holds for approaching riders, gentle acceleration & braking")],
+		[L10n.t("正常", "Normal"), TransitSim.AIStyle.NORMAL, L10n.t("正常模式：当前标准运营基准", "Normal: standard transit operation profile")],
+		[L10n.t("狂暴", "Furious"), TransitSim.AIStyle.FURIOUS, L10n.t("狂暴模式：加速度与刹车拉满、进出站高效，开关门与标准模式一致", "Furious: maximum acceleration & braking with smooth cruising and full normal boarding")],
+	]
+	for sd in ai_style_defs:
+		var st_idx: int = sd[1]
+		var sb := _make_btn(sd[0], func(): _on_set_active_tram_ai_style(st_idx))
+		sb.tooltip_text = sd[2]
+		ai_row.add_child(sb)
+		_ai_style_btns.append(sb)
+
+	ai_row.add_child(VSeparator.new())
+
+	var spd_lbl := Label.new()
+	spd_lbl.text = L10n.t("最高速度：", "Max Speed:")
+	spd_lbl.add_theme_font_size_override("font_size", 13)
+	spd_lbl.add_theme_color_override("font_color", Color(0.76, 0.86, 0.94))
+	ai_row.add_child(spd_lbl)
+
+	_btn_ai_spd_down = _make_btn("-5", func(): _on_adjust_active_tram_ai_max_kmh(-TransitSim.AI_SPEED_STEP_KMH))
+	_btn_ai_spd_down.tooltip_text = L10n.t("降低本列 AI 车运营最高速度 (-5 km/h)", "Lower this AI tram's max speed (-5 km/h)")
+	ai_row.add_child(_btn_ai_spd_down)
+
+	_btn_ai_spd_val = _make_btn("70 km/h", func(): _on_reset_active_tram_ai_max_kmh())
+	_btn_ai_spd_val.custom_minimum_size = Vector2(72, 0)
+	_btn_ai_spd_val.tooltip_text = L10n.t("当前列车的 AI 运营最高速度（点击恢复该车型默认极速）", "Current AI tram max speed (click to reset to model default)")
+	ai_row.add_child(_btn_ai_spd_val)
+
+	_btn_ai_spd_up = _make_btn("+5", func(): _on_adjust_active_tram_ai_max_kmh(TransitSim.AI_SPEED_STEP_KMH))
+	_btn_ai_spd_up.tooltip_text = L10n.t("提高本列 AI 车运营最高速度 (+5 km/h)", "Raise this AI tram's max speed (+5 km/h)")
+	ai_row.add_child(_btn_ai_spd_up)
+
+	# Per-Line AI Style Group Row
+	var line_ai_row := HBoxContainer.new()
+	line_ai_row.add_theme_constant_override("separation", 5)
+	rt_vbox.add_child(line_ai_row)
+
+	_lbl_line_ai_group = Label.new()
+	_lbl_line_ai_group.text = L10n.t("本线AI整组：", "Line AI Group:")
+	_lbl_line_ai_group.add_theme_font_size_override("font_size", 13)
+	_lbl_line_ai_group.add_theme_color_override("font_color", Color(0.68, 0.90, 0.86))
+	line_ai_row.add_child(_lbl_line_ai_group)
+
+	_line_ai_style_btns.clear()
+	var lsb_none := _make_btn(L10n.t("无默认", "No Default"), func(): _on_set_active_line_ai_style(TransitSim.LINE_AI_NONE))
+	lsb_none.tooltip_text = L10n.t("取消当前线路的整组默认 AI 模式（保留各车当前独立设置，新发列车按正常模式）", "Clear line-level default AI mode (keeps each tram's individual mode; new trams use Normal)")
+	line_ai_row.add_child(lsb_none)
+	_line_ai_style_btns.append(lsb_none)
+	for sd in ai_style_defs:
+		var st_idx_l: int = sd[1]
+		var lsb := _make_btn(sd[0], func(): _on_set_active_line_ai_style(st_idx_l))
+		lsb.tooltip_text = L10n.t("将当前线路全部列车的 AI 运营模式统一设为【%s】（保存至运行档）", "Set ALL trams on the current line to [%s] mode (saved in run slots)") % str(sd[0])
+		line_ai_row.add_child(lsb)
+		_line_ai_style_btns.append(lsb)
+
+	var tsp_row := HBoxContainer.new()
+	tsp_row.add_theme_constant_override("separation", 6)
+	rt_vbox.add_child(tsp_row)
+
+	var tsp_lbl := Label.new()
+	tsp_lbl.text = L10n.t("信号优先(TSP)：", "Signal Priority (TSP):")
+	tsp_lbl.add_theme_font_size_override("font_size", 13)
+	tsp_lbl.add_theme_color_override("font_color", Color(0.76, 0.86, 0.94))
+	tsp_row.add_child(tsp_lbl)
+
+	_btn_line_tsp = _make_btn(L10n.t("本线信号优先：关", "Line TSP: OFF"), func(): _on_toggle_active_line_tsp())
+	_btn_line_tsp.tooltip_text = L10n.t("为当前线路开启/关闭公交信号优先（也可在运营看板中逐条线路开关）", "Toggle Transit Signal Priority for the current line (also available per-line in Ops Board)")
+	tsp_row.add_child(_btn_line_tsp)
+
+	_btn_global_tsp = _make_btn(L10n.t("全局信号优先：关", "Global TSP: OFF"), func(): _on_toggle_global_tsp())
+	_btn_global_tsp.tooltip_text = L10n.t("全局为全城所有有轨电车线路开启/关闭公交信号优先", "Toggle Transit Signal Priority globally for all lines")
+	tsp_row.add_child(_btn_global_tsp)
+
 	_cam_panel = _make_panel(Color(0.07, 0.09, 0.12, 0.88))
 	_cam_panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	_cam_panel.position = Vector2(-478, 72)
+	_cam_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_cam_panel.grow_vertical = Control.GROW_DIRECTION_END
+	_cam_panel.offset_left = -16.0
+	_cam_panel.offset_right = -16.0
+	_cam_panel.offset_top = 72.0
+	_cam_panel.offset_bottom = 72.0
 	_hud_layer_ctrl.add_child(_cam_panel)
 
 	var cam_vbox := VBoxContainer.new()
-	cam_vbox.add_theme_constant_override("separation", 4)
+	cam_vbox.add_theme_constant_override("separation", 6)
 	_cam_panel.add_child(cam_vbox)
 
 	var cam_hbox := HBoxContainer.new()
+	cam_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
 	cam_hbox.add_theme_constant_override("separation", 5)
 	cam_vbox.add_child(cam_hbox)
-	cam_hbox.add_child(_make_btn("1 驾驶室", func(): _set_cam_mode(CamMode.CAB)))
-	cam_hbox.add_child(_make_btn("2 追尾外景", func(): _set_cam_mode(CamMode.CHASE)))
-	cam_hbox.add_child(_make_btn("3 车厢内部", func(): _set_cam_mode(CamMode.INTERIOR)))
-	cam_hbox.add_child(_make_btn("4 车门上下客", func(): _set_cam_mode(CamMode.DOOR_ACTION)))
-	cam_hbox.add_child(_make_btn("5 鸟瞰全局", func(): _set_cam_mode(CamMode.BIRD)))
+	_cam_btns.clear()
+	var cam_defs := [
+		[L10n.t("1 驾驶室", "1 Cab"), CamMode.CAB],
+		[L10n.t("2 追尾外景", "2 Chase"), CamMode.CHASE],
+		[L10n.t("3 车厢内部", "3 Interior"), CamMode.INTERIOR],
+		[L10n.t("4 车门上下客", "4 Doors"), CamMode.DOOR_ACTION],
+		[L10n.t("5 鸟瞰全局", "5 Bird's-Eye"), CamMode.BIRD],
+	]
+	for cd in cam_defs:
+		var mode_idx: int = cd[1]
+		var cb := _make_btn(cd[0], func(): _set_cam_mode(mode_idx))
+		cam_hbox.add_child(cb)
+		_cam_btns.append(cb)
+	for i in range(_cam_btns.size()):
+		_highlight_active_btn(_cam_btns[i], i == _cam_mode)
 
 	var cam_hint := Label.new()
-	cam_hint.text = "↑↓←→ 方向键移动/旋转视角 · W/S 牵引与制动 · X 倒档 · K 保留手动 · J 锁道岔 · U AI道岔 · V 暂停 · O 开关车门 · G 手动扳道岔(特殊情况)"
+	cam_hint.text = L10n.t(
+		"↑↓←→ 视角移动/旋转 · W/S 牵引制动 · X 倒档 · O 车门 · V 暂停\nK 保留手动 · J 锁道岔 · U AI道岔 · G 手动扳道岔(特殊情况)",
+		"Arrows Camera · W/S Throttle/Brake · X Reverse · O Doors · V Pause\nK Hold Manual · J Lock Switch · U AI Switch · G Throw Switch"
+	)
 	cam_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	cam_hint.add_theme_font_size_override("font_size", 12)
 	cam_hint.add_theme_color_override("font_color", Color(0.75, 0.82, 0.88))
+	cam_hint.add_theme_constant_override("line_spacing", 2)
 	cam_vbox.add_child(cam_hint)
 
 	# Bottom-Left Driver's Console
@@ -3675,26 +4345,26 @@ func _build_ui() -> void:
 	var act_row := HBoxContainer.new()
 	act_row.add_theme_constant_override("separation", 8)
 	drv_vbox.add_child(act_row)
-	_btn_doors = _make_btn("开关车门 (O/Space)", func(): _toggle_doors_with_safety_check())
+	_btn_doors = _make_btn(L10n.t("开关车门 (O/Space)", "Doors (O/Space)"), func(): _toggle_doors_with_safety_check())
 	act_row.add_child(_btn_doors)
-	act_row.add_child(_make_btn("叮叮铜铃警示 (H)", func(): _ring_tram_bell()))
-	_btn_drive_mode = _make_btn("切换手动驾驶 (Q)", func(): _transit_sim.manual_drive = not _transit_sim.manual_drive)
+	act_row.add_child(_make_btn(L10n.t("叮叮铜铃警示 (H)", "Bell (H)"), func(): _ring_tram_bell()))
+	_btn_drive_mode = _make_btn(L10n.t("切换手动驾驶 (Q)", "Manual Drive (Q)"), func(): _transit_sim.manual_drive = not _transit_sim.manual_drive)
 	act_row.add_child(_btn_drive_mode)
-	act_row.add_child(_make_btn("换端折返 (R)", func(): _do_cab_change()))
-	_btn_reverser = _make_btn("倒档 R (X)", func(): _do_toggle_reverser())
+	act_row.add_child(_make_btn(L10n.t("换端折返 (R)", "Change Cab (R)"), func(): _do_cab_change()))
+	_btn_reverser = _make_btn(L10n.t("倒档 R (X)", "Reverse R (X)"), func(): _do_toggle_reverser())
 	act_row.add_child(_btn_reverser)
-	_btn_hold_manual = _make_btn("保留手动 (K)", func(): _do_toggle_hold_manual())
-	_btn_hold_manual.tooltip_text = "手动驾驶且停车时：切换到其他列车后，本车原地停车待命（不交给 AI），切回后继续手动驾驶"
+	_btn_hold_manual = _make_btn(L10n.t("保留手动 (K)", "Hold Manual (K)"), func(): _do_toggle_hold_manual())
+	_btn_hold_manual.tooltip_text = L10n.t("手动驾驶且停车时：切换到其他列车后，本车原地停车待命（不交给 AI），切回后继续手动驾驶", "When stopped in manual mode: keeps this tram parked in standby (not handed to AI) when you switch to another tram")
 	act_row.add_child(_btn_hold_manual)
-	_btn_sw_lock = _make_btn("锁定前方道岔 (J)", func(): _do_toggle_switch_lock())
-	_btn_sw_lock.tooltip_text = "把前方道岔按现在的位置锁住，调度不会再扳动它；本车驶出该道岔后自动解锁"
+	_btn_sw_lock = _make_btn(L10n.t("锁定前方道岔 (J)", "Lock Switch (J)"), func(): _do_toggle_switch_lock())
+	_btn_sw_lock.tooltip_text = L10n.t("把前方道岔按现在的位置锁住，调度不会再扳动它；本车驶出该道岔后自动解锁", "Locks the switch ahead in its current position until this tram clears it")
 	act_row.add_child(_btn_sw_lock)
-	_btn_auto_sw = _make_btn("AI 道岔: 开 (U)", func(): _do_toggle_auto_switches())
-	_btn_auto_sw.tooltip_text = "关闭后调度不再自动扳动任何道岔，道岔只能由玩家按 G 扳动"
+	_btn_auto_sw = _make_btn(L10n.t("AI 道岔: 开 (U)", "AI Switch: ON (U)"), func(): _do_toggle_auto_switches())
+	_btn_auto_sw.tooltip_text = L10n.t("关闭后调度不再自动扳动任何道岔，道岔只能由玩家按 G 扳动", "When OFF, dispatcher stops moving switches automatically; throw them manually with G")
 	act_row.add_child(_btn_auto_sw)
-	_btn_pause = _make_btn("⏸ 暂停 (V)", func(): _toggle_run_pause())
+	_btn_pause = _make_btn(L10n.t("⏸ 暂停 (V)", "⏸ Pause (V)"), func(): _toggle_run_pause())
 	act_row.add_child(_btn_pause)
-	act_row.add_child(_make_btn("手动扳道岔 (G)", func(): _do_throw_switch()))
+	act_row.add_child(_make_btn(L10n.t("手动扳道岔 (G)", "Throw Switch (G)"), func(): _do_throw_switch()))
 
 	# 5. HOME SCREEN OVERLAY (Map Selection + Progress Summary + Actions)
 	_build_home_screen_ui(master_root)
@@ -3738,38 +4408,61 @@ func _build_startup_loading_ui(parent: Control) -> void:
 		tr_icon.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		vbox.add_child(tr_icon)
 
-	var title := Label.new()
-	title.text = "3D train game"
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 32)
-	title.add_theme_color_override("font_color", Color(0.95, 0.98, 1.0))
-	vbox.add_child(title)
+	_startup_title_lbl = Label.new()
+	_startup_title_lbl.text = "3D train game"
+	_startup_title_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_startup_title_lbl.add_theme_font_size_override("font_size", 28)
+	_startup_title_lbl.add_theme_color_override("font_color", Color(0.95, 0.98, 1.0))
+	vbox.add_child(_startup_title_lbl)
+
+	var bar_row := HBoxContainer.new()
+	bar_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	bar_row.add_theme_constant_override("separation", 10)
+	vbox.add_child(bar_row)
 
 	_startup_bar = ProgressBar.new()
 	_startup_bar.min_value = 0.0
 	_startup_bar.max_value = 100.0
 	_startup_bar.value = 10.0
 	_startup_bar.show_percentage = false
-	_startup_bar.custom_minimum_size = Vector2(360, 8)
-	_startup_bar.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_startup_bar.custom_minimum_size = Vector2(360, 10)
+	_startup_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	var bg_sb := StyleBoxFlat.new()
 	bg_sb.bg_color = Color(0.14, 0.19, 0.26, 1.0)
-	bg_sb.corner_radius_top_left = 4; bg_sb.corner_radius_top_right = 4
-	bg_sb.corner_radius_bottom_left = 4; bg_sb.corner_radius_bottom_right = 4
+	bg_sb.corner_radius_top_left = 5; bg_sb.corner_radius_top_right = 5
+	bg_sb.corner_radius_bottom_left = 5; bg_sb.corner_radius_bottom_right = 5
 	var fill_sb := StyleBoxFlat.new()
 	fill_sb.bg_color = Color(0.28, 0.80, 0.96, 1.0)
-	fill_sb.corner_radius_top_left = 4; fill_sb.corner_radius_top_right = 4
-	fill_sb.corner_radius_bottom_left = 4; fill_sb.corner_radius_bottom_right = 4
+	fill_sb.corner_radius_top_left = 5; fill_sb.corner_radius_top_right = 5
+	fill_sb.corner_radius_bottom_left = 5; fill_sb.corner_radius_bottom_right = 5
 	_startup_bar.add_theme_stylebox_override("background", bg_sb)
 	_startup_bar.add_theme_stylebox_override("fill", fill_sb)
-	vbox.add_child(_startup_bar)
+	bar_row.add_child(_startup_bar)
+
+	_startup_pct_lbl = Label.new()
+	_startup_pct_lbl.text = "10%"
+	_startup_pct_lbl.custom_minimum_size = Vector2(44, 0)
+	_startup_pct_lbl.add_theme_font_size_override("font_size", 14)
+	_startup_pct_lbl.add_theme_color_override("font_color", Color(0.55, 0.88, 0.98))
+	bar_row.add_child(_startup_pct_lbl)
+
+	var status_row := HBoxContainer.new()
+	status_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	status_row.add_theme_constant_override("separation", 8)
+	vbox.add_child(status_row)
+
+	_startup_spinner_lbl = Label.new()
+	_startup_spinner_lbl.text = "⠋"
+	_startup_spinner_lbl.add_theme_font_size_override("font_size", 16)
+	_startup_spinner_lbl.add_theme_color_override("font_color", Color(0.32, 0.86, 0.98))
+	status_row.add_child(_startup_spinner_lbl)
 
 	_startup_status_lbl = Label.new()
-	_startup_status_lbl.text = "正在启动..."
+	_startup_status_lbl.text = L10n.t("正在启动...", "Starting...")
 	_startup_status_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_startup_status_lbl.add_theme_font_size_override("font_size", 14)
-	_startup_status_lbl.add_theme_color_override("font_color", Color(0.68, 0.78, 0.88))
-	vbox.add_child(_startup_status_lbl)
+	_startup_status_lbl.add_theme_color_override("font_color", Color(0.76, 0.84, 0.92))
+	status_row.add_child(_startup_status_lbl)
 
 
 func _build_home_screen_ui(parent: Control) -> void:
@@ -3795,15 +4488,39 @@ func _build_home_screen_ui(parent: Control) -> void:
 	vbox.add_theme_constant_override("separation", 14)
 	main_card.add_child(vbox)
 
+	var top_bar_h := HBoxContainer.new()
+	top_bar_h.add_theme_constant_override("separation", 6)
+	vbox.add_child(top_bar_h)
+
+	var title_sp := Control.new()
+	title_sp.custom_minimum_size = Vector2(210, 0)
+	top_bar_h.add_child(title_sp)
+
 	var title := Label.new()
 	title.text = "3D train game"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title.add_theme_font_size_override("font_size", 28)
 	title.add_theme_color_override("font_color", Color(0.96, 0.98, 1.0))
-	vbox.add_child(title)
+	top_bar_h.add_child(title)
+
+	var home_lang_box := HBoxContainer.new()
+	home_lang_box.custom_minimum_size = Vector2(210, 0)
+	home_lang_box.alignment = BoxContainer.ALIGNMENT_END
+	home_lang_box.add_theme_constant_override("separation", 4)
+	top_bar_h.add_child(home_lang_box)
+	for lp in [["auto", L10n.t("自动", "Auto")], ["zh", "中文"], ["en", "EN"]]:
+		var pref_c: String = lp[0]
+		var lb_h := _make_btn(str(lp[1]), func(): _on_set_language(pref_c))
+		lb_h.tooltip_text = L10n.t("切换界面语言（自动跟随系统语言）", "Switch UI language (Auto follows system locale)")
+		_highlight_active_btn(lb_h, L10n.lang_pref == pref_c)
+		home_lang_box.add_child(lb_h)
 
 	var sub := Label.new()
-	sub.text = "选择城市地图开始规划 · 支持独立工字草皮/柏油等多路权铺轨 · 14款现代与古典电车 · 10槽手动+5槽自动存档"
+	sub.text = L10n.t(
+		"选择城市地图开始规划 · 支持独立工字草皮/柏油等多路权铺轨 · 17款现代/古典电车与单轨 · 10槽手动+5槽自动存档",
+		"Choose a city map to build · Turf/grooved/monorail tracks · 17 modern, vintage & monorail fleets · 10 manual + 5 auto saves"
+	)
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	sub.add_theme_color_override("font_color", Color(0.72, 0.80, 0.88))
 	vbox.add_child(sub)
@@ -3814,6 +4531,8 @@ func _build_home_screen_ui(parent: Control) -> void:
 	cards_row.add_theme_constant_override("separation", 16)
 	vbox.add_child(cards_row)
 
+	_home_card_panels.clear()
+	_home_card_badges.clear()
 	for mkey: String in MAP_ORDER:
 		var preset: Dictionary = MAP_PRESETS[mkey]
 		var card := _make_panel(Color(0.08, 0.11, 0.16, 0.90))
@@ -3837,18 +4556,18 @@ func _build_home_screen_ui(parent: Control) -> void:
 		head_row.add_child(idx_lbl)
 
 		var t_lbl := Label.new()
-		t_lbl.text = str(preset["title"])
+		t_lbl.text = _map_title(mkey)
 		t_lbl.add_theme_font_size_override("font_size", 20)
 		t_lbl.add_theme_color_override("font_color", Color(0.96, 0.97, 0.99))
 		head_row.add_child(t_lbl)
 
 		var sub_lbl := Label.new()
-		sub_lbl.text = str(preset["subtitle"])
+		sub_lbl.text = _map_subtitle(mkey)
 		sub_lbl.add_theme_color_override("font_color", Color(0.62, 0.78, 0.94))
 		cv.add_child(sub_lbl)
 
 		var desc_lbl := Label.new()
-		desc_lbl.text = str(preset["desc"])
+		desc_lbl.text = _map_desc(mkey)
 		desc_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		desc_lbl.custom_minimum_size = Vector2(340, 46)
 		desc_lbl.add_theme_color_override("font_color", Color(0.80, 0.84, 0.88))
@@ -3863,7 +4582,7 @@ func _build_home_screen_ui(parent: Control) -> void:
 		_home_card_badges[mkey] = badge_lbl
 
 		var m_copy := mkey
-		var sel_btn := _make_btn("选择此地图", func(): _select_home_map_card(m_copy))
+		var sel_btn := _make_btn(L10n.t("选择此地图", "Select Map"), func(): _select_home_map_card(m_copy))
 		cv.add_child(sel_btn)
 
 	vbox.add_child(HSeparator.new())
@@ -3873,20 +4592,20 @@ func _build_home_screen_ui(parent: Control) -> void:
 	act_bar.add_theme_constant_override("separation", 12)
 	vbox.add_child(act_bar)
 
-	_btn_home_primary = _make_btn("▶ 开始建设", func(): _start_map_continue_or_new())
+	_btn_home_primary = _make_btn(L10n.t("▶ 开始建设", "▶ Start Building"), func(): _start_map_continue_or_new())
 	_btn_home_primary.custom_minimum_size = Vector2(210, 38)
 	_btn_home_primary.modulate = Color(0.62, 1.0, 0.80)
 	act_bar.add_child(_btn_home_primary)
 
-	_btn_home_demo = _make_btn("示例线网试驾", func(): _start_map_demo_network())
+	_btn_home_demo = _make_btn(L10n.t("示例线网试驾", "Try Demo Network"), func(): _start_map_demo_network())
 	_btn_home_demo.custom_minimum_size = Vector2(145, 38)
 	act_bar.add_child(_btn_home_demo)
 
-	_btn_home_slots = _make_btn("存档管理 (10槽)", func(): _open_slot_modal(_selected_home_map, false))
+	_btn_home_slots = _make_btn(L10n.t("存档管理 (10槽)", "Save Slots (10)"), func(): _open_slot_modal(_selected_home_map, false))
 	_btn_home_slots.custom_minimum_size = Vector2(150, 38)
 	act_bar.add_child(_btn_home_slots)
 
-	_btn_home_reset = _make_btn("重新开始", func(): _handle_home_reset_button())
+	_btn_home_reset = _make_btn(L10n.t("重新开始", "Reset Map"), func(): _handle_home_reset_button())
 	_btn_home_reset.custom_minimum_size = Vector2(125, 38)
 	act_bar.add_child(_btn_home_reset)
 
@@ -3919,13 +4638,13 @@ func _build_slot_modal_ui(parent: Control) -> void:
 	vbox.add_child(top_row)
 
 	_lbl_slot_title = Label.new()
-	_lbl_slot_title.text = "存档管理"
+	_lbl_slot_title.text = L10n.t("存档管理", "Save Manager")
 	_lbl_slot_title.add_theme_font_size_override("font_size", 18)
 	_lbl_slot_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_lbl_slot_title.add_theme_color_override("font_color", Color(0.52, 0.90, 0.74))
 	top_row.add_child(_lbl_slot_title)
 
-	top_row.add_child(_make_btn("✕ 关闭 (Esc)", func():
+	top_row.add_child(_make_btn(L10n.t("✕ 关闭 (Esc)", "✕ Close (Esc)"), func():
 		_slot_modal.visible = false
 		if _in_home_menu:
 			_refresh_home_screen_ui()
@@ -3935,11 +4654,11 @@ func _build_slot_modal_ui(parent: Control) -> void:
 	tabs_row.add_theme_constant_override("separation", 8)
 	vbox.add_child(tabs_row)
 
-	_btn_tab_manual = _make_btn("建设规划档 (10槽 · 各含3运行档)", func():
+	_btn_tab_manual = _make_btn(L10n.t("建设规划档 (10槽 · 各含3运行档)", "Plan Slots (10 · 3 Run Saves each)"), func():
 		_slot_tab_mode = 0
 		_refresh_slot_modal_ui()
 	)
-	_btn_tab_auto = _make_btn("轮换自动档 (5)", func():
+	_btn_tab_auto = _make_btn(L10n.t("轮换自动档 (5)", "Rotating Autosaves (5)"), func():
 		_slot_tab_mode = 1
 		_refresh_slot_modal_ui()
 	)
@@ -3951,11 +4670,11 @@ func _build_slot_modal_ui(parent: Control) -> void:
 	vbox.add_child(_slot_name_row)
 
 	var nm_lbl := Label.new()
-	nm_lbl.text = "存档备注名称："
+	nm_lbl.text = L10n.t("存档备注名称：", "Save Name:")
 	_slot_name_row.add_child(nm_lbl)
 
 	_edit_slot_name = LineEdit.new()
-	_edit_slot_name.placeholder_text = "自定义存档名（留空自动命名）"
+	_edit_slot_name.placeholder_text = L10n.t("自定义存档名（留空自动命名）", "Custom save name (blank for auto)")
 	_edit_slot_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_slot_name_row.add_child(_edit_slot_name)
 
@@ -3975,26 +4694,34 @@ func _build_slot_modal_ui(parent: Control) -> void:
 
 func _save_run_progress_to_slot(plan_idx: int, sub_idx: int = 0) -> void:
 	if _transit_sim.trams.is_empty():
-		_show_toast("当前没有在线运行的电车，请先规划线路并进入运行模式！")
+		_show_toast(L10n.t("当前没有在线运行的电车，请先规划线路并进入运行模式！", "No active trams to save — launch a line and enter Run mode first!"))
 		return
 	var pidx := clampi(plan_idx, 0, SaveManager.MANUAL_SLOT_COUNT - 1)
 	var sidx := clampi(sub_idx, 0, SaveManager.RUN_PER_PLAN_COUNT - 1)
 	_active_plan_slot_idx = pidx
 	if SaveManager.load_slot(_current_map_key, false, pidx).is_empty():
-		var bp_payload := _build_current_save_payload("规划存档 %02d" % (pidx + 1))
-		SaveManager.save_manual_slot(_current_map_key, pidx, "规划存档 %02d" % (pidx + 1), bp_payload)
+		var bp_nm := L10n.t("规划存档 %02d", "Plan Save %02d") % (pidx + 1)
+		var bp_payload := _build_current_save_payload(bp_nm)
+		SaveManager.save_manual_slot(_current_map_key, pidx, bp_nm, bp_payload)
 		SaveManager.save_current(_current_map_key, bp_payload)
+	var line_tsp := {}
+	for lid: int in _graph.lines.keys():
+		var ln: Dictionary = _graph.lines[lid]
+		line_tsp[str(lid)] = bool(ln.get("signal_priority", false))
 	var run_payload := {
 		"plan_slot_idx": pidx,
 		"sub_idx": sidx,
 		"time_hours": snappedf(_time_hours, 0.05),
+		"weather": _weather_mode,
 		"pax_spawn_level": _pax_sim.spawn_level,
 		"total_delivered": _pax_sim.total_delivered,
+		"global_signal_priority": _graph.global_signal_priority,
+		"line_signal_priority": line_tsp,
 		"transit": _transit_sim.export_run_state(),
 	}
 	if SaveManager.save_run_slot(_current_map_key, pidx, run_payload, sidx):
 		_is_demo_readonly = false
-		_show_toast("✓ 已保存至规划 %02d · 运行档 %d（累计送达 %d 人）！" % [pidx + 1, sidx + 1, _pax_sim.total_delivered])
+		_show_toast(L10n.t("✓ 已保存至规划 %02d · 运行档 %d（累计送达 %d 人）！", "✓ Saved to Plan %02d · Run %d (%d delivered)!") % [pidx + 1, sidx + 1, _pax_sim.total_delivered])
 
 
 func _toggle_stats_modal() -> void:
@@ -4030,14 +4757,20 @@ func _build_stats_modal_ui(parent: Control) -> void:
 	vbox.add_child(top_row)
 
 	var title := Label.new()
-	title.text = "线路管理 · 运营数据看板"
+	title.text = L10n.t("线路管理 · 运营数据看板", "Line Management · Operations Board")
 	title.add_theme_font_size_override("font_size", 18)
 	title.add_theme_color_override("font_color", Color(0.48, 0.90, 0.74))
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top_row.add_child(title)
 
-	top_row.add_child(_make_btn("刷新", func(): _refresh_stats_modal_ui()))
-	top_row.add_child(_make_btn("✕ 关闭 (T/Esc)", func(): _stats_modal.visible = false))
+	_btn_stats_global_tsp = _make_btn(L10n.t("全局信号优先：关", "Global TSP: OFF"), func():
+		_on_toggle_global_tsp()
+		_refresh_stats_modal_ui()
+	)
+	_btn_stats_global_tsp.tooltip_text = L10n.t("开启后全城所有线路电车接近路口信号灯时自动享有信号优先", "Enables Transit Signal Priority for all lines across the city")
+	top_row.add_child(_btn_stats_global_tsp)
+	top_row.add_child(_make_btn(L10n.t("刷新", "Refresh"), func(): _refresh_stats_modal_ui()))
+	top_row.add_child(_make_btn(L10n.t("✕ 关闭 (T/Esc)", "✕ Close (T/Esc)"), func(): _stats_modal.visible = false))
 
 	var sum_pc := _make_panel(Color(0.10, 0.14, 0.20, 0.95))
 	vbox.add_child(sum_pc)
@@ -4047,7 +4780,7 @@ func _build_stats_modal_ui(parent: Control) -> void:
 	sum_pc.add_child(_stats_summary_lbl)
 
 	var l_hdr := Label.new()
-	l_hdr.text = "各线路运营指标"
+	l_hdr.text = L10n.t("各线路运营指标（支持按线路整组设置 AI 模式与信号优先）", "Line Metrics (Per-line AI Group & Signal Priority)")
 	l_hdr.add_theme_font_size_override("font_size", 14)
 	l_hdr.add_theme_color_override("font_color", Color(0.68, 0.86, 1.0))
 	vbox.add_child(l_hdr)
@@ -4064,7 +4797,7 @@ func _build_stats_modal_ui(parent: Control) -> void:
 	vbox.add_child(HSeparator.new())
 
 	var t_hdr := Label.new()
-	t_hdr.text = "各列车运营数据（点击一行切换到该列车）"
+	t_hdr.text = L10n.t("各列车运营数据（点击一行切换到该列车）", "Active Trams (click a row to jump to that tram)")
 	t_hdr.add_theme_font_size_override("font_size", 14)
 	t_hdr.add_theme_color_override("font_color", Color(0.62, 0.92, 0.80))
 	vbox.add_child(t_hdr)
@@ -4082,7 +4815,7 @@ func _build_stats_modal_ui(parent: Control) -> void:
 	vbox.add_child(HSeparator.new())
 
 	var s_hdr := Label.new()
-	s_hdr.text = "各站客流统计（按当前候车人数降序）"
+	s_hdr.text = L10n.t("各站客流统计（按当前候车人数降序）", "Station Ridership (sorted by waiting passengers)")
 	s_hdr.add_theme_font_size_override("font_size", 14)
 	s_hdr.add_theme_color_override("font_color", Color(0.98, 0.86, 0.56))
 	vbox.add_child(s_hdr)
@@ -4127,15 +4860,29 @@ func _fmt_hms(sec: float) -> String:
 func _refresh_stats_trams() -> void:
 	for c in _stats_trams_vbox.get_children():
 		c.queue_free()
-	var t_widths: Array[int] = [128, 0, 62, 62, 62, 64, 44, 48, 48, 70, 46, 62, 62]
+	var t_widths: Array[int] = [148, 0, 58, 60, 62, 62, 42, 46, 46, 66, 44, 58, 58]
 	_stats_trams_vbox.add_child(_make_stat_row(
-		["列车", "当前状态", "速度", "里程", "运行均速", "最高速度", "停站", "上车", "下车", "在车/定员", "满载", "停站时间", "等待时间"],
+		[
+			L10n.t("列车", "Tram"),
+			L10n.t("当前状态", "Status"),
+			L10n.t("速度", "Speed"),
+			L10n.t("里程", "Dist"),
+			L10n.t("运行均速", "Avg Spd"),
+			L10n.t("最高速度", "Top Spd"),
+			L10n.t("停站", "Stops"),
+			L10n.t("上车", "Board"),
+			L10n.t("下车", "Alight"),
+			L10n.t("在车/定员", "Load"),
+			L10n.t("满载", "Occ"),
+			L10n.t("停站时间", "Dwell"),
+			L10n.t("等待时间", "Wait"),
+		],
 		t_widths,
 		Color(0.66, 0.90, 0.80),
 		Color(0.09, 0.12, 0.18, 0.96)
 	))
 	if _transit_sim.trams.is_empty():
-		_stats_trams_vbox.add_child(_make_stat_row(["暂无运营列车"], [0], Color(0.62, 0.68, 0.74), Color(0.08, 0.10, 0.14, 0.85)))
+		_stats_trams_vbox.add_child(_make_stat_row([L10n.t("暂无运营列车", "No active trams")], [0], Color(0.62, 0.68, 0.74), Color(0.08, 0.10, 0.14, 0.85)))
 		return
 	var order: Array = range(_transit_sim.trams.size())
 	order.sort_custom(func(a: int, b: int) -> bool:
@@ -4153,9 +4900,11 @@ func _refresh_stats_trams() -> void:
 		var dist_m := float(tr.get("st_dist_m", 0.0))
 		var t_all := float(tr.get("st_move_s", 0.0)) + float(tr.get("st_stand_s", 0.0))
 		var avg_kmh := dist_m / t_all * 3.6 if t_all > 1.0 else 0.0
-		var name_txt := "%s%s 第%d列" % ["▶ " if is_active else "", str(tr["line_name"]), same.find(i) + 1]
+		var ai_tag := "%s·%d" % [TransitSim.tram_ai_style_name(tr), int(tr.get("ai_max_kmh", TransitSim.tram_spec_max_kmh(tr)))]
+		var ln_disp := L10n.line_display_name(str(tr["line_name"]))
+		var name_txt := L10n.t("%s%s 第%d列 (%s)", "%s%s #%d (%s)") % ["▶ " if is_active else "", ln_disp, same.find(i) + 1, ai_tag]
 		if is_active and _transit_sim.manual_drive:
-			name_txt += "·手动"
+			name_txt += L10n.t("·手动", "·Man")
 		var l_col: Color = tr.get("line_color", Color(0.85, 0.92, 1.0))
 		var row := _make_stat_row(
 			[
@@ -4180,13 +4929,16 @@ func _refresh_stats_trams() -> void:
 		row.mouse_filter = Control.MOUSE_FILTER_STOP
 		(row.get_child(0) as Control).mouse_filter = Control.MOUSE_FILTER_PASS
 		row.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-		row.tooltip_text = "峰值载客 %d 人 · 行驶 %s · 停车 %s（其中开门上下客 %s，待避/让行 %s）" % [
+		row.tooltip_text = L10n.t(
+			"峰值载客 %d 人 · 行驶 %s · 停车 %s（其中开门上下客 %s，待避/让行 %s）",
+			"Peak load %d · Moving %s · Stopped %s (Boarding %s, Yielding %s)"
+		) % [
 			int(tr.get("st_peak_load", 0)), _fmt_hms(float(tr.get("st_move_s", 0.0))), _fmt_hms(float(tr.get("st_stand_s", 0.0))),
 			_fmt_hms(float(tr.get("st_dwell_s", 0.0))), _fmt_hms(float(tr.get("st_hold_s", 0.0)))]
 		row.gui_input.connect(func(ev: InputEvent) -> void:
 			if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
 				_transit_sim.select_tram(i)
-				_show_toast("已切换到 %s 第%d列" % [str(tr["line_name"]), same.find(i) + 1])
+				_show_toast(L10n.t("已切换到 %s 第%d列", "Switched to %s #%d") % [ln_disp, same.find(i) + 1])
 				_refresh_stats_modal_ui()
 		)
 		_stats_trams_vbox.add_child(row)
@@ -4204,7 +4956,10 @@ func _refresh_stats_modal_ui() -> void:
 		var tr: Dictionary = tr_var
 		total_onboard += (tr.get("pax_dests", []) as Array).size()
 	var total_waiting := _pax_sim.get_total_waiting()
-	_stats_summary_lbl.text = "运营时长 %02d:%02d  ·  在线线路 %d 条  ·  在线电车 %d 辆  ·  在车 %d 人  ·  候车 %d 人  ·  累计上车 %d 人  ·  累计送达 %d 人" % [
+	_stats_summary_lbl.text = L10n.t(
+		"运营时长 %02d:%02d  ·  在线线路 %d 条  ·  在线电车 %d 辆  ·  在车 %d 人  ·  候车 %d 人  ·  累计上车 %d 人  ·  缓急换乘 %d 人  ·  累计送达 %d 人",
+		"Uptime %02d:%02d  ·  Lines %d  ·  Trams %d  ·  Onboard %d  ·  Waiting %d  ·  Boarded %d  ·  Transfers %d  ·  Delivered %d"
+	) % [
 		op_min,
 		op_rem,
 		_graph.lines.size(),
@@ -4212,6 +4967,7 @@ func _refresh_stats_modal_ui() -> void:
 		total_onboard,
 		total_waiting,
 		_pax_sim.total_boarded,
+		_pax_sim.total_transfers,
 		_pax_sim.total_delivered,
 	]
 
@@ -4221,9 +4977,25 @@ func _refresh_stats_modal_ui() -> void:
 		c.queue_free()
 	_refresh_stats_trams()
 
-	var l_widths: Array[int] = [92, 165, 52, 62, 82, 64, 64, 62, 72]
+	if _btn_stats_global_tsp != null:
+		_btn_stats_global_tsp.text = L10n.t("全局信号优先：开", "Global TSP: ON") if _graph.global_signal_priority else L10n.t("全局信号优先：关", "Global TSP: OFF")
+		_highlight_active_btn(_btn_stats_global_tsp, _graph.global_signal_priority)
+
+	var l_widths: Array[int] = [88, 138, 46, 52, 68, 52, 52, 50, 52, 168, 98]
 	_stats_lines_vbox.add_child(_make_stat_row(
-		["线路", "车型 / 编组", "配车", "总定员", "运营均速", "累计上车", "累计送达", "当前在车", "满载率"],
+		[
+			L10n.t("线路", "Line"),
+			L10n.t("车型 / 编组", "Model / Cars"),
+			L10n.t("配车", "Fleet"),
+			L10n.t("总定员", "Cap"),
+			L10n.t("运营均速", "Avg Spd"),
+			L10n.t("累计上车", "Boarded"),
+			L10n.t("累计送达", "Deliv."),
+			L10n.t("当前在车", "Onbrd"),
+			L10n.t("满载率", "Load"),
+			L10n.t("整组AI模式", "Line AI"),
+			L10n.t("信号优先", "TSP"),
+		],
 		l_widths,
 		Color(0.68, 0.80, 0.92),
 		Color(0.09, 0.12, 0.18, 0.96)
@@ -4231,7 +5003,7 @@ func _refresh_stats_modal_ui() -> void:
 
 	if _graph.lines.is_empty():
 		_stats_lines_vbox.add_child(_make_stat_row(
-			["暂无线路数据，请先在【规划线路】模式中创建至少一条电车线路。"],
+			[L10n.t("暂无线路数据，请先在【规划线路】模式中创建至少一条电车线路。", "No lines yet. Create at least one line in [Plan Lines] mode.")],
 			[0],
 			Color(0.62, 0.68, 0.74),
 			Color(0.08, 0.10, 0.14, 0.85)
@@ -4247,7 +5019,7 @@ func _refresh_stats_modal_ui() -> void:
 			var cap_sum := 0
 			var ob_sum := 0
 			var model_label := str(ln.get("model_key", "Tram"))
-			var sec_cnt := clampi(int(ln.get("sections", 2)), 1, 2)
+			var sec_cnt := clampi(int(ln.get("sections", 2)), 1, 4)
 			for tr_var in _transit_sim.trams:
 				var tr: Dictionary = tr_var
 				if int(tr.get("line_id", -1)) == lid:
@@ -4256,33 +5028,81 @@ func _refresh_stats_modal_ui() -> void:
 					ob_sum += (tr.get("pax_dests", []) as Array).size()
 					var sp: Dictionary = tr.get("spec", {})
 					if not sp.is_empty():
-						model_label = str(sp.get("name", model_label))
+						model_label = L10n.model_name(sp)
 			var dist_km := float(_transit_sim.line_dist_m.get(lid, 0.0)) / 1000.0
 			var avg_kmh := (dist_km / maxf(float(maxi(1, tr_cnt)) * op_hrs, 0.0001)) if _transit_sim.operating_seconds > 1.0 else 0.0
 			var boarded := int(_pax_sim.line_boarded.get(lid, 0))
 			var delivered := int(_pax_sim.line_delivered.get(lid, 0))
 			var load_pct := (float(ob_sum) / float(maxi(1, cap_sum)) * 100.0) if cap_sum > 0 else 0.0
 			var l_col: Color = ln.get("color", Color(0.85, 0.92, 1.0))
-			_stats_lines_vbox.add_child(_make_stat_row(
+			var row_pc := _make_stat_row(
 				[
-					str(ln.get("name", "线路 %d" % lid)),
-					"%s · %d节" % [model_label, sec_cnt],
-					"%d 辆" % tr_cnt,
-					"%d 人" % cap_sum,
+					L10n.line_display_name(str(ln.get("name", L10n.t("线路 %d", "Line %d") % lid))),
+					L10n.t("%s · %d节", "%s · %dc") % [model_label, sec_cnt],
+					L10n.t("%d 辆", "%d") % tr_cnt,
+					L10n.t("%d 人", "%d") % cap_sum,
 					"%.1f km/h" % avg_kmh,
 					"%d" % boarded,
 					"%d" % delivered,
 					"%d" % ob_sum,
 					"%.0f%%" % load_pct,
 				],
-				l_widths,
+				l_widths.slice(0, 9),
 				l_col.lerp(Color.WHITE, 0.55),
 				Color(0.10, 0.13, 0.19, 0.90)
-			))
+			)
+			var row_hb := row_pc.get_child(0) as HBoxContainer
+			var ai_grp_box := HBoxContainer.new()
+			ai_grp_box.custom_minimum_size = Vector2(168, 0)
+			ai_grp_box.add_theme_constant_override("separation", 3)
+			var cur_line_style := _transit_sim.get_line_ai_style(lid)
+			var lid_ai := lid
+			var line_ai_opts := [
+				[TransitSim.LINE_AI_NONE, L10n.t("无默认", "None"), 52],
+				[TransitSim.AIStyle.SLOW, L10n.t("慢", "S"), 32],
+				[TransitSim.AIStyle.NORMAL, L10n.t("常", "N"), 32],
+				[TransitSim.AIStyle.FURIOUS, L10n.t("狂", "F"), 32],
+			]
+			for sp_pair in line_ai_opts:
+				var st_v: int = sp_pair[0]
+				var ab := _make_btn(str(sp_pair[1]), func():
+					_on_set_line_ai_style(lid_ai, st_v)
+					_refresh_stats_modal_ui()
+				)
+				ab.custom_minimum_size = Vector2(int(sp_pair[2]), 0)
+				if st_v == TransitSim.LINE_AI_NONE:
+					ab.tooltip_text = L10n.t("取消本线整组默认 AI 模式（各车保留当前独立设置）", "Clear line-level default AI mode (trams keep individual modes)")
+				else:
+					ab.tooltip_text = L10n.t("整条线路设为【%s】模式", "Set entire line to [%s] mode") % TransitSim.ai_style_name(st_v)
+				_highlight_active_btn(ab, cur_line_style == st_v)
+				ai_grp_box.add_child(ab)
+			row_hb.add_child(ai_grp_box)
+
+			var lid_tsp := lid
+			var line_tsp_on := bool(ln.get("signal_priority", false))
+			var eff_tsp_on := _graph.is_line_signal_priority(lid)
+			var tsp_btn := _make_btn(
+				L10n.t("⚡ 全局优", "⚡ Global") if (_graph.global_signal_priority and not line_tsp_on) else (L10n.t("⚡ 优先：开", "⚡ TSP: ON") if line_tsp_on else L10n.t("优先：关", "TSP: OFF")),
+				func():
+					_on_toggle_line_tsp(lid_tsp)
+					_refresh_stats_modal_ui()
+			)
+			tsp_btn.custom_minimum_size = Vector2(96, 0)
+			_highlight_active_btn(tsp_btn, eff_tsp_on)
+			row_hb.add_child(tsp_btn)
+			_stats_lines_vbox.add_child(row_pc)
 
 	var s_widths: Array[int] = [0, 82, 82, 82, 118, 118, 76]
 	_stats_stations_vbox.add_child(_make_stat_row(
-		["车站名称", "当前候车", "累计上车", "累计下车", "平均等待(已上车)", "当前候车已等", "站台状态"],
+		[
+			L10n.t("车站名称", "Station"),
+			L10n.t("当前候车", "Waiting"),
+			L10n.t("累计上车", "Boarded"),
+			L10n.t("累计下车", "Alighted"),
+			L10n.t("平均等待(已上车)", "Avg Wait (Brd)"),
+			L10n.t("当前候车已等", "Cur Wait"),
+			L10n.t("站台状态", "Crowd"),
+		],
 		s_widths,
 		Color(0.95, 0.84, 0.58),
 		Color(0.09, 0.12, 0.18, 0.96)
@@ -4296,7 +5116,7 @@ func _refresh_stats_modal_ui() -> void:
 		var st_b := int(_pax_sim.station_boarded.get(sid, 0))
 		var st_a := int(_pax_sim.station_alighted.get(sid, 0))
 		st_rows.append({
-			"name": str(st.get("name", "车站 %d" % sid)),
+			"name": L10n.station_display_name(str(st.get("name", L10n.t("车站 %d", "Station %d") % sid))),
 			"waiting": waiting,
 			"boarded": st_b,
 			"alighted": st_a,
@@ -4310,7 +5130,7 @@ func _refresh_stats_modal_ui() -> void:
 	)
 	if st_rows.is_empty():
 		_stats_stations_vbox.add_child(_make_stat_row(
-			["暂无车站数据"],
+			[L10n.t("暂无车站数据", "No stations yet")],
 			[0],
 			Color(0.62, 0.68, 0.74),
 			Color(0.08, 0.10, 0.14, 0.85)
@@ -4318,16 +5138,16 @@ func _refresh_stats_modal_ui() -> void:
 	else:
 		for sr: Dictionary in st_rows:
 			var w := int(sr["waiting"])
-			var status_txt := "宽松"
+			var status_txt := L10n.t("宽松", "Light")
 			var st_col := Color(0.86, 0.94, 0.90)
 			if w >= 60:
-				status_txt = "拥挤"
+				status_txt = L10n.t("拥挤", "Crowded")
 				st_col = Color(1.0, 0.56, 0.48)
 			elif w >= 25:
-				status_txt = "较忙"
+				status_txt = L10n.t("较忙", "Busy")
 				st_col = Color(0.98, 0.84, 0.46)
 			_stats_stations_vbox.add_child(_make_stat_row(
-				[str(sr["name"]), "%d 人" % w, "%d 人" % int(sr["boarded"]), "%d 人" % int(sr["alighted"]),
+				[str(sr["name"]), L10n.t("%d 人", "%d") % w, L10n.t("%d 人", "%d") % int(sr["boarded"]), L10n.t("%d 人", "%d") % int(sr["alighted"]),
 					"—" if float(sr["avg_wait"]) < 0.0 else _fmt_hms(float(sr["avg_wait"])),
 					"—" if float(sr["cur_wait"]) < 0.0 else _fmt_hms(float(sr["cur_wait"])), status_txt],
 				s_widths,
@@ -4345,27 +5165,38 @@ func _toggle_audio_modal() -> void:
 # so a manual driver knows when everyone is on board and the doors can be closed.
 func _boarding_status_text(tr: Dictionary, st_info: Dictionary) -> String:
 	var sid := int(st_info.get("station_id", -1))
-	var st_name := str(st_info.get("name", ""))
+	var st_name := L10n.station_display_name(str(st_info.get("name", "")))
 	var term_stage := str(tr.get("term_stage", ""))
 	if term_stage == "flip_wait":
 		tr.erase("xfer_snap")
-		return "🔄 已停靠：%s · 终点清客完毕，正在换端折返…" % st_name
+		return L10n.t("🔄 已停靠：%s · 终点清客完毕，正在换端折返…", "🔄 Docked: %s · Terminus cleared, changing cab…") % st_name
 	var onboard: Array = tr["pax_dests"]
 	var cap := int(tr["capacity"])
 	var alight_left := onboard.size() if term_stage == "alight_only" else (0 if term_stage == "board_only" else onboard.count(sid))
 	var pending := int(tr.get("pending_boarders", 0))
-	var waiting := _pax_sim.get_boardable_count(sid) # on the platform now (not still walking up from the street)
+	var is_unsched := bool(st_info.get("unscheduled", false))
+	var waiting: int
+	if is_unsched:
+		var up_u := _transit_sim.get_upcoming_station_ids(tr, -1, sid)
+		waiting = _pax_sim.get_boardable_count_for_tram(sid, tr, up_u)
+	else:
+		waiting = _pax_sim.get_boardable_count(sid) # on the platform now (not still walking up from the street)
 	var room := maxi(0, cap - onboard.size() - pending)
 	var board_left := 0 if term_stage == "alight_only" else mini(waiting, room)
 	var doors_open := bool(tr.get("doors_target_open", false)) and float(tr.get("door_ratio", 0.0)) > 0.5
+	var open_delay := float(tr.get("ai_open_delay", 0.0))
 	if not doors_open:
 		if float(tr.get("door_ratio", 0.0)) < 0.02:
 			tr.erase("xfer_snap")
-		var phase_tag := "（终点清客）" if term_stage == "alight_only" else ("（始发上客）" if term_stage == "board_only" else "")
+		var phase_tag := L10n.t("（终点清客）", " (Terminus Alight)") if term_stage == "alight_only" else (L10n.t("（始发上客）", " (Origin Boarding)") if term_stage == "board_only" else "")
+		if open_delay > 0.0:
+			return L10n.t("● 已停靠：%s%s · 缓慢模式停稳确认中（%.1fs 后开门）…", "● Docked: %s%s · Slow mode safety pause (opening in %.1fs)…") % [st_name, phase_tag, open_delay]
 		if bool(tr.get("doors_target_open", false)):
-			return "● 已停靠：%s%s · 车门正在打开…" % [st_name, phase_tag]
-		return "● 已停靠：%s%s · 车门正在关闭…" % [st_name, phase_tag]
+			return L10n.t("● 已停靠：%s%s · 车门正在打开…", "● Docked: %s%s · Doors opening…") % [st_name, phase_tag]
+		return L10n.t("● 已停靠：%s%s · 车门正在关闭…", "● Docked: %s%s · Doors closing…") % [st_name, phase_tag]
 	var remaining := alight_left + board_left + pending
+	var approaching_n := _pax_sim.get_approaching_count(sid) if (int(tr.get("ai_style", 1)) == TransitSim.AIStyle.SLOW and term_stage != "alight_only" and room > 0) else 0
+	var close_grace := float(tr.get("ai_close_grace", 0.0))
 	var snap: Dictionary = tr.get("xfer_snap", {})
 	if snap.is_empty() or int(snap.get("sid", -1)) != sid or str(snap.get("stage", "")) != term_stage:
 		snap = {"sid": sid, "stage": term_stage, "total": maxi(1, remaining), "done_toast": false}
@@ -4378,36 +5209,52 @@ func _boarding_status_text(tr: Dictionary, st_info: Dictionary) -> String:
 	if remaining == 0:
 		snap["done"] = true
 	if bool(snap.get("done", false)) and term_stage != "alight_only" and alight_left == 0:
+		if not _transit_sim.manual_drive and bool(tr.get("express_waiting", false)):
+			var done_tag_e := L10n.t("始发上客完毕", "Boarding done") if term_stage == "board_only" else L10n.t("上下客完毕", "Boarding done")
+			return L10n.t("⏳ %s %s · 正在开门待避快车（等快车离站后关门发车）…", "⏳ %s %s · Holding doors open for Express…") % [st_name, done_tag_e]
+		if not _transit_sim.manual_drive and bool(tr.get("pacing_waiting", false)):
+			var done_tag_p := L10n.t("始发上客完毕", "Boarding done") if term_stage == "board_only" else L10n.t("上下客完毕", "Boarding done")
+			return L10n.t("⏱ %s %s · 前方同线列车较近，正在站台开门调距（%.0fm / 均距 %.0fm）…", "⏱ %s %s · Holding doors open for headway pacing (%.0fm / avg %.0fm)…") % [
+				st_name, done_tag_p,
+				float(tr.get("pacing_ahead_m", 0.0)),
+				float(tr.get("pacing_avg_m", 0.0)),
+			]
+		if not _transit_sim.manual_drive and int(tr.get("ai_style", 1)) == TransitSim.AIStyle.SLOW:
+			var done_tag_s := L10n.t("始发上客完毕", "Boarding done") if term_stage == "board_only" else L10n.t("上下客完毕", "Boarding done")
+			if remaining == 0 and approaching_n > 0:
+				return L10n.t("⏳ %s %s %s 100%% · 缓慢模式正在等待 %d 名赶来的乘客上车…", "⏳ %s %s %s 100%% · Slow mode waiting for %d approaching rider(s)…") % [st_name, done_tag_s, "▰".repeat(cells), approaching_n]
+			if remaining == 0 and close_grace > 0.05:
+				return L10n.t("✅ %s %s %s 100%% · 缓慢模式候客确认中（%.1fs 后关门）…", "✅ %s %s %s 100%% · Slow mode closing in %.1fs…") % [st_name, done_tag_s, "▰".repeat(cells), close_grace]
 		# Everyone who was on the platform is aboard; late arrivals still walking in don't hold the train
-		var late_note := " · 另有 %d 人正赶来上车" % (board_left + pending) if remaining > 0 else ""
+		var late_note := (L10n.t(" · 另有 %d 人正赶来上车", " · +%d approaching") % (board_left + pending)) if remaining > 0 else ""
 		if _transit_sim.manual_drive and not bool(snap["done_toast"]):
 			snap["done_toast"] = true
-			_show_toast("✅ %s %s完毕，可以关门 (O) 出发" % [st_name, "始发上客" if term_stage == "board_only" else "上下客"])
-		var full_note := "（车厢已满，站台还有 %d 人等下一班）" % waiting if waiting > 0 and room == 0 else ""
-		var done_tag := "始发上客完毕" if term_stage == "board_only" else "上下客完毕"
-		return "✅ %s %s %s 100%%，可关门 (O) 出发%s%s" % [st_name, done_tag, "▰".repeat(cells), full_note, late_note]
+			_show_toast(L10n.t("✅ %s %s完毕，可以关门 (O) 出发", "✅ %s %s complete — press O to close doors & depart") % [st_name, L10n.t("始发上客", "boarding") if term_stage == "board_only" else L10n.t("上下客", "boarding")])
+		var full_note := (L10n.t("（车厢已满，站台还有 %d 人等下一班）", " (Full, %d left waiting)") % waiting) if waiting > 0 and room == 0 else ""
+		var done_tag := L10n.t("始发上客完毕", "Boarding done") if term_stage == "board_only" else L10n.t("上下客完毕", "Boarding done")
+		return L10n.t("✅ %s %s %s 100%%，可关门 (O) 出发%s%s", "✅ %s %s %s 100%% — Close doors (O)%s%s") % [st_name, done_tag, "▰".repeat(cells), full_note, late_note]
 	if remaining == 0:
 		if term_stage == "alight_only":
 			if _transit_sim.manual_drive and not bool(snap["done_toast"]):
 				snap["done_toast"] = true
-				_show_toast("✅ %s 终点清客完毕，请关门 (O) 后按 R 换端" % st_name)
-			return "✅ %s 终点清客完毕 %s 100%% · 请关门后换端" % [st_name, bar]
+				_show_toast(L10n.t("✅ %s 终点清客完毕，请关门 (O) 后按 R 换端", "✅ %s terminus cleared — close doors (O), then press R to change cab") % st_name)
+			return L10n.t("✅ %s 终点清客完毕 %s 100%% · 请关门后换端", "✅ %s Terminus cleared %s 100%% · Close doors & change cab") % [st_name, bar]
 		if _transit_sim.manual_drive and not bool(snap["done_toast"]):
 			snap["done_toast"] = true
-			_show_toast("✅ %s %s完毕，可以关门 (O) 出发" % [st_name, "始发上客" if term_stage == "board_only" else "上下客"])
-		var full_note := "（车厢已满，站台还有 %d 人等下一班）" % waiting if waiting > 0 and room == 0 else ""
-		var done_tag := "始发上客完毕" if term_stage == "board_only" else "上下客完毕"
-		return "✅ %s %s %s 100%%，可关门 (O) 出发%s" % [st_name, done_tag, bar, full_note]
+			_show_toast(L10n.t("✅ %s %s完毕，可以关门 (O) 出发", "✅ %s %s complete — press O to close doors & depart") % [st_name, L10n.t("始发上客", "boarding") if term_stage == "board_only" else L10n.t("上下客", "boarding")])
+		var full_note := (L10n.t("（车厢已满，站台还有 %d 人等下一班）", " (Full, %d left waiting)") % waiting) if waiting > 0 and room == 0 else ""
+		var done_tag := L10n.t("始发上客完毕", "Boarding done") if term_stage == "board_only" else L10n.t("上下客完毕", "Boarding done")
+		return L10n.t("✅ %s %s %s 100%%，可关门 (O) 出发%s", "✅ %s %s %s 100%% — Close doors (O)%s") % [st_name, done_tag, bar, full_note]
 	var open_n := int(tr.get("open_doorways", 0))
 	var tot_n := maxi(1, int(tr.get("total_doorways", 1)))
-	var door_note := "" if open_n >= tot_n else " · ⚠ 停靠错位，仅 %d/%d 个车门对准站台，上下客较慢" % [open_n, tot_n]
+	var door_note := "" if open_n >= tot_n else (L10n.t(" · ⚠ 停靠错位，仅 %d/%d 个车门对准站台，上下客较慢", " · ⚠ Misaligned: only %d/%d doors open (slower)") % [open_n, tot_n])
 	if term_stage == "alight_only":
-		return "⏳ %s 终点清客中（只下不上）%s %d%% · 下车剩 %d%s" % [
+		return L10n.t("⏳ %s 终点清客中（只下不上）%s %d%% · 下车剩 %d%s", "⏳ %s Terminus alighting %s %d%% · %d left%s") % [
 			st_name, bar, int(round(prog * 100.0)), alight_left, door_note]
 	if term_stage == "board_only":
-		return "⏳ %s 始发上客中（只上车）%s %d%% · 上车剩 %d（站台 %d，正在上车 %d）%s" % [
+		return L10n.t("⏳ %s 始发上客中（只上车）%s %d%% · 上车剩 %d（站台 %d，正在上车 %d）%s", "⏳ %s Boarding %s %d%% · %d left (plat %d, moving %d)%s") % [
 			st_name, bar, int(round(prog * 100.0)), board_left, waiting, pending, door_note]
-	return "⏳ %s 上下客中 %s %d%% · 下车剩 %d · 上车剩 %d（站台 %d，正在上车 %d）%s" % [
+	return L10n.t("⏳ %s 上下客中 %s %d%% · 下车剩 %d · 上车剩 %d（站台 %d，正在上车 %d）%s", "⏳ %s Exchange %s %d%% · Alight %d · Board %d (plat %d, moving %d)%s") % [
 		st_name, bar, int(round(prog * 100.0)), alight_left, board_left, waiting, pending, door_note]
 
 
@@ -4425,7 +5272,12 @@ func _update_station_announcements() -> void:
 	var door_open_now := bool(tr.get("doors_target_open", false)) and float(tr.get("door_ratio", 0.0)) > 0.18
 	if door_open_now and not _last_ann_door_open:
 		_last_ann_door_open = true
-		var dock := _transit_sim.get_dock_info_for_tram(tr, _graph)
+		var dock := _transit_sim.get_dock_info_for_tram(tr, _graph, _transit_sim.manual_drive)
+		var ann_name := st_name
+		var is_unsched_ann := bool(dock.get("unscheduled", false))
+		var dock_sid := int(dock.get("station_id", -1))
+		if is_unsched_ann and dock_sid >= 0 and _graph.stations.has(dock_sid):
+			ann_name = str((_graph.stations[dock_sid] as Dictionary).get("name", st_name))
 		var side_zh := "站台侧"
 		var side_en := "platform side"
 		var secs: Array = tr["tram_info"]["sections"]
@@ -4441,15 +5293,19 @@ func _update_station_announcements() -> void:
 			var is_right := drv_right.dot(plat_dir) >= 0.0
 			side_zh = "右侧" if is_right else "左侧"
 			side_en = "right" if is_right else "left"
-		_sound.announce_station("%s 到了，请从%s车门下车。" % [st_name, side_zh], "Arriving at %s. Doors open on the %s." % [st_name, side_en])
-		_show_toast("📢 报站：%s 到了，请从%s车门下车" % [st_name, side_zh])
+		var prefix_zh := "临时停靠，" if is_unsched_ann else ""
+		var prefix_en := "Unscheduled stop, " if is_unsched_ann else ""
+		var disp_ann := L10n.station_display_name(ann_name)
+		_sound.announce_station("%s%s 到了，请从%s车门下车。" % [prefix_zh, ann_name, side_zh], "%sArriving at %s. Doors open on the %s." % [prefix_en, disp_ann, side_en])
+		_show_toast(L10n.t("📢 报站：%s%s 到了，请从%s车门下车", "📢 Announcement: %sArriving at %s (doors on %s)") % [prefix_zh if not L10n.is_en() else prefix_en, disp_ann, side_zh if not L10n.is_en() else side_en])
 	elif (not bool(tr.get("doors_target_open", false))) and _last_ann_door_open:
 		_last_ann_door_open = false
 		_sound.announce_station("车门即将关闭，请站稳扶好。", "Doors closing. Please hold on.")
 	elif dist <= 48.0 and dist > 7.5 and sid != _last_ann_approach_sid and float(tr.get("speed_mps", 0.0)) > 1.2:
 		_last_ann_approach_sid = sid
-		_sound.announce_station("下一站，%s，请准备下车。" % st_name, "Next stop, %s." % st_name)
-		_show_toast("📢 报站：下一站，%s" % st_name)
+		var disp_next := L10n.station_display_name(st_name)
+		_sound.announce_station("下一站，%s，请准备下车。" % st_name, "Next stop, %s." % disp_next)
+		_show_toast(L10n.t("📢 报站：下一站，%s", "📢 Next stop: %s") % disp_next)
 
 
 func _build_audio_modal_ui(parent: Control) -> void:
@@ -4464,7 +5320,7 @@ func _build_audio_modal_ui(parent: Control) -> void:
 	_audio_modal.add_child(center)
 
 	var card := _make_panel(Color(0.08, 0.11, 0.16, 0.97))
-	card.custom_minimum_size = Vector2(470, 368)
+	card.custom_minimum_size = Vector2(500, 468)
 	center.add_child(card)
 
 	var vbox := VBoxContainer.new()
@@ -4474,27 +5330,70 @@ func _build_audio_modal_ui(parent: Control) -> void:
 	var header := HBoxContainer.new()
 	vbox.add_child(header)
 	var title := Label.new()
-	title.text = "音频与语音报站设置"
+	title.text = L10n.t("游戏、语言与音频设置", "Game, Language & Audio Settings")
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title.add_theme_font_size_override("font_size", 18)
 	title.add_theme_color_override("font_color", Color(0.50, 0.90, 0.98))
 	header.add_child(title)
-	header.add_child(_make_btn("关闭", func(): _audio_modal.visible = false))
+	header.add_child(_make_btn(L10n.t("关闭", "Close"), func(): _audio_modal.visible = false))
+
+	# UI Language Setting (Auto / Chinese / English)
+	var ui_lang_row := HBoxContainer.new()
+	ui_lang_row.add_theme_constant_override("separation", 8)
+	vbox.add_child(ui_lang_row)
+	var ui_lang_lbl := Label.new()
+	ui_lang_lbl.text = L10n.t("界面语言：", "Language:")
+	ui_lang_lbl.custom_minimum_size = Vector2(124, 24)
+	ui_lang_row.add_child(ui_lang_lbl)
+	var sys_tag := "中文" if L10n.detect_system_lang() == "zh" else "EN"
+	for lp in [
+		["auto", L10n.t("跟随系统 (%s)", "System (%s)") % sys_tag],
+		["zh", "中文"],
+		["en", "English"],
+	]:
+		var pref_c: String = lp[0]
+		var lb := _make_btn(str(lp[1]), func(): _on_set_language(pref_c))
+		lb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_highlight_active_btn(lb, L10n.lang_pref == pref_c)
+		ui_lang_row.add_child(lb)
+
+	# Weather Setting (Sunny / Cloudy / Rainy)
+	var wx_row := HBoxContainer.new()
+	wx_row.add_theme_constant_override("separation", 8)
+	vbox.add_child(wx_row)
+	var wx_lbl := Label.new()
+	wx_lbl.text = L10n.t("当前天气：", "Weather:")
+	wx_lbl.custom_minimum_size = Vector2(124, 24)
+	wx_row.add_child(wx_lbl)
+	_settings_weather_btns.clear()
+	for wm in [WeatherSystem.WeatherType.SUNNY, WeatherSystem.WeatherType.CLOUDY, WeatherSystem.WeatherType.RAINY]:
+		var wm_v: int = wm
+		var wb := _make_btn(WeatherSystem.weather_button_label(wm_v), func(): _set_weather_mode(wm_v, true))
+		wb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_highlight_active_btn(wb, _weather_mode == wm_v)
+		wx_row.add_child(wb)
+		_settings_weather_btns.append(wb)
+
+	vbox.add_child(HSeparator.new())
+
+	var cur_m_pct := int(round((_sound.master_volume if _sound != null else 0.85) * 100.0))
+	var cur_s_pct := int(round((_sound.sfx_volume if _sound != null else 0.85) * 100.0))
+	var cur_t_pct := int(round((_sound.tts_volume if _sound != null else 0.85) * 100.0))
 
 	# Master Volume
 	var m_row := HBoxContainer.new()
 	m_row.add_theme_constant_override("separation", 10)
 	vbox.add_child(m_row)
 	var m_lbl := Label.new()
-	m_lbl.text = "总音量：85%"
-	m_lbl.custom_minimum_size = Vector2(124, 24)
+	m_lbl.text = L10n.t("总音量：%d%%", "Master Vol: %d%%") % cur_m_pct
+	m_lbl.custom_minimum_size = Vector2(132, 24)
 	m_row.add_child(m_lbl)
 	var m_slider := HSlider.new()
-	m_slider.min_value = 0.0; m_slider.max_value = 100.0; m_slider.step = 1.0; m_slider.value = 85.0
+	m_slider.min_value = 0.0; m_slider.max_value = 100.0; m_slider.step = 1.0; m_slider.value = float(cur_m_pct)
 	m_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	m_slider.value_changed.connect(func(v: float):
 		_sound.master_volume = v / 100.0
-		m_lbl.text = "总音量：%d%%" % int(round(v))
+		m_lbl.text = L10n.t("总音量：%d%%", "Master Vol: %d%%") % int(round(v))
 	)
 	m_row.add_child(m_slider)
 
@@ -4503,15 +5402,15 @@ func _build_audio_modal_ui(parent: Control) -> void:
 	s_row.add_theme_constant_override("separation", 10)
 	vbox.add_child(s_row)
 	var s_lbl := Label.new()
-	s_lbl.text = "电车音效：85%"
-	s_lbl.custom_minimum_size = Vector2(124, 24)
+	s_lbl.text = L10n.t("电车音效：%d%%", "Tram SFX: %d%%") % cur_s_pct
+	s_lbl.custom_minimum_size = Vector2(132, 24)
 	s_row.add_child(s_lbl)
 	var s_slider := HSlider.new()
-	s_slider.min_value = 0.0; s_slider.max_value = 100.0; s_slider.step = 1.0; s_slider.value = 85.0
+	s_slider.min_value = 0.0; s_slider.max_value = 100.0; s_slider.step = 1.0; s_slider.value = float(cur_s_pct)
 	s_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	s_slider.value_changed.connect(func(v: float):
 		_sound.sfx_volume = v / 100.0
-		s_lbl.text = "电车音效：%d%%" % int(round(v))
+		s_lbl.text = L10n.t("电车音效：%d%%", "Tram SFX: %d%%") % int(round(v))
 	)
 	s_row.add_child(s_slider)
 
@@ -4520,35 +5419,37 @@ func _build_audio_modal_ui(parent: Control) -> void:
 	t_row.add_theme_constant_override("separation", 10)
 	vbox.add_child(t_row)
 	var t_lbl := Label.new()
-	t_lbl.text = "报站音量：85%"
-	t_lbl.custom_minimum_size = Vector2(124, 24)
+	t_lbl.text = L10n.t("报站音量：%d%%", "TTS Vol: %d%%") % cur_t_pct
+	t_lbl.custom_minimum_size = Vector2(132, 24)
 	t_row.add_child(t_lbl)
 	var t_slider := HSlider.new()
-	t_slider.min_value = 0.0; t_slider.max_value = 100.0; t_slider.step = 1.0; t_slider.value = 85.0
+	t_slider.min_value = 0.0; t_slider.max_value = 100.0; t_slider.step = 1.0; t_slider.value = float(cur_t_pct)
 	t_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	t_slider.value_changed.connect(func(v: float):
 		_sound.tts_volume = v / 100.0
-		t_lbl.text = "报站音量：%d%%" % int(round(v))
+		t_lbl.text = L10n.t("报站音量：%d%%", "TTS Vol: %d%%") % int(round(v))
 	)
 	t_row.add_child(t_slider)
 
 	var toggle_row := HBoxContainer.new()
 	toggle_row.add_theme_constant_override("separation", 8)
 	vbox.add_child(toggle_row)
-	var btn_sfx_t := _make_btn("电车音效：已开启", func(): pass)
+	var sfx_on := _sound.sfx_enabled if _sound != null else true
+	var btn_sfx_t := _make_btn(L10n.t("电车音效：已开启", "Tram SFX: ON") if sfx_on else L10n.t("电车音效：已关闭", "Tram SFX: OFF"), func(): pass)
 	btn_sfx_t.pressed.connect(func():
 		_sound.sfx_enabled = not _sound.sfx_enabled
-		btn_sfx_t.text = "电车音效：已开启" if _sound.sfx_enabled else "电车音效：已关闭"
+		btn_sfx_t.text = L10n.t("电车音效：已开启", "Tram SFX: ON") if _sound.sfx_enabled else L10n.t("电车音效：已关闭", "Tram SFX: OFF")
 	)
 	btn_sfx_t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	toggle_row.add_child(btn_sfx_t)
 
-	var btn_tts_t := _make_btn("自动报站：已开启", func(): pass)
+	var tts_on := _sound.tts_enabled if _sound != null else true
+	var btn_tts_t := _make_btn(L10n.t("自动报站：已开启", "Station TTS: ON") if tts_on else L10n.t("自动报站：已关闭", "Station TTS: OFF"), func(): pass)
 	btn_tts_t.pressed.connect(func():
 		_sound.tts_enabled = not _sound.tts_enabled
 		if not _sound.tts_enabled and DisplayServer.get_name() != "headless":
 			DisplayServer.tts_stop()
-		btn_tts_t.text = "自动报站：已开启" if _sound.tts_enabled else "自动报站：已关闭"
+		btn_tts_t.text = L10n.t("自动报站：已开启", "Station TTS: ON") if _sound.tts_enabled else L10n.t("自动报站：已关闭", "Station TTS: OFF")
 	)
 	btn_tts_t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	toggle_row.add_child(btn_tts_t)
@@ -4556,15 +5457,16 @@ func _build_audio_modal_ui(parent: Control) -> void:
 	var lang_row := HBoxContainer.new()
 	lang_row.add_theme_constant_override("separation", 8)
 	vbox.add_child(lang_row)
-	var lang_names := ["中英双语", "仅中文", "仅英语"]
-	var btn_biling := _make_btn("报站语言：中英双语", func(): pass)
+	var lang_names := [L10n.t("中英双语", "Bilingual"), L10n.t("仅中文", "Chinese Only"), L10n.t("仅英语", "English Only")]
+	var cur_tts_mode := clampi(_sound.tts_lang_mode if _sound != null else 0, 0, 2)
+	var btn_biling := _make_btn(L10n.t("报站语言：%s", "TTS Language: %s") % lang_names[cur_tts_mode], func(): pass)
 	btn_biling.pressed.connect(func():
 		_sound.tts_lang_mode = (_sound.tts_lang_mode + 1) % 3
-		btn_biling.text = "报站语言：%s" % lang_names[_sound.tts_lang_mode]
+		btn_biling.text = L10n.t("报站语言：%s", "TTS Language: %s") % lang_names[_sound.tts_lang_mode]
 	)
 	btn_biling.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	lang_row.add_child(btn_biling)
-	lang_row.add_child(_make_btn("试听报站", func():
+	lang_row.add_child(_make_btn(L10n.t("试听报站", "Test TTS"), func():
 		var was_sil := _sound._menu_silenced
 		_sound._menu_silenced = false
 		_sound.announce_station("下一站，西湖中心站，请准备下车。", "Next stop, Westlake Center.")
@@ -4572,11 +5474,72 @@ func _build_audio_modal_ui(parent: Control) -> void:
 	))
 
 	var note_lbl := Label.new()
-	note_lbl.text = "提示：退出地图返回主页或在建设/规划模式下，电车音效与语音报站将自动静音停止。"
+	note_lbl.text = L10n.t(
+		"提示：退出地图返回主页或在建设/规划模式下，电车音效与语音报站将自动静音停止。",
+		"Note: Tram SFX and station announcements automatically mute on the Home screen or in Build/Plan modes."
+	)
 	note_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	note_lbl.add_theme_font_size_override("font_size", 12)
 	note_lbl.add_theme_color_override("font_color", Color(0.72, 0.78, 0.84))
 	vbox.add_child(note_lbl)
+
+
+func _on_set_language(pref: String) -> void:
+	L10n.set_language(pref)
+	var was_home := _in_home_menu
+	var was_audio := _audio_modal != null and _audio_modal.visible
+	var was_slot := _slot_modal != null and _slot_modal.visible
+	var was_stats := _stats_modal != null and _stats_modal.visible
+	var was_over := _gameover_modal != null and _gameover_modal.visible
+	var prev_mode := _game_mode
+
+	if _ui_canvas != null and is_instance_valid(_ui_canvas):
+		remove_child(_ui_canvas)
+		_ui_canvas.queue_free()
+		_ui_canvas = null
+
+	_build_ui()
+
+	_home_overlay.visible = was_home
+	_hud_layer_ctrl.visible = not was_home
+	_nav_bar.visible = not was_home
+	_audio_modal.visible = was_audio
+	_slot_modal.visible = was_slot
+	_stats_modal.visible = was_stats
+	_gameover_modal.visible = was_over
+	_lbl_paused.visible = (not was_home) and (prev_mode == GameMode.RUN) and _run_paused
+
+	_build_panel.visible = (prev_mode == GameMode.BUILD)
+	_plan_panel.visible = (prev_mode == GameMode.PLAN)
+	_run_top_panel.visible = (prev_mode == GameMode.RUN)
+	_cam_panel.visible = (prev_mode == GameMode.RUN)
+	_drv_panel.visible = (prev_mode == GameMode.RUN)
+	_btn_quick_save_run.visible = (prev_mode == GameMode.RUN) and not _is_demo_readonly
+	_highlight_active_btn(_btn_mode_build, prev_mode == GameMode.BUILD)
+	_highlight_active_btn(_btn_mode_plan, prev_mode == GameMode.PLAN)
+	_highlight_active_btn(_btn_mode_run, prev_mode == GameMode.RUN)
+
+	_refresh_build_buttons()
+	_refresh_plan_ui()
+	_set_time_hours(_time_hours)
+	_refresh_weather_buttons()
+	if was_home:
+		_refresh_home_screen_ui()
+	if was_slot:
+		_refresh_slot_modal_ui()
+	if was_stats:
+		_refresh_stats_modal_ui()
+	if prev_mode == GameMode.RUN and not was_home:
+		_update_run_hud()
+	if _graph != null and not _graph.stations.is_empty():
+		var was_ops_dirty := _ops_dirty
+		_rebuild_tracks_only_visual()
+		_ops_dirty = was_ops_dirty
+	elif _pax_sim != null:
+		_pax_sim.refresh_all_station_labels()
+	var lang_label := L10n.t("中文", "English")
+	var auto_note := L10n.t("（跟随系统）", " (System)") if L10n.lang_pref == "auto" else ""
+	_show_toast(L10n.t("✓ 界面语言已切换为：%s%s", "✓ Language set to: %s%s") % [lang_label, auto_note])
 
 
 func _build_gameover_modal_ui(parent: Control) -> void:
@@ -4602,7 +5565,7 @@ func _build_gameover_modal_ui(parent: Control) -> void:
 	card.add_child(vbox)
 
 	_lbl_gameover_title = Label.new()
-	_lbl_gameover_title.text = "【重大安全事故 · 本局游戏结束】"
+	_lbl_gameover_title.text = L10n.t("【重大安全事故 · 本局游戏结束】", "[Major Safety Incident · Run Ended]")
 	_lbl_gameover_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_lbl_gameover_title.add_theme_font_size_override("font_size", 22)
 	_lbl_gameover_title.add_theme_color_override("font_color", Color(1.0, 0.36, 0.32))
@@ -4616,7 +5579,7 @@ func _build_gameover_modal_ui(parent: Control) -> void:
 	vbox.add_child(_lbl_gameover_detail)
 
 	var rule_lbl := Label.new()
-	rule_lbl.text = "本局运营已中止，但您建设的轨道、车站、线路及所有存档均完整保留，可立即重新发车。"
+	rule_lbl.text = L10n.t("本局运营已中止，但您建设的轨道、车站、线路及所有存档均完整保留，可立即重新发车。", "This run has ended, but all tracks, stations, lines, and saves are intact. You can restart immediately.")
 	rule_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	rule_lbl.add_theme_color_override("font_color", Color(0.96, 0.72, 0.42))
 	vbox.add_child(rule_lbl)
@@ -4626,12 +5589,12 @@ func _build_gameover_modal_ui(parent: Control) -> void:
 	btn_row.add_theme_constant_override("separation", 16)
 	vbox.add_child(btn_row)
 
-	var restart_btn := _make_btn("▸ 重新开始该地图 (Enter / R)", func(): _restart_current_map_after_crash())
+	var restart_btn := _make_btn(L10n.t("▸ 重新开始该地图 (Enter / R)", "▸ Restart Map (Enter / R)"), func(): _restart_current_map_after_crash())
 	restart_btn.custom_minimum_size = Vector2(240, 38)
 	restart_btn.modulate = Color(1.0, 0.72, 0.62)
 	btn_row.add_child(restart_btn)
 
-	var home_btn := _make_btn("◀ 返回主页选图", func(): _enter_home_screen())
+	var home_btn := _make_btn(L10n.t("◀ 返回主页选图", "◀ Home Screen"), func(): _enter_home_screen())
 	home_btn.custom_minimum_size = Vector2(150, 38)
 	btn_row.add_child(home_btn)
 
@@ -4641,17 +5604,17 @@ func _toggle_doors_with_safety_check() -> void:
 	if tr.is_empty():
 		return
 	if float(tr["speed_mps"]) > 0.30:
-		_show_toast("⚠ 行驶中车门安全互锁，请先停车后再开门！")
+		_show_toast(L10n.t("⚠ 行驶中车门安全互锁，请先停车后再开门！", "⚠ Doors interlocked while moving — come to a complete stop first!"))
 		return
 	var was_open := bool(tr["doors_target_open"])
 	var ok := _transit_sim.manual_toggle_doors(_sound, _graph)
 	if not was_open and not ok:
-		_show_toast("⚠ 没有车门对准站台，车门已安全锁闭！请对准停车位置后再开门")
+		_show_toast(L10n.t("⚠ 没有车门对准站台，车门已安全锁闭！请对准停车位置后再开门", "⚠ No doorways aligned with platform — doors stay locked. Align with the platform first!"))
 	elif not was_open and ok:
 		var al := int(tr.get("aligned_doorways", 0))
 		var tot := int(tr.get("total_doorways", 1))
 		if al < tot:
-			_show_toast("⚠ 停靠错位：仅 %d/%d 个车门对准站台，只开对准的车门，上下客会变慢" % [al, tot])
+			_show_toast(L10n.t("⚠ 停靠错位：仅 %d/%d 个车门对准站台，只开对准的车门，上下客会变慢", "⚠ Misaligned stop: only %d/%d doorways aligned — boarding will be slower") % [al, tot])
 
 
 func _apply_station_rename() -> void:
@@ -4659,16 +5622,16 @@ func _apply_station_rename() -> void:
 		return
 	var new_n := _edit_station_name.text.strip_edges()
 	if new_n.is_empty():
-		_show_toast("站名不能为空")
+		_show_toast(L10n.t("站名不能为空", "Station name cannot be empty"))
 		return
 	if _editing_station_id < 0 or not _graph.stations.has(_editing_station_id):
-		_show_toast("请先用「建造车站」工具点击要改名的已有车站！")
+		_show_toast(L10n.t("请先用「建造车站」工具点击要改名的已有车站！", "Click an existing station with [Build Station] first to rename it!"))
 		return
 	if _graph.rename_station(_editing_station_id, new_n):
 		_edit_station_name.release_focus()
 		_rebuild_tracks_only_visual()
 		_mark_modified_and_quick_save()
-		_show_toast("站名已修改为：%s" % new_n)
+		_show_toast(L10n.t("站名已修改为：%s", "Station renamed to: %s") % new_n)
 
 
 func _refresh_build_buttons() -> void:
@@ -4682,19 +5645,12 @@ func _refresh_build_buttons() -> void:
 	elif _build_tool >= BuildTool.ROAD_BUILD:
 		active_cat = 4
 
-	var bed_short := ["独立草皮", "柏油嵌轨", "绿茵嵌轨", "花岗岩", "碎石枕木", "高架单轨"]
-	var track_mode_str := _track_mode_tag(false)
-	var track_lay_str := "寻路" if _build_tool == BuildTool.TRACK_PATH else ("空地直连" if _build_tool == BuildTool.TRACK_OFFROAD else "单段")
-	var road_tool_names := {BuildTool.ROAD_BUILD: "新建道路", BuildTool.ROAD_REMOVE: "拆除道路", BuildTool.ROAD_LANES: "修改车道", BuildTool.BUILDING_DEMOLISH: "拆除建筑"}
-	var xo_str := "交叉双渡线" if _build_crossover_type == NetworkGraph.CrossoverType.DOUBLE else "单渡线"
-	var sk_names := ["单侧", "对称双侧", "中央岛式"]
-	var st_len_m := int(round(STATION_LEN_PRESETS[_build_station_len_idx]))
 	var cat_titles := [
-		"修建轨道   (%s · %s · %s)" % [track_lay_str, track_mode_str, bed_short[_build_bed_style]],
-		"修建渡线   (%s)" % xo_str,
-		"修建车站   (%s · %dm)" % [sk_names[clampi(_build_station_kind, 0, 2)], st_len_m],
-		"拆除车站 / 轨道",
-		"道路与地块   (%s · %s)" % [str(road_tool_names.get(_build_tool, "新建道路")), LANE_CFG_LABELS[_road_lane_idx]],
+		L10n.t("修建轨道", "Build Track"),
+		L10n.t("修建渡线", "Build Crossover"),
+		L10n.t("修建车站", "Build Station"),
+		L10n.t("拆除车站 / 轨道", "Demolish Station / Track"),
+		L10n.t("道路与地块", "Roads & Lots"),
 	]
 
 	for ci in range(_build_cat_btns.size()):
@@ -4779,31 +5735,34 @@ func _refresh_plan_ui() -> void:
 		_editing_line_id = -1
 	var edit_tag := ""
 	if _editing_line_id >= 0:
-		edit_tag = "✎ 正在编辑【%s】· " % str(_graph.lines[_editing_line_id]["name"])
+		edit_tag = L10n.t("✎ 正在编辑【%s】· ", "✎ Editing [%s] · ") % L10n.line_display_name(str(_graph.lines[_editing_line_id]["name"]))
 	if _draft_station_ids.is_empty():
-		_lbl_draft_stops.text = edit_tag + "当前待建线路站点：（请直接单击地图上已建成的 3D 车站按顺序串联站点；再次点击首站可组成闭合环线）"
+		_lbl_draft_stops.text = edit_tag + L10n.t("当前待建线路站点：（请直接单击地图上已建成的 3D 车站按顺序串联站点；再次点击首站可组成闭合环线）", "Draft Stops: (Click built 3D stations on the map in order; click the 1st station again for a closed loop)")
 		_route_preview_mi.mesh = null
 	else:
-		var mode_tag := "【闭合环线】" if _draft_is_loop() else "【双向往返线】"
-		var where := "地图上点击车站将追加到末尾" if _draft_insert_idx < 0 else "地图上点击车站将插入到第 %d 站之后" % (_draft_insert_idx + 1)
-		_lbl_draft_stops.text = "%s%s 已选 %d 站 · %s" % [edit_tag, mode_tag, _draft_station_ids.size(), where]
+		var mode_tag := L10n.t("【闭合环线】", "[Loop]") if _draft_is_loop() else L10n.t("【双向往返线】", "[Shuttle]")
+		var where := L10n.t("地图上点击车站将追加到末尾", "Clicking a station appends to end") if _draft_insert_idx < 0 else (L10n.t("地图上点击车站将插入到第 %d 站之后", "Clicking a station inserts after #%d") % (_draft_insert_idx + 1))
+		_lbl_draft_stops.text = L10n.t("%s%s 已选 %d 站 · %s", "%s%s %d stops · %s") % [edit_tag, mode_tag, _draft_station_ids.size(), where]
 		_update_draft_route_preview()
 	_refresh_draft_list_ui()
 	if _btn_plan_service != null:
-		_btn_plan_service.text = "运行类别：快车（四轨走内侧快车道 · 优先越行）" if _plan_express else "运行类别：普通慢车（四轨走外侧慢车道 · 遇快车待避）"
+		_btn_plan_service.text = L10n.t("运行类别：快车（四轨走内侧快车道 · 优先越行）", "Service: Express (4-track inner rails · overtakes)") if _plan_express else L10n.t("运行类别：普通慢车（四轨走外侧慢车道 · 遇快车待避）", "Service: Local (4-track outer rails · yields)")
 		_highlight_active_btn(_btn_plan_service, _plan_express)
+	if _btn_plan_tsp != null:
+		_btn_plan_tsp.text = L10n.t("信号优先：开（进路口自动延长绿灯 / 提前切绿）", "Signal Priority: ON (green ext. / early green)") if _plan_signal_priority else L10n.t("信号优先：关（按固定信号灯周期通行）", "Signal Priority: OFF (fixed cycle)")
+		_highlight_active_btn(_btn_plan_tsp, _plan_signal_priority)
 	if _btn_commit_line != null:
-		_btn_commit_line.text = "✓ 保存对线路的修改" if _editing_line_id >= 0 else "✓ 确认开通此线路"
+		_btn_commit_line.text = L10n.t("✓ 保存对线路的修改", "✓ Save Line Changes") if _editing_line_id >= 0 else L10n.t("✓ 确认开通此线路", "✓ Launch Line")
 		_btn_cancel_edit.visible = _editing_line_id >= 0
 
 	if not _tram_models.is_empty():
 		var m: Dictionary = _tram_models[_plan_model_idx]
-		var era_txt := "古典老电车" if bool(m.get("vintage", false)) else "现代低地板"
-		_lbl_model_card.text = "车型 [%d/%d]：%s\n%s · %s · 极速 %d km/h · 加速度 %.2f m/s²" % [
+		var era_txt := L10n.t("古典老电车", "Vintage") if bool(m.get("vintage", false)) else L10n.t("现代低地板", "Modern")
+		_lbl_model_card.text = L10n.t("车型 [%d/%d]：%s\n%s · %s · 极速 %d km/h · 加速度 %.2f m/s²", "Model [%d/%d]: %s\n%s · %s · Max %d km/h · Accel %.2f m/s²") % [
 			_plan_model_idx + 1,
 			_tram_models.size(),
-			str(m.get("name_zh", "")),
-			str(m.get("origin", "")),
+			L10n.model_name(m),
+			L10n.model_origin(m),
 			era_txt,
 			int(m.get("max_speed_kmh", 70)),
 			float(m.get("accel", 1.2)),
@@ -4815,8 +5774,8 @@ func _refresh_plan_ui() -> void:
 		var is_draft_loop := (_draft_station_ids.size() >= 3 and _draft_station_ids[0] == _draft_station_ids[_draft_station_ids.size() - 1])
 		var warn_single := ""
 		if not _draft_station_ids.is_empty() and not is_draft_loop and _plan_fleet_count > 1:
-			warn_single = "\n⚠ 单轨往返线配多车对开将迎面相撞！多车请连回首站组成环线"
-		_lbl_fleet_cfg.text = "配车规模：%d 辆 · 编组：%d/%d 节（适配所选站台长度 · 定员 %d 人）%s" % [_plan_fleet_count, _plan_sections, max_sec, total_cap, warn_single]
+			warn_single = L10n.t("\n⚠ 单轨往返线配多车对开将迎面相撞！多车请连回首站组成环线", "\n⚠ Multi-tram shuttles on single track will collide! Close the loop for multiple trams")
+		_lbl_fleet_cfg.text = L10n.t("配车规模：%d 辆 · 编组：%d/%d 节（适配所选站台长度 · 定员 %d 人）%s", "Fleet: %d trams · Consist: %d/%d cars (Cap %d)%s") % [_plan_fleet_count, _plan_sections, max_sec, total_cap, warn_single]
 
 	_refresh_lines_list_ui()
 
@@ -4847,8 +5806,9 @@ func _begin_line_edit(lid: int) -> void:
 	_plan_fleet_count = int(ln.get("trams_count", 2))
 	_plan_sections = int(ln.get("sections", 2))
 	_plan_express = bool(ln.get("express", false))
+	_plan_signal_priority = bool(ln.get("signal_priority", false))
 	_refresh_plan_ui()
-	_show_toast("✎ 正在编辑 %s：可增删车站、换车型、改配车数量与编组，完成后点【保存对线路的修改】" % str(ln["name"]))
+	_show_toast(L10n.t("✎ 正在编辑 %s：可增删车站、换车型、改配车数量与编组，完成后点【保存对线路的修改】", "✎ Editing %s: adjust stops, model, fleet & cars, then click [Save Line Changes]") % L10n.line_display_name(str(ln["name"])))
 
 
 func _cancel_line_edit(toast: bool) -> void:
@@ -4858,7 +5818,7 @@ func _cancel_line_edit(toast: bool) -> void:
 	_draft_station_ids.clear()
 	_refresh_plan_ui()
 	if toast and was >= 0:
-		_show_toast("已取消编辑，线路保持原样")
+		_show_toast(L10n.t("已取消编辑，线路保持原样", "Edit cancelled — line unchanged"))
 
 
 # Station clicked on the map: append it, or insert it after the chosen stop (both neighbours must be linked by track)
@@ -4874,10 +5834,10 @@ func _draft_insert_station(sid: int) -> void:
 	if sid == prev_sid or sid == next_sid:
 		return
 	if prev_sid >= 0 and not _stations_linked(prev_sid, sid):
-		_show_toast("该车站与前一站（%s）之间没有连通的已建轨道！请先在【建设轨道】连通轨道。" % str(_graph.stations[prev_sid]["name"]))
+		_show_toast(L10n.t("该车站与前一站（%s）之间没有连通的已建轨道！请先在【建设轨道】连通轨道。", "No connected track from previous stop (%s) — connect tracks first in [Build Track]!") % L10n.station_display_name(str(_graph.stations[prev_sid]["name"])))
 		return
 	if next_sid >= 0 and not _stations_linked(sid, next_sid):
-		_show_toast("该车站与后一站（%s）之间没有连通的已建轨道，无法插入到这里！" % str(_graph.stations[next_sid]["name"]))
+		_show_toast(L10n.t("该车站与后一站（%s）之间没有连通的已建轨道，无法插入到这里！", "No connected track to next stop (%s) — cannot insert here!") % L10n.station_display_name(str(_graph.stations[next_sid]["name"])))
 		return
 	_draft_station_ids.insert(pos, sid)
 	if _draft_insert_idx >= 0:
@@ -4913,7 +5873,7 @@ func _draft_remove_at(idx: int) -> void:
 		cand.remove_at(idx)
 	for i in range(cand.size() - 1):
 		if not _stations_linked(cand[i], cand[i + 1]):
-			_show_toast("删除后 %s 与 %s 之间没有连通轨道，无法删除这一站！" % [str(_graph.stations[cand[i]]["name"]), str(_graph.stations[cand[i + 1]]["name"])])
+			_show_toast(L10n.t("删除后 %s 与 %s 之间没有连通轨道，无法删除这一站！", "Removing this stop breaks track connectivity between %s and %s!") % [L10n.station_display_name(str(_graph.stations[cand[i]]["name"])), L10n.station_display_name(str(_graph.stations[cand[i + 1]]["name"]))])
 			return
 	_draft_station_ids = cand
 	if _draft_insert_idx >= idx:
@@ -4937,9 +5897,9 @@ func _refresh_draft_list_ui() -> void:
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 4)
 		var lbl := Label.new()
-		var st_nm := str(_graph.stations[sid]["name"])
+		var st_nm := L10n.station_display_name(str(_graph.stations[sid]["name"]))
 		if loop and i == n - 1:
-			lbl.text = "    ↺ 回到 %s（闭合环线）" % st_nm
+			lbl.text = L10n.t("    ↺ 回到 %s（闭合环线）", "    ↺ Return to %s (Loop)") % st_nm
 			lbl.add_theme_color_override("font_color", Color(0.62, 0.78, 0.9))
 			_fit_label(lbl)
 			row.add_child(lbl)
@@ -4952,14 +5912,14 @@ func _refresh_draft_list_ui() -> void:
 		_fit_label(lbl)
 		row.add_child(lbl)
 		var i_copy := i
-		var ins_btn := _make_btn("取消插入" if cur else "在此后插入", func():
+		var ins_btn := _make_btn(L10n.t("取消插入", "Cancel") if cur else L10n.t("在此后插入", "Insert After"), func():
 			_draft_insert_idx = -1 if _draft_insert_idx == i_copy else i_copy
 			_refresh_plan_ui()
 		)
-		ins_btn.tooltip_text = "之后在地图上点击的车站会插入到这一站后面"
+		ins_btn.tooltip_text = L10n.t("之后在地图上点击的车站会插入到这一站后面", "Stations clicked on the map will be inserted after this stop")
 		row.add_child(ins_btn)
 		var del_btn := _make_btn("✕", func(): _draft_remove_at(i_copy))
-		del_btn.tooltip_text = "从线路中删除这一站"
+		del_btn.tooltip_text = L10n.t("从线路中删除这一站", "Remove this stop from the line")
 		row.add_child(del_btn)
 		_draft_list_vbox.add_child(row)
 
@@ -4998,7 +5958,7 @@ func _update_draft_route_preview() -> void:
 
 func _commit_draft_line() -> void:
 	if _draft_station_ids.size() < 2:
-		_show_toast("请至少在地图上依次点击 2 座已连通轨道的车站！")
+		_show_toast(L10n.t("请至少在地图上依次点击 2 座已连通轨道的车站！", "Click at least 2 connected stations on the map!"))
 		return
 	var m: Dictionary = _tram_models[_plan_model_idx]
 	# Trams run on street track, monorails only on the elevated guideway: match the vehicle to the system
@@ -5010,16 +5970,16 @@ func _commit_draft_line() -> void:
 				m = _tram_models[mi_k]
 				_plan_model_idx = mi_k
 				break
-		_show_toast("已自动换成%s车型：%s" % ["单轨" if on_mono else "电车", str(m.get("name_zh", ""))])
+		_show_toast(L10n.t("已自动换成%s车型：%s", "Auto-switched to %s model: %s") % [L10n.t("单轨", "monorail") if on_mono else L10n.t("电车", "tram"), L10n.model_name(m)])
 	if _plan_express:
 		for sid_x: int in _draft_station_ids:
 			if not _graph.express_can_call_at(sid_x):
-				_show_toast("⚠ 快车不能停靠四轨外侧侧式站台（%s）：请改为慢车，或在该处建四轨双岛式站台" % str(_graph.stations[sid_x]["name"]))
+				_show_toast(L10n.t("⚠ 快车不能停靠四轨外侧侧式站台（%s）：请改为慢车，或在该处建四轨双岛式站台", "⚠ Express cannot stop at 4-track outer side platform (%s) — switch to Local or build Twin-Island!") % L10n.station_display_name(str(_graph.stations[sid_x]["name"])))
 				return
 	if _editing_line_id >= 0:
 		var elid := _editing_line_id
-		if not _graph.update_line(elid, _draft_station_ids, str(m["key"]), _plan_fleet_count, _plan_sections, _plan_express):
-			_show_toast("无法保存修改：站点间缺少连通轨道！")
+		if not _graph.update_line(elid, _draft_station_ids, str(m["key"]), _plan_fleet_count, _plan_sections, _plan_express, _plan_signal_priority):
+			_show_toast(L10n.t("无法保存修改：站点间缺少连通轨道！", "Cannot save changes: missing track connection between stops!"))
 			return
 		_editing_line_id = -1
 		_draft_insert_idx = -1
@@ -5027,27 +5987,27 @@ func _commit_draft_line() -> void:
 		_ops_dirty = true
 		_refresh_plan_ui()
 		_mark_modified_and_quick_save()
-		_show_toast("✓ 已保存 %s 的修改（%d 站 · 配车 %d 辆 · %s · %d 节编组），进入【3.运行与驾驶】后按新方案发车" % [
-			str(_graph.lines[elid]["name"]),
+		_show_toast(L10n.t("✓ 已保存 %s 的修改（%d 站 · 配车 %d 辆 · %s · %d 节编组），进入【3.运行与驾驶】后按新方案发车", "✓ Saved %s (%d stops · %d trams · %s · %d-car). Enter [3. Run & Drive] to dispatch!") % [
+			L10n.line_display_name(str(_graph.lines[elid]["name"])),
 			(_graph.lines[elid]["station_ids"] as Array).size(),
 			_plan_fleet_count,
-			str(m["name_zh"]),
+			L10n.model_name(m),
 			_plan_sections,
 		])
 		return
-	var lid := _graph.create_line(_draft_station_ids, str(m["key"]), _plan_fleet_count, _plan_sections, "", _plan_express)
+	var lid := _graph.create_line(_draft_station_ids, str(m["key"]), _plan_fleet_count, _plan_sections, "", _plan_express, _plan_signal_priority)
 	if lid < 0:
-		_show_toast("无法生成线路：站点间缺少连通轨道！")
+		_show_toast(L10n.t("无法生成线路：站点间缺少连通轨道！", "Cannot create line: missing track connection between stops!"))
 		return
 	_draft_station_ids.clear()
 	_draft_insert_idx = -1
 	_ops_dirty = true
 	_refresh_plan_ui()
 	_mark_modified_and_quick_save()
-	_show_toast("✓ 已成功开通 %s（配车 %d 辆 · %s）！点击顶部【3.运行与驾驶】即可发车！" % [
-		str(_graph.lines[lid]["name"]),
+	_show_toast(L10n.t("✓ 已成功开通 %s（配车 %d 辆 · %s）！点击顶部【3.运行与驾驶】即可发车！", "✓ Launched %s (%d trams · %s)! Click [3. Run & Drive] to begin!") % [
+		L10n.line_display_name(str(_graph.lines[lid]["name"])),
 		_plan_fleet_count,
-		str(m["name_zh"]),
+		L10n.model_name(m),
 	])
 
 
@@ -5058,7 +6018,7 @@ func _refresh_lines_list_ui() -> void:
 		c.queue_free()
 	if _graph.lines.is_empty():
 		var empty_l := Label.new()
-		empty_l.text = "（暂无开通线路）"
+		empty_l.text = L10n.t("（暂无开通线路）", "(No active lines)")
 		_lines_list_vbox.add_child(empty_l)
 		return
 
@@ -5075,8 +6035,16 @@ func _refresh_lines_list_ui() -> void:
 		var mdl_nm := ""
 		for md: Dictionary in _tram_models:
 			if str(md.get("key", "")) == str(ln.get("model_key", "")):
-				mdl_nm = str(md.get("name_zh", ""))
-		lbl.text = "%s%s%s (%d站 · %d辆 · %s)" % ["✎ " if lid == _editing_line_id else "", "【快】" if bool(ln.get("express", false)) else "", str(ln["name"]), (ln["station_ids"] as Array).size(), int(ln["trams_count"]), mdl_nm]
+				mdl_nm = L10n.model_name(md)
+		lbl.text = L10n.t("%s%s%s%s (%d站 · %d辆 · %s)", "%s%s%s%s (%d sta · %d trams · %s)") % [
+			"✎ " if lid == _editing_line_id else "",
+			L10n.t("【快】", "[EXP] ") if bool(ln.get("express", false)) else "",
+			L10n.t("【优】", "[TSP] ") if _graph.is_line_signal_priority(lid) else "",
+			L10n.line_display_name(str(ln["name"])),
+			(ln["station_ids"] as Array).size(),
+			int(ln["trams_count"]),
+			mdl_nm,
+		]
 		lbl.tooltip_text = lbl.text
 		_fit_label(lbl)
 		if lid == _editing_line_id:
@@ -5084,8 +6052,8 @@ func _refresh_lines_list_ui() -> void:
 		row.add_child(lbl)
 
 		var lid_copy := lid
-		row.add_child(_make_btn("编辑", func(): _begin_line_edit(lid_copy)))
-		row.add_child(_make_btn("删除", func():
+		row.add_child(_make_btn(L10n.t("编辑", "Edit"), func(): _begin_line_edit(lid_copy)))
+		row.add_child(_make_btn(L10n.t("删除", "Del"), func():
 			_graph.lines.erase(lid_copy)
 			if _editing_line_id == lid_copy:
 				_cancel_line_edit(false)
@@ -5097,8 +6065,11 @@ func _refresh_lines_list_ui() -> void:
 
 
 func _update_run_hud() -> void:
-	var map_nm := str(MAP_PRESETS[_current_map_key]["title"])
-	_lbl_net_stats.text = "%s：%d 条线路 · 在线 %d 辆 · 候车 %d 人 · 累计送达 %d 人" % [
+	var map_nm := _map_title(_current_map_key)
+	_lbl_net_stats.text = L10n.t(
+		"%s：%d 条线路 · 在线 %d 辆 · 候车 %d 人 · 累计送达 %d 人",
+		"%s: %d lines · %d trams · %d waiting · %d delivered"
+	) % [
 		map_nm,
 		_graph.lines.size(),
 		_transit_sim.trams.size(),
@@ -5108,7 +6079,7 @@ func _update_run_hud() -> void:
 
 	var tr := _transit_sim.get_active_tram()
 	if tr.is_empty():
-		_lbl_tram_info.text = "当前无线路车辆运行，请前往【1.建设轨道】与【2.规划线路】开通电车线！"
+		_lbl_tram_info.text = L10n.t("当前无线路车辆运行，请前往【1.建设轨道】与【2.规划线路】开通电车线！", "No active trams — build tracks in [1] and launch a line in [2]!")
 		_lbl_station_next.text = ""
 		_lbl_speed.text = "00.0 km/h"
 		return
@@ -5116,44 +6087,91 @@ func _update_run_hud() -> void:
 	var spec: Dictionary = tr["spec"]
 	var pax_n: int = (tr["pax_dests"] as Array).size()
 	var cap: int = int(tr["capacity"])
-	var mode_str := "【手动驾驶】" if _transit_sim.manual_drive else "【AI 运营】"
-	var same_line := _transit_sim.line_tram_indices(int(tr["line_id"]))
-	_lbl_tram_info.text = "%s 第%d/%d列 · %s · 车上乘客：%d/%d 人 %s" % [
-		str(tr["line_name"]),
+	var cur_ai_style := int(tr.get("ai_style", TransitSim.AIStyle.NORMAL))
+	var cur_ai_max := int(tr.get("ai_max_kmh", TransitSim.tram_spec_max_kmh(tr)))
+	var style_nm := TransitSim.tram_ai_style_name(tr)
+	var mode_str := L10n.t("【手动驾驶】", "[Manual Drive]") if _transit_sim.manual_drive else (L10n.t("【AI 运营 · %s · 最高 %d km/h】", "[AI · %s · Max %d km/h]") % [style_nm, cur_ai_max])
+	var act_lid := int(tr["line_id"])
+	var same_line := _transit_sim.line_tram_indices(act_lid)
+	var ln_disp := L10n.line_display_name(str(tr["line_name"]))
+	_lbl_tram_info.text = L10n.t(
+		"%s 第%d/%d列 · %s · 车上乘客：%d/%d 人 %s",
+		"%s #%d/%d · %s · Onboard: %d/%d %s"
+	) % [
+		ln_disp,
 		same_line.find(_transit_sim.active_tram_idx) + 1,
 		same_line.size(),
-		str(spec.get("name_zh", "")),
+		L10n.model_name(spec),
 		pax_n,
 		cap,
 		mode_str,
 	]
+	for si in range(_ai_style_btns.size()):
+		_highlight_active_btn(_ai_style_btns[si], si == cur_ai_style)
+	var line_common_style := _transit_sim.get_line_ai_style(act_lid)
+	if _lbl_line_ai_group != null:
+		_lbl_line_ai_group.text = L10n.t("%s 整组AI：", "%s AI Group:") % ln_disp
+	var line_btn_styles := [TransitSim.LINE_AI_NONE, TransitSim.AIStyle.SLOW, TransitSim.AIStyle.NORMAL, TransitSim.AIStyle.FURIOUS]
+	for lsi in range(mini(_line_ai_style_btns.size(), line_btn_styles.size())):
+		_highlight_active_btn(_line_ai_style_btns[lsi], line_common_style == line_btn_styles[lsi])
+	if _btn_ai_spd_val != null:
+		var spec_top := TransitSim.tram_spec_max_kmh(tr)
+		_btn_ai_spd_val.text = "%d km/h" % cur_ai_max
+		_highlight_active_btn(_btn_ai_spd_val, bool(tr.get("ai_max_custom", false)) or cur_ai_max != spec_top)
+		if _btn_ai_spd_down != null:
+			_btn_ai_spd_down.disabled = cur_ai_max <= TransitSim.AI_MIN_MAX_KMH
+		if _btn_ai_spd_up != null:
+			_btn_ai_spd_up.disabled = cur_ai_max >= spec_top
+	if _btn_line_tsp != null:
+		var line_tsp := bool((_graph.lines.get(act_lid, {}) as Dictionary).get("signal_priority", false))
+		_btn_line_tsp.text = (L10n.t("%s信号优先：开", "%s TSP: ON") % ln_disp) if line_tsp else (L10n.t("%s信号优先：关", "%s TSP: OFF") % ln_disp)
+		_highlight_active_btn(_btn_line_tsp, _graph.is_line_signal_priority(act_lid))
+	if _btn_global_tsp != null:
+		_btn_global_tsp.text = L10n.t("全局信号优先：开", "Global TSP: ON") if _graph.global_signal_priority else L10n.t("全局信号优先：关", "Global TSP: OFF")
+		_highlight_active_btn(_btn_global_tsp, _graph.global_signal_priority)
 
 	var st_info := _transit_sim.find_next_stop_info(tr)
 	var dist := float(st_info["dist"])
 	var doors_engaged := bool(tr.get("doors_target_open", false)) or float(tr.get("door_ratio", 0.0)) > 0.02
 	if _transit_sim.manual_drive and not doors_engaged:
-		# Manual driving: until the doors open, show the signed distance to the stopping position
+		# Manual driving: until the doors open, show unscheduled station if currently alongside one, else scheduled approach
 		tr.erase("xfer_snap")
-		var ap := _transit_sim.stop_approach_info(tr)
-		if ap.is_empty():
-			_lbl_station_next.text = "▸ 下一站：%s · 距离 %.0f m" % [str(st_info["name"]), dist]
+		var near_u := _transit_sim._find_station_at_current_pos(tr, true, _graph)
+		if bool(near_u.get("unscheduled", false)) and int(near_u.get("station_id", -1)) >= 0 and _graph.stations.has(int(near_u["station_id"])):
+			var usid := int(near_u["station_id"])
+			var unm := L10n.station_display_name(str((_graph.stations[usid] as Dictionary).get("name", L10n.t("站台", "Platform"))))
+			var up_u := _transit_sim.get_upcoming_station_ids(tr, -1, usid)
+			var match_n := _pax_sim.get_boardable_count_for_tram(usid, tr, up_u)
+			var tot_w := _pax_sim.get_boardable_count(usid)
+			_lbl_station_next.text = L10n.t("◎ 临时停靠：%s（非本线计划站）· 可乘 %d/%d 人 · 停稳后可按 O 开门", "◎ Unscheduled Stop: %s (off-schedule) · %d/%d boardable · Stop & press O") % [unm, match_n, tot_w]
 		else:
-			var sd := float(ap["signed_dist"])
-			var nm := str(ap["name"])
-			var wait_n := _pax_sim.get_boardable_count(int(ap["station_id"]))
-			if sd < -0.5:
-				_lbl_station_next.text = "⚠ 已越过 %s 停车位置 %.1f m · 只有对准站台的车门能打开" % [nm, sd]
-			elif sd <= 0.5:
-				_lbl_station_next.text = "◎ %s · 停车位置 %+.1f m（对准）· 站台候车 %d 人 · 停稳后按 O 开门" % [nm, sd, wait_n]
-			elif sd < 60.0:
-				_lbl_station_next.text = "▸ 进站：%s · 距停车位置 %.1f m · 站台候车 %d 人" % [nm, sd, wait_n]
+			var ap := _transit_sim.stop_approach_info(tr)
+			if ap.is_empty():
+				_lbl_station_next.text = L10n.t("▸ 下一站：%s · 距离 %.0f m", "▸ Next Stop: %s · %.0f m") % [L10n.station_display_name(str(st_info["name"])), dist]
 			else:
-				_lbl_station_next.text = "▸ 下一站：%s · 距离 %.0f m" % [nm, sd]
+				var sd := float(ap["signed_dist"])
+				var nm := L10n.station_display_name(str(ap["name"]))
+				var wait_n := _pax_sim.get_boardable_count(int(ap["station_id"]))
+				if sd < -0.5:
+					_lbl_station_next.text = L10n.t("⚠ 已越过 %s 停车位置 %.1f m · 只有对准站台的车门能打开", "⚠ Overshot %s stop mark by %.1f m · Only aligned doors will open") % [nm, sd]
+				elif sd <= 0.5:
+					_lbl_station_next.text = L10n.t("◎ %s · 停车位置 %+.1f m（对准）· 站台候车 %d 人 · 停稳后按 O 开门", "◎ %s · Stop mark %+.1f m (aligned) · %d waiting · Stop & press O") % [nm, sd, wait_n]
+				elif sd < 60.0:
+					_lbl_station_next.text = L10n.t("▸ 进站：%s · 距停车位置 %.1f m · 站台候车 %d 人", "▸ Approaching: %s · %.1f m to mark · %d waiting") % [nm, sd, wait_n]
+				else:
+					_lbl_station_next.text = L10n.t("▸ 下一站：%s · 距离 %.0f m", "▸ Next Stop: %s · %.0f m") % [nm, sd]
 	elif dist < 5.5 or doors_engaged:
-		_lbl_station_next.text = _boarding_status_text(tr, st_info)
+		var board_st := st_info
+		if _transit_sim.manual_drive and doors_engaged:
+			var dock_u := _transit_sim.get_dock_info_for_tram(tr, _graph, true)
+			if bool(dock_u.get("unscheduled", false)) and int(dock_u.get("station_id", -1)) >= 0 and _graph.stations.has(int(dock_u["station_id"])):
+				var usid2 := int(dock_u["station_id"])
+				var unm2 := L10n.station_display_name(str((_graph.stations[usid2] as Dictionary).get("name", L10n.t("站台", "Platform"))))
+				board_st = {"station_id": usid2, "name": L10n.t("%s（临时停靠）", "%s (Unscheduled)") % unm2, "stop_idx": -1, "unscheduled": true}
+		_lbl_station_next.text = _boarding_status_text(tr, board_st)
 	else:
 		tr.erase("xfer_snap")
-		_lbl_station_next.text = "▸ 下一站：%s · 距离 %.0f m" % [str(st_info["name"]), dist]
+		_lbl_station_next.text = L10n.t("▸ 下一站：%s · 距离 %.0f m", "▸ Next Stop: %s · %.0f m") % [L10n.station_display_name(str(st_info["name"])), dist]
 
 	var kmh := float(tr["speed_mps"]) * 3.6
 	_lbl_speed.text = "%04.1f km/h" % kmh
@@ -5167,72 +6185,73 @@ func _update_run_hud() -> void:
 
 	if is_over and der_kmh < 900.0:
 		_lbl_speed.add_theme_color_override("font_color", Color(1.0, 0.30, 0.26))
-		_lbl_speed_limit.text = "⚠ %s限速 %.0f km/h（超速！≥%.0f 翻车）" % [z_name, lim_kmh, der_kmh]
+		_lbl_speed_limit.text = L10n.t("⚠ %s限速 %.0f km/h（超速！≥%.0f 翻车）", "⚠ %s Limit %.0f km/h (OVERSPEED! ≥%.0f derail)") % [z_name, lim_kmh, der_kmh]
 		_lbl_speed_limit.add_theme_color_override("font_color", Color(1.0, 0.34, 0.28))
 	elif is_over:
 		_lbl_speed.add_theme_color_override("font_color", Color(1.0, 0.76, 0.28))
-		_lbl_speed_limit.text = "【%s限速 %.0f km/h · 超速】" % [z_name, lim_kmh]
+		_lbl_speed_limit.text = L10n.t("【%s限速 %.0f km/h · 超速】", "[%s Limit %.0f km/h · OVERSPEED]") % [z_name, lim_kmh]
 		_lbl_speed_limit.add_theme_color_override("font_color", Color(1.0, 0.76, 0.28))
 	else:
 		_lbl_speed.add_theme_color_override("font_color", Color(0.96, 0.98, 1.0))
-		_lbl_speed_limit.text = "【%s限速 %.0f km/h】" % [z_name, lim_kmh]
+		_lbl_speed_limit.text = L10n.t("【%s限速 %.0f km/h】", "[%s Limit %.0f km/h]") % [z_name, lim_kmh]
 		var badge_c := Color(0.98, 0.78, 0.32) if int(lim_stat["zone_kind"]) >= 2 else Color(0.54, 0.92, 0.72)
 		_lbl_speed_limit.add_theme_color_override("font_color", badge_c)
 
 	# Check upcoming Dedicated Tram Signal, traffic hazard, or curve/turnout speed limit!
 	var hazard_msg := ""
-	var sig_badge_txt := "电车灯 ┃ 通行"
+	var sig_badge_txt := L10n.t("电车灯 ┃ 通行", "Signal ┃ Go")
 	var secs_h: Array = tr["tram_info"]["sections"]
 	if _traffic_sim != null and not secs_h.is_empty():
 		var sig_info := _traffic_sim.get_upcoming_tram_signal(tr, _graph)
 		if bool(sig_info["has_signal"]):
 			var asp := str(sig_info["aspect"])
 			var sd := float(sig_info["dist"])
+			var tsp_tag := L10n.t(" · ⚡信号优先", " · ⚡TSP") if bool(sig_info.get("tsp_active", false)) else ""
 			if asp == "red":
-				sig_badge_txt = "电车灯 ━ 禁行(%.0fm)" % sd
-				hazard_msg = "● 前方 %.0fm 电车专用灯【━ 禁行】· 横向绿灯车流通过，请在停止线前停车！" % sd
+				sig_badge_txt = L10n.t("电车灯 ━ 禁行(%.0fm)%s", "Signal ━ Stop(%.0fm)%s") % [sd, tsp_tag]
+				hazard_msg = L10n.t("● 前方 %.0fm 电车专用灯【━ 禁行】· 横向绿灯车流通过，请在停止线前停车！%s", "● %.0fm ahead: Tram Signal [━ STOP] · Cross-traffic active, stop before line!%s") % [sd, tsp_tag]
 			elif asp == "yellow":
-				sig_badge_txt = "电车灯 ● 黄灯(%.0fm)" % sd
-				hazard_msg = "● 前方 %.0fm 电车专用灯【● 黄灯转换】· 请提前减速准备停车" % sd
+				sig_badge_txt = L10n.t("电车灯 ● 黄灯(%.0fm)%s", "Signal ● Caution(%.0fm)%s") % [sd, tsp_tag]
+				hazard_msg = L10n.t("● 前方 %.0fm 电车专用灯【● 黄灯转换】· 请提前减速准备停车%s", "● %.0fm ahead: Tram Signal [● CAUTION] · Prepare to stop%s") % [sd, tsp_tag]
 			else:
-				sig_badge_txt = "电车灯 ┃ 通行(%.0fm)" % sd
+				sig_badge_txt = L10n.t("电车灯 ┃ 通行(%.0fm)%s", "Signal ┃ Go(%.0fm)%s") % [sd, tsp_tag]
 
 		var swi := _transit_sim.switch_ahead_info(tr, _transit_sim.active_tram_idx)
 		var sw_near := not swi.is_empty() and float(swi["dist"]) < 220.0
 		if bool(tr.get("elevated", false)) or sw_near: # street trams: shown while a switch signal is ahead
-			sig_badge_txt = "道岔信号 ┃ 通行"
+			sig_badge_txt = L10n.t("道岔信号 ┃ 通行", "Switch ┃ Clear")
 			if not swi.is_empty() and float(swi["dist"]) < 220.0:
 				var sd2 := maxf(0.0, float(swi["dist"]) - TransitSim.SW_SIGNAL_BACK + 2.0)
-				var need_txt := "侧向(渡线)" if float(swi["need"]) > 0.5 else "直向"
-				var cur_txt := "侧向(渡线)" if float(swi["target"]) > 0.5 else "直向"
+				var need_txt := L10n.t("侧向(渡线)", "Diverging") if float(swi["need"]) > 0.5 else L10n.t("直向", "Straight")
+				var cur_txt := L10n.t("侧向(渡线)", "Diverging") if float(swi["target"]) > 0.5 else L10n.t("直向", "Straight")
 				if bool(swi["green"]):
-					sig_badge_txt = "道岔信号 ┃ 通行(%.0fm)" % sd2
-					hazard_msg = "▸ 前方 %.0fm 道岔已排列【%s】并锁闭 · 信号开放" % [float(swi["dist"]), cur_txt]
+					sig_badge_txt = L10n.t("道岔信号 ┃ 通行(%.0fm)", "Switch ┃ Clear(%.0fm)") % sd2
+					hazard_msg = L10n.t("▸ 前方 %.0fm 道岔已排列【%s】并锁闭 · 信号开放", "▸ %.0fm ahead: Switch set [%s] & locked · Signal clear") % [float(swi["dist"]), cur_txt]
 				else:
-					sig_badge_txt = "道岔信号 ━ 停车(%.0fm)" % sd2
+					sig_badge_txt = L10n.t("道岔信号 ━ 停车(%.0fm)", "Switch ━ Stop(%.0fm)") % sd2
 					if bool(swi["busy"]):
-						hazard_msg = "● 前方 %.0fm 道岔被其他列车占用 · 信号【━ 停车】，请在信号机前停车等待" % float(swi["dist"])
+						hazard_msg = L10n.t("● 前方 %.0fm 道岔被其他列车占用 · 信号【━ 停车】，请在信号机前停车等待", "● %.0fm ahead: Switch occupied · [━ STOP], hold before signal") % float(swi["dist"])
 					elif bool(swi["moving"]):
-						hazard_msg = "● 前方 %.0fm 道岔转辙中 → %s · 信号【━ 停车】" % [float(swi["dist"]), cur_txt]
+						hazard_msg = L10n.t("● 前方 %.0fm 道岔转辙中 → %s · 信号【━ 停车】", "● %.0fm ahead: Switch throwing → %s · [━ STOP]") % [float(swi["dist"]), cur_txt]
 					elif bool(swi.get("override", false)):
-						hazard_msg = "● 前方 %.0fm 道岔被手动扳到【%s】，与进路【%s】不符 · 信号【━ 停车】，再按 G 恢复，否则驶入将脱轨！" % [float(swi["dist"]), cur_txt, need_txt]
+						hazard_msg = L10n.t("● 前方 %.0fm 道岔被手动扳到【%s】，与进路【%s】不符 · 信号【━ 停车】，再按 G 恢复，否则驶入将脱轨！", "● %.0fm ahead: Switch manually set [%s], route needs [%s] · [━ STOP], press G to align!") % [float(swi["dist"]), cur_txt, need_txt]
 					else:
-						hazard_msg = "● 前方 %.0fm 道岔信号【━ 停车】· 等待道岔排列 %s" % [float(swi["dist"]), need_txt]
+						hazard_msg = L10n.t("● 前方 %.0fm 道岔信号【━ 停车】· 等待道岔排列 %s", "● %.0fm ahead: Switch [━ STOP] · Waiting for %s route") % [float(swi["dist"]), need_txt]
 		var f0 := secs_h[0] as Node3D
 		var car_haz := {"has_hazard": false} if bool(tr.get("elevated", false)) else _traffic_sim.find_hazard_ahead_of_tram(f0.global_position, -f0.global_transform.basis.z, 36.0)
 		if bool(car_haz["has_hazard"]):
-			hazard_msg = "⚠ 前方 %.0fm 路口有小车通行！请制动(S)避让" % float(car_haz["dist"])
+			hazard_msg = L10n.t("⚠ 前方 %.0fm 路口有小车通行！请制动(S)避让", "⚠ Car crossing %.0fm ahead! Brake (S) to yield") % float(car_haz["dist"])
 
 	if hazard_msg.is_empty():
 		var next_d := float(lim_stat["next_dist_m"])
 		if next_d < 72.0:
-			hazard_msg = "▸ 预告：前方 %.0fm 进入【%s】，限速 %.0f km/h（超速将脱轨翻车）" % [
+			hazard_msg = L10n.t("▸ 预告：前方 %.0fm 进入【%s】，限速 %.0f km/h（超速将脱轨翻车）", "▸ Ahead %.0fm: [%s] Limit %.0f km/h (overspeed risks derailment)") % [
 				next_d,
 				str(lim_stat["next_zone_name"]),
 				float(lim_stat["next_limit_kmh"]),
 			]
 		else:
-			hazard_msg = "交通秩序正常：遵守电车专用灯(┃通行/━禁行)与弯道道岔限速牌"
+			hazard_msg = L10n.t("交通秩序正常：遵守电车专用灯(┃通行/━禁行)与弯道道岔限速牌", "Traffic normal: obey tram signals (┃Go / ━Stop) and curve/switch limits")
 	_lbl_hazard_hint.text = hazard_msg
 
 	var n_idx := int(tr["notch"])
@@ -5244,19 +6263,19 @@ func _update_run_hud() -> void:
 	elif n_idx < TransitSim.NOTCH_NEUTRAL:
 		n_col = Color(0.96, 0.72, 0.26)
 	var reversing := float(tr.get("reverser", 1.0)) < 0.0
-	_lbl_notch.text = ("档位 R · " if reversing else "档位 ") + TransitSim.NOTCH_LABELS[n_idx]
+	_lbl_notch.text = (L10n.t("档位 R · ", "Notch R · ") if reversing else L10n.t("档位 ", "Notch ")) + TransitSim.NOTCH_LABELS[n_idx]
 	if reversing:
 		n_col = Color(0.98, 0.56, 0.30)
 	_lbl_notch.add_theme_color_override("font_color", n_col)
 
-	var dir_txt := "前进" if float(tr["dir"]) > 0.0 else "折返向"
+	var dir_txt := L10n.t("前进", "Forward") if float(tr["dir"]) > 0.0 else L10n.t("折返向", "Return")
 	if reversing:
-		dir_txt = "⏪ 倒车 R（向后）"
-	var door_txt := "车门锁闭"
+		dir_txt = L10n.t("⏪ 倒车 R（向后）", "⏪ Reverse R")
+	var door_txt := L10n.t("车门锁闭", "Doors Locked")
 	if float(tr["door_ratio"]) > 0.1:
 		var od := int(tr.get("open_doorways", 0))
 		var td := int(tr.get("total_doorways", 1))
-		door_txt = "站台侧开启 %d/%d 门(非站台侧锁闭)" % [od, td] if od > 0 else "未对齐站台·全门锁闭"
+		door_txt = (L10n.t("站台侧开启 %d/%d 门(非站台侧锁闭)", "Platform Doors Open %d/%d") % [od, td]) if od > 0 else L10n.t("未对齐站台·全门锁闭", "Not Aligned · Doors Locked")
 	_lbl_drv_status.text = "%s · %s · %s" % [dir_txt, door_txt, sig_badge_txt]
 
 	for i in range(_notch_bars.size()):
@@ -5269,25 +6288,112 @@ func _update_run_hud() -> void:
 		else:
 			_notch_bars[i].color = Color(0.18, 0.32, 0.24, 0.65)
 
-	_btn_doors.text = "关闭车门 (O)" if bool(tr["doors_target_open"]) else "打开车门 (O)"
+	_btn_doors.text = L10n.t("关闭车门 (O)", "Close Doors (O)") if bool(tr["doors_target_open"]) else L10n.t("打开车门 (O)", "Open Doors (O)")
 	if _btn_reverser != null:
-		_btn_reverser.text = "回前进档 (X)" if reversing else "倒档 R (X)"
+		_btn_reverser.text = L10n.t("回前进档 (X)", "Forward (X)") if reversing else L10n.t("倒档 R (X)", "Reverse R (X)")
 		_highlight_active_btn(_btn_reverser, reversing)
 	if _btn_sw_lock != null:
 		var locked := not _transit_sim.player_lock.is_empty()
-		_btn_sw_lock.text = "🔒 道岔已锁定 (J)" if locked else "锁定前方道岔 (J)"
+		_btn_sw_lock.text = L10n.t("🔒 道岔已锁定 (J)", "🔒 Switch Locked (J)") if locked else L10n.t("锁定前方道岔 (J)", "Lock Switch (J)")
 		_highlight_active_btn(_btn_sw_lock, locked)
 		if _transit_sim.lock_released:
 			_transit_sim.lock_released = false
-			_show_toast("🔓 本车已驶出锁定的道岔，锁定自动解除")
+			_show_toast(L10n.t("🔓 本车已驶出锁定的道岔，锁定自动解除", "🔓 Cleared locked switch — lock released automatically"))
 	if _btn_auto_sw != null:
-		_btn_auto_sw.text = "AI 道岔: 开 (U)" if _transit_sim.auto_switches else "AI 道岔: 关 (U)"
+		_btn_auto_sw.text = L10n.t("AI 道岔: 开 (U)", "AI Switch: ON (U)") if _transit_sim.auto_switches else L10n.t("AI 道岔: 关 (U)", "AI Switch: OFF (U)")
 		_highlight_active_btn(_btn_auto_sw, not _transit_sim.auto_switches)
 	if _btn_hold_manual != null:
 		var held := bool(tr.get("held_manual", false))
-		_btn_hold_manual.text = "📌 已保留手动 (K)" if held else "保留手动 (K)"
+		_btn_hold_manual.text = L10n.t("📌 已保留手动 (K)", "📌 Held Manual (K)") if held else L10n.t("保留手动 (K)", "Hold Manual (K)")
 		_highlight_active_btn(_btn_hold_manual, held)
-	_btn_drive_mode.text = "切回 AI 托管 (Q)" if _transit_sim.manual_drive else "接管手动驾驶 (Q)"
+	_btn_drive_mode.text = L10n.t("切回 AI 托管 (Q)", "Return to AI (Q)") if _transit_sim.manual_drive else L10n.t("接管手动驾驶 (Q)", "Take Manual Control (Q)")
+
+
+func _on_set_active_tram_ai_style(style: int) -> void:
+	var tr := _transit_sim.get_active_tram()
+	if tr.is_empty():
+		return
+	_transit_sim.set_active_tram_ai_style(style)
+	var same_line := _transit_sim.line_tram_indices(int(tr["line_id"]))
+	var ord_i := same_line.find(_transit_sim.active_tram_idx) + 1
+	var desc := L10n.t("平缓驾驶 · 停稳2.5s开门 · 上客后延后关门并等待赶来乘客", "Gentle drive · 2.5s door delay · holds for approaching riders") if style == TransitSim.AIStyle.SLOW else (
+		L10n.t("加速度与刹车拉满 · 进出站高效 · 开关门同标准模式", "Max accel/brake · smooth cruise · full normal boarding") if style == TransitSim.AIStyle.FURIOUS else L10n.t("标准运营基准", "Standard transit profile")
+	)
+	_show_toast(L10n.t("🚋 %s 第%d列 AI运营方式设为【%s】（%s）", "🚋 %s #%d AI mode set to [%s] (%s)") % [L10n.line_display_name(str(tr["line_name"])), ord_i, TransitSim.tram_ai_style_name(tr), desc])
+	_update_run_hud()
+
+
+func _on_set_line_ai_style(lid: int, style: int) -> void:
+	if not _graph.lines.has(lid):
+		return
+	var ln: Dictionary = _graph.lines[lid]
+	var cnt := _transit_sim.set_line_ai_style(lid, style)
+	var ln_disp := L10n.line_display_name(str(ln.get("name", L10n.t("线路 %d", "Line %d") % lid)))
+	if style < 0:
+		_show_toast(L10n.t("🚋 %s 整组AI已恢复【无默认】（各车保持当前独立设置）", "🚋 %s AI Group reset to [No Default] (trams keep individual modes)") % ln_disp)
+	else:
+		_show_toast(L10n.t("🚋 %s 全部 %d 列电车 AI 运营模式已设为【%s】", "🚋 All %d trams on %s set to [%s] AI mode") % ([ln_disp, cnt, TransitSim.ai_style_name(style)] if not L10n.is_en() else [cnt, ln_disp, TransitSim.ai_style_name(style)]))
+	_update_run_hud()
+
+
+func _on_set_active_line_ai_style(style: int) -> void:
+	var tr := _transit_sim.get_active_tram()
+	if tr.is_empty():
+		return
+	_on_set_line_ai_style(int(tr["line_id"]), style)
+
+
+func _on_adjust_active_tram_ai_max_kmh(delta_kmh: int) -> void:
+	var tr := _transit_sim.get_active_tram()
+	if tr.is_empty():
+		return
+	var new_kmh := _transit_sim.adjust_active_tram_ai_max_kmh(delta_kmh)
+	var same_line := _transit_sim.line_tram_indices(int(tr["line_id"]))
+	var ord_i := same_line.find(_transit_sim.active_tram_idx) + 1
+	_show_toast(L10n.t("🚋 %s 第%d列 AI运营最高速度设为 %d km/h", "🚋 %s #%d AI max speed set to %d km/h") % [L10n.line_display_name(str(tr["line_name"])), ord_i, new_kmh])
+	_update_run_hud()
+
+
+func _on_reset_active_tram_ai_max_kmh() -> void:
+	var tr := _transit_sim.get_active_tram()
+	if tr.is_empty():
+		return
+	var new_kmh := _transit_sim.reset_active_tram_ai_max_kmh()
+	var same_line := _transit_sim.line_tram_indices(int(tr["line_id"]))
+	var ord_i := same_line.find(_transit_sim.active_tram_idx) + 1
+	_show_toast(L10n.t("🚋 %s 第%d列 AI运营最高速度已恢复车型默认（%d km/h）", "🚋 %s #%d AI max speed reset to model default (%d km/h)") % [L10n.line_display_name(str(tr["line_name"])), ord_i, new_kmh])
+	_update_run_hud()
+
+
+func _on_toggle_line_tsp(lid: int) -> void:
+	if not _graph.lines.has(lid):
+		return
+	var ln: Dictionary = _graph.lines[lid]
+	var new_v := not bool(ln.get("signal_priority", false))
+	_graph.set_line_signal_priority(lid, new_v)
+	_mark_modified_and_quick_save()
+	var ln_disp := L10n.line_display_name(str(ln["name"]))
+	_show_toast(L10n.t("⚡ %s 信号优先已%s", "⚡ %s Signal Priority: %s") % [
+		ln_disp,
+		L10n.t("开启（进路口自动延长绿灯 / 提前切绿）", "ON (green extension / early green)") if new_v else L10n.t("关闭", "OFF"),
+	])
+	_update_run_hud()
+
+
+func _on_toggle_active_line_tsp() -> void:
+	var tr := _transit_sim.get_active_tram()
+	if tr.is_empty():
+		return
+	_on_toggle_line_tsp(int(tr["line_id"]))
+
+
+func _on_toggle_global_tsp() -> void:
+	_graph.global_signal_priority = not _graph.global_signal_priority
+	_mark_modified_and_quick_save()
+	_show_toast(L10n.t("⚡ 全局信号优先已%s", "⚡ Global Signal Priority: %s") % (
+		L10n.t("开启（所有线路享有路口信号优先）", "ON (all lines enabled)") if _graph.global_signal_priority else L10n.t("关闭（按各线路独立设置生效）", "OFF (per-line settings apply)")
+	))
+	_update_run_hud()
 
 
 func _trigger_game_over_accident(ev: Dictionary) -> void:
@@ -5310,32 +6416,30 @@ func _trigger_game_over_accident(ev: Dictionary) -> void:
 	_accident_orbit_yaw = 0.65
 	_spawn_accident_fx(_accident_focus)
 
-	var map_nm := str(MAP_PRESETS[_current_map_key]["title"])
+	var map_nm := _map_title(_current_map_key)
 	if acc_type == "derail":
-		var z_nm := str(ev.get("zone_name", "急弯/道岔"))
+		var z_nm := str(ev.get("zone_name", L10n.t("急弯/道岔", "Curve/Switch")))
 		var lim_v := float(ev.get("limit_kmh", 20.0))
-		_lbl_gameover_title.text = "【超速脱轨翻车 · 本局运营中止】"
-		_lbl_gameover_detail.text = "地图：%s\n电车以 %.1f km/h 高速冲入【%s】（规定限速 %.0f km/h），离心力超限导致脱轨侧翻！\n（您建设的轨道、车站、线路及所有存档均完整保留）" % [
-			map_nm, spd_kmh, z_nm, lim_v
-		]
+		_lbl_gameover_title.text = L10n.t("【超速脱轨翻车 · 本局运营中止】", "[Overspeed Derailment · Run Ended]")
+		_lbl_gameover_detail.text = L10n.t("地图：%s\n电车以 %.1f km/h 高速冲入【%s】（规定限速 %.0f km/h），离心力超限导致脱轨侧翻！\n（您建设的轨道、车站、线路及所有存档均完整保留）", "Map: %s\nEntered [%s] at %.1f km/h (limit %.0f km/h) and derailed!\n(All tracks, stations, lines & saves remain intact)") % ([map_nm, spd_kmh, z_nm, lim_v] if not L10n.is_en() else [map_nm, z_nm, spd_kmh, lim_v])
 	elif acc_type == "buffer":
-		_lbl_gameover_title.text = "【撞击车挡脱轨 · 本局运营中止】"
-		_lbl_gameover_detail.text = "地图：%s\n电车以 %.1f km/h 冲过终点站停车位置，撞上轨道尽头的车挡后脱轨！（车挡只能承受 %.0f km/h 以下的轻触）\n（您建设的轨道、车站、线路及所有存档均完整保留）" % [
+		_lbl_gameover_title.text = L10n.t("【撞击车挡脱轨 · 本局运营中止】", "[Buffer Stop Collision · Run Ended]")
+		_lbl_gameover_detail.text = L10n.t("地图：%s\n电车以 %.1f km/h 冲过终点站停车位置，撞上轨道尽头的车挡后脱轨！（车挡只能承受 %.0f km/h 以下的轻触）\n（您建设的轨道、车站、线路及所有存档均完整保留）", "Map: %s\nOverran terminus at %.1f km/h and hit the buffer stop (max safe %.0f km/h)!\n(All tracks, stations, lines & saves remain intact)") % [
 			map_nm, spd_kmh, TransitSim.BUFFER_SAFE_KMH
 		]
 	elif acc_type == "switch":
-		_lbl_gameover_title.text = "【驶入未开通道岔脱轨 · 本局运营中止】"
-		_lbl_gameover_detail.text = "地图：%s\n单轨列车以 %.1f km/h 冒进红色道岔信号，驶入%s的道岔，走行轮离开轨道梁脱轨！（手动驾驶请按 G 把前方道岔扳到本次进路方向，待信号开放后再通过）\n（您建设的轨道、车站、线路及所有存档均完整保留）" % [
-			map_nm, spd_kmh, "正在转辙" if bool(ev.get("moving", false)) else "方向不对"
+		_lbl_gameover_title.text = L10n.t("【驶入未开通道岔脱轨 · 本局运营中止】", "[Misaligned Switch Derailment · Run Ended]")
+		_lbl_gameover_detail.text = L10n.t("地图：%s\n单轨列车以 %.1f km/h 冒进红色道岔信号，驶入%s的道岔，走行轮离开轨道梁脱轨！（手动驾驶请按 G 把前方道岔扳到本次进路方向，待信号开放后再通过）\n（您建设的轨道、车站、线路及所有存档均完整保留）", "Map: %s\nPassed red switch signal at %.1f km/h into a %s switch and derailed! (Press G in manual mode to align switch)\n(All tracks, stations, lines & saves remain intact)") % [
+			map_nm, spd_kmh, L10n.t("正在转辙", "moving") if bool(ev.get("moving", false)) else L10n.t("方向不对", "misaligned")
 		]
 	elif acc_type == "tram_collision":
-		_lbl_gameover_title.text = "【电车相撞事故 · 本局运营中止】"
-		_lbl_gameover_detail.text = "地图：%s\n两列有轨电车发生严重碰撞（相对撞击速度 %.1f km/h），全线被迫紧急停运！\n（您建设的轨道、车站、线路及所有存档均完整保留）" % [
+		_lbl_gameover_title.text = L10n.t("【电车相撞事故 · 本局运营中止】", "[Tram Collision · Run Ended]")
+		_lbl_gameover_detail.text = L10n.t("地图：%s\n两列有轨电车发生严重碰撞（相对撞击速度 %.1f km/h），全线被迫紧急停运！\n（您建设的轨道、车站、线路及所有存档均完整保留）", "Map: %s\nTwo trams collided (relative speed %.1f km/h)! Service halted.\n(All tracks, stations, lines & saves remain intact)") % [
 			map_nm, spd_kmh
 		]
 	else:
-		_lbl_gameover_title.text = "【电车与小车碰撞 · 本局运营中止】"
-		_lbl_gameover_detail.text = "地图：%s\n电车以 %.1f km/h 与路面社会小车发生碰撞事故，本局运营立即终止！\n（您建设的轨道、车站、线路及所有存档均完整保留）" % [
+		_lbl_gameover_title.text = L10n.t("【电车与小车碰撞 · 本局运营中止】", "[Tram-Vehicle Collision · Run Ended]")
+		_lbl_gameover_detail.text = L10n.t("地图：%s\n电车以 %.1f km/h 与路面社会小车发生碰撞事故，本局运营立即终止！\n（您建设的轨道、车站、线路及所有存档均完整保留）", "Map: %s\nTram collided with street traffic at %.1f km/h! Run ended.\n(All tracks, stations, lines & saves remain intact)") % [
 			map_nm, spd_kmh
 		]
 
@@ -5358,10 +6462,28 @@ func _restart_current_map_after_crash() -> void:
 		_start_map_demo_network()
 	else:
 		# Keep player's built tracks, stations & lines; simply reset trams, traffic & passengers!
-		_rebuild_tracks_and_operations(true)
 		_nav_bar.visible = true
-		_set_game_mode(GameMode.RUN)
-		_show_toast("已重新发车运营（您建设的轨道、车站与线路均已保留）")
+		if DisplayServer.get_name() == "headless":
+			_rebuild_tracks_and_operations(true)
+			_set_game_mode(GameMode.RUN)
+			_show_toast(L10n.t("已重新发车运营（您建设的轨道、车站与线路均已保留）", "Operations restarted (tracks, stations & lines preserved)"))
+		else:
+			_ops_dirty = true
+			_async_restart_after_crash()
+
+
+func _async_restart_after_crash() -> void:
+	_begin_loading_overlay(L10n.t("正在重新发车", "Restarting Service"), L10n.t("正在重置轨道与运营状态...", "Resetting tracks & operations..."))
+	await get_tree().process_frame
+	_set_startup_progress(35.0, L10n.t("正在重置轨道与车站...", "Resetting tracks & stations..."))
+	await get_tree().process_frame
+	_rebuild_tracks_and_operations(true, true)
+	_set_startup_progress(62.0, L10n.t("正在编组上线电车与街道交通...", "Spawning fleet & street traffic..."))
+	await get_tree().process_frame
+	_set_game_mode(GameMode.RUN)
+	await _prewarm_city_and_gpu(_get_traffic_focus_pos(), true, 75.0, 99.0)
+	_end_loading_overlay()
+	_show_toast(L10n.t("已重新发车运营（您建设的轨道、车站与线路均已保留）", "Operations restarted (tracks, stations & lines preserved)"))
 
 
 func _spawn_accident_fx(world_pos: Vector3) -> void:

@@ -36,6 +36,12 @@ float fbm(vec2 p) {
 
 void vertex() {
 	v_world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	// Push park/grass fills behind streets (0.12) and tram tracks (0.0) while keeping them in front of
+	// bare TerrainGround (0.35), so park polygons never poke through roads or rails on slopes.
+	vec4 vp = MODELVIEW_MATRIX * vec4(VERTEX, 1.0);
+	float d = length(vp.xyz);
+	vp.xyz *= 1.0 + (0.24 + d * 0.0004) / max(d, 0.001);
+	POSITION = PROJECTION_MATRIX * vp;
 }
 
 void fragment() {

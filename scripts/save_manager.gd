@@ -33,7 +33,8 @@ static func build_payload(
 	graph: NetworkGraph,
 	pax_spawn_level: int,
 	time_hours: float,
-	total_delivered: int
+	total_delivered: int,
+	weather_mode: int = 0
 ) -> Dictionary:
 	return {
 		"version": 2,
@@ -43,6 +44,7 @@ static func build_payload(
 		"unix_time": int(Time.get_unix_time_from_system()),
 		"pax_spawn_level": pax_spawn_level,
 		"time_hours": snappedf(time_hours, 0.05),
+		"weather": clampi(weather_mode, 0, 2),
 		"total_delivered": total_delivered,
 		"network": graph.export_state(),
 	}
@@ -136,7 +138,7 @@ static func get_latest_run_slot(map_key: String) -> Dictionary:
 static func save_current(map_key: String, payload: Dictionary) -> bool:
 	var copy := payload.duplicate(true)
 	if str(copy.get("name", "")).is_empty():
-		copy["name"] = "当前进度"
+		copy["name"] = L10n.t("当前进度", "Current Progress")
 	copy["saved_at"] = now_timestamp_str()
 	return _write_json(current_file_path(map_key), copy)
 
@@ -171,7 +173,7 @@ static func get_current_summary(map_key: String) -> Dictionary:
 		"tracks": tr_cnt,
 		"stations": st_cnt,
 		"lines": ln_cnt,
-		"saved_at": str(data.get("saved_at", "最近保存")),
+		"saved_at": str(data.get("saved_at", L10n.t("最近保存", "Saved recently"))),
 	}
 
 
@@ -181,7 +183,7 @@ static func save_manual_slot(map_key: String, slot_idx: int, slot_name: String, 
 	var copy := payload.duplicate(true)
 	var clean_name := slot_name.strip_edges()
 	if clean_name.is_empty():
-		clean_name = "手动存档 %02d" % (slot_idx + 1)
+		clean_name = L10n.t("手动存档 %02d", "Manual Save %02d") % (slot_idx + 1)
 	copy["name"] = clean_name
 	copy["saved_at"] = now_timestamp_str()
 	return _write_json(slot_file_path(map_key, false, slot_idx), copy)
@@ -197,7 +199,7 @@ static func push_autosave(map_key: String, reason: String, payload: Dictionary) 
 			if not d.is_empty():
 				_write_json(dst, d)
 	var copy := payload.duplicate(true)
-	copy["name"] = reason if not reason.is_empty() else "自动存档"
+	copy["name"] = reason if not reason.is_empty() else L10n.t("自动存档", "Autosave")
 	copy["saved_at"] = now_timestamp_str()
 	_write_json(slot_file_path(map_key, true, 0), copy)
 
@@ -231,7 +233,7 @@ static func list_slots(map_key: String, is_auto: bool) -> Array[Dictionary]:
 			out.append({
 				"index": i,
 				"exists": false,
-				"name": ("自动槽位 %02d" % (i + 1)) if is_auto else ("规划槽位 %02d（空）" % (i + 1)),
+				"name": (L10n.t("自动槽位 %02d", "Auto Slot %02d") % (i + 1)) if is_auto else (L10n.t("规划槽位 %02d（空）", "Plan Slot %02d (Empty)") % (i + 1)),
 				"saved_at": "",
 				"tracks": 0,
 				"stations": 0,
@@ -243,7 +245,7 @@ static func list_slots(map_key: String, is_auto: bool) -> Array[Dictionary]:
 		else:
 			var d := _normalize_loaded_data(_read_json(p), map_key)
 			var net: Dictionary = d.get("network", {})
-			var default_nm := ("自动存档 %02d" % (i + 1)) if is_auto else ("规划存档 %02d" % (i + 1))
+			var default_nm := (L10n.t("自动存档 %02d", "Autosave %02d") % (i + 1)) if is_auto else (L10n.t("规划存档 %02d", "Plan Save %02d") % (i + 1))
 			var run_list: Array[Dictionary] = []
 			if not is_auto:
 				for si in range(RUN_PER_PLAN_COUNT):
@@ -277,8 +279,8 @@ static func _normalize_loaded_data(raw: Dictionary, map_key: String) -> Dictiona
 		return {
 			"version": 1,
 			"map_key": map_key,
-			"name": "旧版存档",
-			"saved_at": "旧版进度",
+			"name": L10n.t("旧版存档", "Legacy Save"),
+			"saved_at": L10n.t("旧版进度", "Legacy Progress"),
 			"pax_spawn_level": 3,
 			"time_hours": 13.5,
 			"total_delivered": 0,
