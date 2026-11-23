@@ -218,7 +218,7 @@ func _run() -> void:
 	# GATE 6: Grid City Map & Mode Transition Smoke Test
 	# ------------------------------------------------------------------
 	print("\n[Gate 6] Grid City Map & Mode Transition Smoke Test")
-	m._selected_home_map = "grid_city"
+	m._selected_home_map = "grid"
 	m._start_map_demo_network()
 	await process_frame
 	m._set_game_mode(0) # BUILD
@@ -233,6 +233,38 @@ func _run() -> void:
 		if not grid_ev.is_empty():
 			break
 	_check(m._graph.edges.size() > 20 and m._transit_sim.trams.size() >= 1 and grid_ev.is_empty(), "Grid City loads, transitions BUILD->PLAN->RUN, and runs 10s cleanly")
+
+	# ------------------------------------------------------------------
+	# GATE 7: Jiaxing Map (Nanhu + Changshui-Qingfeng-Jiaxing South HSR)
+	# ------------------------------------------------------------------
+	print("\n[Gate 7] Jiaxing Map, Landmarks & Tram T1 60s Run")
+	m._selected_home_map = "jiaxing"
+	m._start_map_demo_network()
+	await process_frame
+	var jx_graph: NetworkGraph = m._graph
+	var jx_tsim: TransitSim = m._transit_sim
+	var jx_lm: Node = m._city_root.get_node_or_null("JiaxingLandmarks")
+	var jx_hsr: Node = jx_lm.get_node_or_null("JiaxingSouthHSRStation") if jx_lm != null else null
+	var jx_yanyu: Node = jx_lm.get_node_or_null("NanhuYanyuTowerAndRedBoat") if jx_lm != null else null
+	var jx_mem: Node = jx_lm.get_node_or_null("NanhuRevolutionaryMemorialHall") if jx_lm != null else null
+	var jx_sta: Node = jx_lm.get_node_or_null("JiaxingForestRailwayStation") if jx_lm != null else null
+	_check(
+		jx_graph.edges.size() >= 1500 and jx_tsim.trams.size() >= 2 and jx_graph.stations.size() >= 5,
+		"Jiaxing street graph & Tram T1 demo loaded (%d edges, %d stations, %d trams)" % [jx_graph.edges.size(), jx_graph.stations.size(), jx_tsim.trams.size()]
+	)
+	_check(
+		jx_hsr != null and jx_yanyu != null and jx_mem != null and jx_sta != null,
+		"All bespoke Jiaxing 3D landmarks built (HSR South Sta., Yanyu Tower & Red Boat, Memorial Hall, Forest Station)"
+	)
+	var jx_ev := {}
+	for _js in range(600): # 60 seconds @ 0.1s
+		jx_ev = jx_tsim.step_all_trams(0.1, jx_graph, m._pax_sim, m._traffic_sim, m._sound)
+		if not jx_ev.is_empty():
+			break
+	var jx_max_d := 0.0
+	for tr: Dictionary in jx_tsim.trams:
+		jx_max_d = maxf(jx_max_d, float(tr.get("st_dist_m", 0.0)))
+	_check(jx_ev.is_empty() and jx_max_d > 100.0, "Jiaxing Tram T1 runs 60s cleanly with zero accidents (max dist %.1fm)" % jx_max_d)
 
 	_finish(m)
 

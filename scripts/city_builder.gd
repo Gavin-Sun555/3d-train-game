@@ -71,6 +71,8 @@ static func build_city(
 	# Seattle Center (Space Needle, Climate Pledge Arena, MoPOP...) and Elliott Bay waterfront landmarks
 	if map_data.get("landmarks", {}).has("space_needle"):
 		SeattleV2Landmarks.build(parent, map_data, lm_info["lights"])
+	if map_data.get("landmarks", {}).has("jiaxing_south_station"):
+		JiaxingLandmarks.build(parent, map_data, lm_info["lights"])
 	if parent.has_meta("water_mat"):
 		(lm_info["night_mats"] as Array).append(parent.get_meta("water_mat"))
 	LandmarkFacades.build_plazas(parent, map_data.get("plazas", []), lm_info["lights"])
@@ -149,6 +151,7 @@ static func _build_areas(parent: Node3D, areas: Array) -> void:
 	var buckets := {
 		"water": [],
 		"park": [],
+		"island": [],
 		"brick": [],
 		"plaza": [],
 	}
@@ -156,6 +159,8 @@ static func _build_areas(parent: Node3D, areas: Array) -> void:
 		var kind: String = str(a.get("kind", ""))
 		if kind == "water":
 			buckets["water"].append(a)
+		elif kind == "island":
+			buckets["island"].append(a)
 		elif kind in ["park", "grass", "wood", "meadow", "garden", "sports"]:
 			buckets["park"].append(a)
 		elif kind == "brick_plaza":
@@ -167,6 +172,7 @@ static func _build_areas(parent: Node3D, areas: Array) -> void:
 	_emit_area_group(parent, "WaterAreas", buckets["water"], 0.026, Color(0.08, 0.22, 0.30), 0.06, 0.35)
 	_emit_area_group(parent, "PlazaAreas", buckets["plaza"], 0.030, Color(0.39, 0.38, 0.36), 0.86, 0.0)
 	_emit_area_group(parent, "BrickPlazas", buckets["brick"], 0.034, Color(0.45, 0.27, 0.22), 0.84, 0.0)
+	_emit_area_group(parent, "IslandParkAreas", buckets["island"], 0.048, Color(0.22, 0.38, 0.16), 0.90, 0.0)
 
 
 # Flat triangle; with terrain, split until no edge is longer than 8 m so the later drape bends smoothly over graded embankments
@@ -274,7 +280,7 @@ static func _emit_area_group(
 		parent.set_meta("water_mat", wm)
 		parent.add_child(mi)
 		return
-	if node_name == "ParkAreas":
+	if node_name == "ParkAreas" or node_name == "IslandParkAreas":
 		var pm := ShaderMaterial.new()
 		pm.shader = load("res://shaders/park_lawn.gdshader") as Shader
 		mi.material_override = pm
@@ -677,7 +683,7 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 		var poly := _clean_poly(b.get("pts", []))
 		if poly.size() < 3:
 			continue
-		if str(b.get("lm", "")) in SeattleV2Landmarks.SKIP_GENERIC:
+		if str(b.get("lm", "")) in SeattleV2Landmarks.SKIP_GENERIC or str(b.get("lm", "")) in JiaxingLandmarks.SKIP_GENERIC:
 			continue # built as a dedicated landmark model
 		cur_y0 = Terrain.base_under(poly)
 		b["_y0"] = cur_y0

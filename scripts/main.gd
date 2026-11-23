@@ -17,7 +17,7 @@ const BED_STYLE_NAMES_EN := [
 	"Elevated Monorail Beam",
 ]
 
-const MAP_ORDER: Array[String] = ["grid", "seattle"]
+const MAP_ORDER: Array[String] = ["grid", "seattle", "jiaxing"]
 
 const MAP_PRESETS := {
 	"grid": {
@@ -45,6 +45,19 @@ const MAP_PRESETS := {
 		"data_path": "res://data/seattle_expanded.json",
 		"default_target": Vector3(0.0, 0.0, 120.0),
 		"default_height": 600.0,
+	},
+	"jiaxing": {
+		"key": "jiaxing",
+		"index": "03",
+		"title": "嘉兴 · 南湖与高铁南站",
+		"title_en": "Jiaxing · Nanhu & South Sta.",
+		"subtitle": "南湖烟雨楼 · 环城水网 · 内环高架 · 长水路—庆丰路 · 嘉兴南站",
+		"subtitle_en": "Nanhu Lake · Canals · Inner Ring Viaduct · Changshui-Qingfeng · HSR South Sta.",
+		"desc": "基于真实 OSM 数据还原嘉兴主城与高铁南站走廊：南湖红船与烟雨楼、南湖革命纪念馆、森林火车站、江南河网与嘉兴南站。",
+		"desc_en": "Real OSM Jiaxing city & HSR corridor: Nanhu Lake & Yanyu Tower, Revolutionary Memorial Hall, Forest Station, canals & Jiaxing South HSR Station.",
+		"data_path": "res://data/jiaxing.json",
+		"default_target": Vector3(0.0, 0.0, 0.0),
+		"default_height": 620.0,
 	},
 }
 
@@ -2072,10 +2085,18 @@ func _unhandled_input(event: InputEvent) -> void:
 	if _in_home_menu:
 		if event is InputEventKey and event.pressed and not event.echo:
 			var hk := (event as InputEventKey).keycode
-			if hk == KEY_1 or hk == KEY_LEFT:
+			if hk == KEY_1:
 				_select_home_map_card("grid")
-			elif hk == KEY_2 or hk == KEY_RIGHT:
+			elif hk == KEY_2:
 				_select_home_map_card("seattle")
+			elif hk == KEY_3:
+				_select_home_map_card("jiaxing")
+			elif hk == KEY_LEFT:
+				var mi := MAP_ORDER.find(_selected_home_map)
+				_select_home_map_card(MAP_ORDER[posmod(mi - 1, MAP_ORDER.size())])
+			elif hk == KEY_RIGHT:
+				var mi := MAP_ORDER.find(_selected_home_map)
+				_select_home_map_card(MAP_ORDER[posmod(mi + 1, MAP_ORDER.size())])
 			elif hk == KEY_ENTER or hk == KEY_KP_ENTER:
 				_start_map_continue_or_new()
 		return
@@ -4491,7 +4512,7 @@ func _build_home_screen_ui(parent: Control) -> void:
 	_home_overlay.add_child(center_wrap)
 
 	var main_card := _make_panel(Color(0.06, 0.08, 0.12, 0.94))
-	main_card.custom_minimum_size = Vector2(820, 470)
+	main_card.custom_minimum_size = Vector2(1060, 480)
 	center_wrap.add_child(main_card)
 
 	var vbox := VBoxContainer.new()
@@ -4547,7 +4568,7 @@ func _build_home_screen_ui(parent: Control) -> void:
 		var preset: Dictionary = MAP_PRESETS[mkey]
 		var card := _make_panel(Color(0.08, 0.11, 0.16, 0.90))
 		card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		card.custom_minimum_size = Vector2(380, 245)
+		card.custom_minimum_size = Vector2(320, 255)
 		cards_row.add_child(card)
 		_home_card_panels[mkey] = card
 
@@ -4579,7 +4600,7 @@ func _build_home_screen_ui(parent: Control) -> void:
 		var desc_lbl := Label.new()
 		desc_lbl.text = _map_desc(mkey)
 		desc_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		desc_lbl.custom_minimum_size = Vector2(340, 46)
+		desc_lbl.custom_minimum_size = Vector2(290, 56)
 		desc_lbl.add_theme_color_override("font_color", Color(0.80, 0.84, 0.88))
 		cv.add_child(desc_lbl)
 
@@ -4587,7 +4608,7 @@ func _build_home_screen_ui(parent: Control) -> void:
 
 		var badge_lbl := Label.new()
 		badge_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		badge_lbl.custom_minimum_size = Vector2(340, 44)
+		badge_lbl.custom_minimum_size = Vector2(290, 44)
 		cv.add_child(badge_lbl)
 		_home_card_badges[mkey] = badge_lbl
 
