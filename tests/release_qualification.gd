@@ -267,10 +267,40 @@ func _run() -> void:
 	var jx_cp: Node = jx_lm.get_node_or_null("JiaxingCentralParkLandmark") if jx_lm != null else null
 	var jx_haogu: Node = jx_lm.get_node_or_null("NanhuHaoguPagoda") if jx_lm != null else null
 	var jx_tiandi: Node = jx_lm.get_node_or_null("NanhuTiandiDistrict") if jx_lm != null else null
+	var jx_gate: Node = jx_lm.get_node_or_null("NanhuScenicMainGate") if jx_lm != null else null
+	var jx_church: Node = jx_lm.get_node_or_null("JiaxingCatholicChurch") if jx_lm != null else null
+	var jx_h1: Node = jx_lm.get_node_or_null("JiaxingFirstHospital") if jx_lm != null else null
+	var jx_h2: Node = jx_lm.get_node_or_null("JiaxingSecondHospital") if jx_lm != null else null
+	var jx_h3: Node = jx_lm.get_node_or_null("JiaxingTCMHospital") if jx_lm != null else null
+	var jx_yaohan: Node = jx_lm.get_node_or_null("JiaxingYaohanPlazaAndBridge") if jx_lm != null else null
+	var jx_ybr: Node = jx_lm.get_node_or_null("YaohanCircularFootbridge") if jx_lm != null else null
+	var jx_hilton: Node = jx_lm.get_node_or_null("JiaxingHiltonHotel") if jx_lm != null else null
+	var jx_wanda: Node = jx_lm.get_node_or_null("JiaxingNanhuWandaPlaza") if jx_lm != null else null
+	var jx_sams: Node = jx_lm.get_node_or_null("JiaxingSamsClub") if jx_lm != null else null
+	var jx_xjd: Node = jx_lm.get_node_or_null("XiangjiadangWetlandPark") if jx_lm != null else null
 	var jx_ap: Node = jx_lm.get_node_or_null("JiaxingNanhuAirport") if jx_lm != null else null
+	var jx_b1_root: Node = m._underground_landmarks_root
+	var jx_b1_hall: Node = jx_b1_root.get_node_or_null("JiaxingStationB1Hall") if jx_b1_root != null else null
 	_check(
-		jx_gov != null and jx_no1 != null and jx_yuehe != null and jx_zicheng != null and jx_cp != null and jx_haogu != null and jx_tiandi != null and jx_ap != null,
-		"All iconic Jiaxing civic/scenic landmarks & Nanhu Airport built (Gov, No.1 High School, Yuehe, Zicheng, Central Park, Haogu Pagoda, Nanhu Tiandi, Airport)"
+		jx_gov != null and jx_no1 != null and jx_yuehe != null and jx_zicheng != null and jx_cp != null and jx_haogu != null and jx_tiandi != null and jx_gate != null and jx_ap != null and jx_b1_hall != null,
+		"All iconic Jiaxing civic/scenic landmarks, B1 Station Hall, Nanhu Gate & Airport built"
+	)
+	_check(
+		jx_church != null and jx_h1 != null and jx_h2 != null and jx_h3 != null and jx_yaohan != null and jx_ybr != null and jx_hilton != null and jx_wanda != null and jx_sams != null and jx_xjd != null,
+		"All urban & eastern expansion landmarks built (Church, 3 Hospitals, Yaohan + Ring Bridge, Hilton, Wanda, Sam's Club, Xiangjiadang Wetland Park)"
+	)
+	# Verify 360-degree closed Inner Ring Expressway across all 36 angular sectors + Yuehe pedestrian bridges
+	var ir_sec := {}
+	for fw_i: Dictionary in m._map_data.get("freeways", []):
+		for fpt in fw_i.get("pts", []):
+			var fx := float(fpt[0]); var fy := float(fpt[1])
+			if fx >= -3330.0 and fx <= 5680.0 and fy >= -4100.0 and fy <= 3760.0 and Vector2(fx - 1100.0, fy + 100.0).length() > 2800.0:
+				var deg_i := int(floor(fposmod(rad_to_deg(atan2(fy + 100.0, fx - 1100.0)), 360.0) / 10.0))
+				ir_sec[deg_i] = true
+	var yuehe_br_cnt := (m._map_data.get("landmarks", {}).get("yuehe_quarter", {}).get("bridges", []) as Array).size()
+	_check(
+		ir_sec.size() == 36 and yuehe_br_cnt >= 10,
+		"Inner Ring Expressway forms a 100%% closed 360-deg loop (%d/36 sectors) & Yuehe has %d real pedestrian bridges" % [ir_sec.size(), yuehe_br_cnt]
 	)
 	_check(
 		(m._map_data.get("freeways", []) as Array).size() >= 300 and (m._map_data.get("storefronts", []) as Array).size() >= 3500,

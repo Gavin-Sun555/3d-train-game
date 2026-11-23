@@ -17,6 +17,9 @@ static func build(root: Node3D, lm: Dictionary, lights: Array) -> void:
 		_haogu_pagoda(root, _p(lm["haogu_pagoda"]["pos"]), lights)
 	if lm.has("huijingyuan"):
 		_huijingyuan(root, _p(lm["huijingyuan"]["pos"]), lights)
+	if lm.has("nanhu_gate"):
+		var ng: Dictionary = lm["nanhu_gate"]
+		_nanhu_gate(root, _p(ng["pos"]), float(ng.get("angle", -0.25)), lights)
 	if lm.has("nanhu_tiandi"):
 		_nanhu_tiandi(root, _p(lm["nanhu_tiandi"]["pos"]), lights)
 	if lm.has("jiaxing_gov"):
@@ -36,6 +39,7 @@ static func build(root: Node3D, lm: Dictionary, lights: Array) -> void:
 		_central_park(root, _p(c["pos"]), float(c.get("angle", 0.0)), lights)
 	if lm.has("jiaxing_airport"):
 		_jiaxing_airport(root, lm["jiaxing_airport"], lights)
+	JiaxingUrbanLandmarks.build(root, lm, lights)
 	for cs in lm.get("commercial_signs", []):
 		if cs is Dictionary:
 			_commercial_signboard(root, cs)
@@ -130,7 +134,7 @@ static func _haogu_pagoda(parent: Node3D, center: Vector3, lights: Array) -> voi
 
 
 # =============================================================================================
-# 2. 南湖景区 · 会景园码头 (Huijingyuan Scenic Ferry Pavilion & Tourist Boats)
+# 2. 南湖景区 · 会景园景区与游船码头 (Huijingyuan Scenic Garden, Lakeside Pavilions & Ferry Pier)
 # =============================================================================================
 static func _huijingyuan(parent: Node3D, center: Vector3, lights: Array) -> void:
 	var hj := Node3D.new()
@@ -140,24 +144,91 @@ static func _huijingyuan(parent: Node3D, center: Vector3, lights: Array) -> void
 
 	var wall := _mat(Color(0.92, 0.90, 0.86), 0.80)
 	var wood := _mat(Color(0.46, 0.24, 0.15), 0.64)
+	var wood_red := _mat(Color(0.56, 0.16, 0.12), 0.56)
 	var tile := _mat(Color(0.21, 0.23, 0.27), 0.60, 0.06)
+	var stone := _mat(Color(0.79, 0.78, 0.74), 0.78)
 	var pier := _mat(Color(0.56, 0.44, 0.32), 0.78)
 	var glow := _emissive(Color(1.0, 0.82, 0.46), 1.5)
+	var foliage := _mat(Color(0.20, 0.45, 0.21), 0.86)
 
-	# Classical Jiangnan lakeside ferry ticket pavilion
-	_box(hj, Vector3(26.0, 5.6, 12.0), Vector3(12.0, 2.8, 0.0), wall)
-	_box(hj, Vector3(29.5, 0.75, 15.0), Vector3(12.0, 6.0, 0.0), tile)
-	_box(hj, Vector3(26.5, 1.4, 9.6), Vector3(12.0, 7.0, 0.0), tile)
-	_sign(hj, "会 景 园 码 头", Vector3(-1.4, 5.6, 0.0), -PI * 0.5, 62, 0.022, Color(0.96, 0.84, 0.34))
+	# --- A. Grand 2-Story Song-Style Huijingyuan Ferry Terminal Hall (会景园渡船大楼) ---
+	_box(hj, Vector3(34.0, 0.45, 42.0), Vector3(16.0, 0.22, 0.0), stone, 0.0, 0.0, 0.0, false)
+	_box(hj, Vector3(28.0, 6.0, 14.0), Vector3(14.0, 3.2, 0.0), wall)
+	_box(hj, Vector3(31.5, 0.75, 17.5), Vector3(14.0, 6.5, 0.0), tile)
+	_box(hj, Vector3(22.0, 4.2, 10.2), Vector3(14.0, 8.9, 0.0), wall)
+	_box(hj, Vector3(26.5, 1.5, 13.5), Vector3(14.0, 11.4, 0.0), tile)
+	for cz_c: float in [-5.5, 0.0, 5.5]:
+		_cyl(hj, 0.24, 0.26, 6.0, Vector3(-0.2, 3.2, cz_c), wood_red, 8)
+	_sign(hj, "会 景 园 码 头", Vector3(-1.6, 6.2, 0.0), -PI * 0.5, 66, 0.024, Color(0.96, 0.84, 0.34))
 
-	# Wooden jetty extending westward into Nanhu Lake + 2 Jiangnan sightseeing boats
-	_box(hj, Vector3(34.0, 0.42, 6.2), Vector3(-12.0, 0.42, 0.0), pier, 0.0, 0.0, 0.0, false)
-	for bz: float in [-8.5, 8.5]:
-		_box(hj, Vector3(15.0, 1.1, 3.6), Vector3(-22.0, 0.52, bz), wood)
-		_box(hj, Vector3(10.5, 2.1, 3.0), Vector3(-22.0, 1.95, bz), wall)
-		_box(hj, Vector3(9.6, 0.9, 3.1), Vector3(-22.0, 2.05, bz), glow, 0.0, 0.0, 0.0, false)
-		_box(hj, Vector3(12.2, 0.45, 3.8), Vector3(-22.0, 3.15, bz), tile)
-	_add_light(hj, Vector3(-6.0, 7.5, 0.0), Color(1.0, 0.84, 0.56), 40.0, lights)
+	# --- B. Jiangnan Garden Corridors & Water-Front Hexagonal Pavilions (亲水长廊 & 水榭六角亭) ---
+	for gs: float in [-1.0, 1.0]:
+		_box(hj, Vector3(6.0, 3.6, 26.0), Vector3(18.0, 2.0, gs * 21.0), wall)
+		_box(hj, Vector3(7.6, 0.65, 28.0), Vector3(18.0, 4.1, gs * 21.0), tile)
+		# Lakeside hexagonal pavilion jutting over Nanhu water via zig-zag timber bridge
+		_box(hj, Vector3(18.0, 0.32, 2.8), Vector3(-2.0, 0.35, gs * 31.0), pier, 0.0, 0.0, 0.0, false)
+		var px_t := -12.0
+		var pz_t := gs * 31.0
+		_cyl(hj, 5.2, 5.5, 0.6, Vector3(px_t, 0.35, pz_t), stone, 6)
+		for ka in range(6):
+			var a := float(ka) * PI / 3.0
+			_cyl(hj, 0.18, 0.20, 4.0, Vector3(px_t + cos(a) * 4.0, 2.6, pz_t + sin(a) * 4.0), wood_red, 8)
+		_cyl(hj, 1.0, 6.6, 2.2, Vector3(px_t, 5.5, pz_t), tile, 6)
+		# Weeping willow groves framing Huijingyuan shore
+		_cyl(hj, 0.3, 0.42, 4.2, Vector3(26.0, 2.1, gs * 26.0), wood, 8)
+		_cyl(hj, 3.2, 4.6, 4.8, Vector3(26.0, 5.2, gs * 26.0), foliage, 10)
+
+	# --- C. Twin Wooden Ferry Jetties & 3 Painted Nanhu Sightseeing Boats (游湖画舫船) ---
+	_box(hj, Vector3(38.0, 0.42, 7.2), Vector3(-14.0, 0.42, 0.0), pier, 0.0, 0.0, 0.0, false)
+	for bz: float in [-10.5, 0.0, 10.5]:
+		var bx := -36.0 if bz == 0.0 else -24.0
+		_box(hj, Vector3(16.0, 1.1, 3.8), Vector3(bx, 0.52, bz), wood)
+		_box(hj, Vector3(11.2, 2.2, 3.2), Vector3(bx, 2.0, bz), wall)
+		_box(hj, Vector3(10.0, 0.9, 3.3), Vector3(bx, 2.1, bz), glow, 0.0, 0.0, 0.0, false)
+		_box(hj, Vector3(13.0, 0.48, 4.0), Vector3(bx, 3.25, bz), tile)
+	_add_light(hj, Vector3(-6.0, 8.5, 0.0), Color(1.0, 0.84, 0.56), 54.0, lights)
+
+
+# =============================================================================================
+# 2B. 南湖景区主大门广场 (Nanhu Scenic Area Grand Entrance Archway & Visitor Center)
+# =============================================================================================
+static func _nanhu_gate(parent: Node3D, center: Vector3, angle: float, lights: Array) -> void:
+	var ng := Node3D.new()
+	ng.name = "NanhuScenicMainGate"
+	ng.position = center
+	ng.rotation.y = angle
+	parent.add_child(ng)
+
+	var stone := _mat(Color(0.84, 0.82, 0.78), 0.72)
+	var wall := _mat(Color(0.93, 0.91, 0.86), 0.80)
+	var wood_red := _mat(Color(0.58, 0.14, 0.12), 0.52)
+	var tile := _mat(Color(0.19, 0.21, 0.26), 0.56, 0.08)
+	var gold := _mat(Color(0.95, 0.80, 0.26), 0.28, 0.65)
+	var glass := _glass(Color(0.32, 0.50, 0.62), 0.58)
+
+	# Ceremonial granite entrance plaza (flushed y=0.02 so surrounding streets stay clean)
+	_box(ng, Vector3(58.0, 0.05, 40.0), Vector3(0.0, 0.02, 0.0), stone, 0.0, 0.0, 0.0, false)
+	# Grand 4-Pillar 3-Bay Jiangnan Ceremonial Entrance Archway (南湖旅游区大门牌坊)
+	for ax: float in [-12.5, -5.2, 5.2, 12.5]:
+		_box(ng, Vector3(1.5, 1.8, 1.8), Vector3(ax, 0.9, 6.0), stone)
+		_cyl(ng, 0.42, 0.48, 10.2, Vector3(ax, 5.9, 6.0), wood_red, 10)
+	_box(ng, Vector3(27.0, 1.1, 1.3), Vector3(0.0, 9.2, 6.0), wood_red)
+	_box(ng, Vector3(13.5, 1.8, 4.0), Vector3(0.0, 11.8, 6.0), tile)
+	_box(ng, Vector3(12.2, 0.35, 0.6), Vector3(0.0, 12.9, 6.0), gold)
+	for sx: float in [-8.9, 8.9]:
+		_box(ng, Vector3(8.6, 1.4, 3.2), Vector3(sx, 10.1, 6.0), tile)
+	_sign(ng, "南 湖 旅 游 区", Vector3(0.0, 9.8, 6.8), 0.0, 82, 0.026, Color(0.98, 0.86, 0.34))
+	_sign(ng, "南 湖 旅 游 区", Vector3(0.0, 9.8, 5.2), PI, 82, 0.026, Color(0.98, 0.86, 0.34))
+	# Flanking Jiangnan-style Visitor Center & Ticket Halls
+	for vs: float in [-1.0, 1.0]:
+		_box(ng, Vector3(20.0, 6.2, 14.0), Vector3(vs * 21.0, 3.1, -9.0), wall)
+		_box(ng, Vector3(16.0, 3.6, 14.3), Vector3(vs * 21.0, 2.4, -9.0), glass)
+		_box(ng, Vector3(23.0, 1.4, 16.5), Vector3(vs * 21.0, 6.9, -9.0), tile)
+	# Red-Boat Sculptural Monument Emblem in Center Forecourt
+	_box(ng, Vector3(10.5, 1.2, 3.4), Vector3(0.0, 0.6, -12.0), stone)
+	_box(ng, Vector3(8.5, 1.1, 2.2), Vector3(0.0, 1.75, -12.0), wood_red)
+	_box(ng, Vector3(5.6, 1.4, 1.8), Vector3(0.0, 2.8, -12.0), gold)
+	_add_light(ng, Vector3(0.0, 11.0, 8.0), Color(1.0, 0.86, 0.56), 54.0, lights)
 
 
 # =============================================================================================
@@ -345,32 +416,54 @@ static func _yuehe_quarter(parent: Node3D, center: Vector3, angle: float, lights
 		_box(yh, Vector3(6.8, 1.2, 2.6), Vector3(ax, 8.2, arch_z), tile_dark)
 	_sign(yh, "月 河 历 史 街 区", Vector3(0.0, 8.1, arch_z + 0.7), 0.0, 66, 0.022, Color(0.98, 0.84, 0.34))
 
-	# --- B. 14 Authentic Jiangnan Horse-Head Wall (粉墙黛瓦 · 马头墙) Heritage Houses along Stone Street ---
-	_box(yh, Vector3(9.0, 0.06, 114.0), Vector3(0.0, 0.03, 0.0), stone, 0.0, 0.0, 0.0, false)
+	# --- B. Expanded Cross-Axis Jiangnan Old Town Streets (中基路 + 小猪廊下 + 荷花池花鸟街, 26 Heritage Houses!) ---
+	_box(yh, Vector3(9.2, 0.06, 134.0), Vector3(0.0, 0.03, 0.0), stone, 0.0, 0.0, 0.0, false)
+	_box(yh, Vector3(144.0, 0.06, 8.4), Vector3(0.0, 0.03, -8.0), stone, 0.0, 0.0, 0.0, false)
+	# North-South main pedestrian old street (14 houses with stepped horse-head walls + lanterns)
 	for ri in range(7):
-		var hz := -46.0 + float(ri) * 15.2
+		var hz := -50.0 + float(ri) * 16.0
+		if absf(hz + 8.0) < 9.0:
+			continue # leave clean cross-alley junction!
 		for side: float in [-1.0, 1.0]:
 			var hx := side * 14.5
 			var hh := 7.2 if (ri % 2 == 0) else 8.4
 			var hw := 14.0
-			var hd := 11.8
-			# Whitewashed plaster body + dark timber ground-floor storefront facade
+			var hd := 12.0
 			_box(yh, Vector3(hw, hh, hd), Vector3(hx, hh * 0.5, hz), plaster)
 			_box(yh, Vector3(0.45, 3.4, hd - 1.2), Vector3(hx - side * (hw * 0.5 + 0.15), 1.7, hz), wood_dark)
 			_box(yh, Vector3(0.25, 1.8, hd - 3.0), Vector3(hx - side * (hw * 0.5 + 0.25), 1.9, hz), warm_win, 0.0, 0.0, 0.0, false)
-			# Pitched black-tile roof slopes
 			_box(yh, Vector3(hw * 0.62, 0.45, hd + 0.8), Vector3(hx - hw * 0.22, hh + 1.35, hz), tile_dark, 0.0, 0.42)
 			_box(yh, Vector3(hw * 0.62, 0.45, hd + 0.8), Vector3(hx + hw * 0.22, hh + 1.35, hz), tile_dark, 0.0, -0.42)
-			# Iconic stepped white horse-head gable walls (马头墙) capping both ends!
 			for gz: float in [-hd * 0.5 - 0.15, hd * 0.5 + 0.15]:
 				_box(yh, Vector3(hw + 0.4, hh + 1.1, 0.42), Vector3(hx, (hh + 1.1) * 0.5, hz + gz), plaster)
 				_box(yh, Vector3(hw * 0.58, 1.8, 0.46), Vector3(hx, hh + 1.9, hz + gz), plaster)
 				_box(yh, Vector3(hw * 0.64, 0.35, 0.85), Vector3(hx, hh + 2.85, hz + gz), tile_dark)
-			# Overhanging timber eave & glowing red Jiangnan lanterns lining the old street
 			_box(yh, Vector3(2.4, 0.28, hd + 0.4), Vector3(hx - side * (hw * 0.5 + 1.1), 3.7, hz), tile_dark, 0.0, side * 0.26)
 			_cyl(yh, 0.32, 0.28, 0.68, Vector3(hx - side * (hw * 0.5 + 1.8), 3.1, hz), lantern, 8)
-	_add_light(yh, Vector3(0.0, 8.5, 12.0), Color(1.0, 0.72, 0.38), 54.0, lights)
-	_add_light(yh, Vector3(0.0, 8.5, -28.0), Color(1.0, 0.72, 0.38), 54.0, lights)
+	# East-West canal-side old street (花鸟市场 / 小猪廊下 — 12 waterfront heritage shopfronts + timber veranda!)
+	for ei in range(-3, 4):
+		if ei == 0:
+			continue
+		var hx2 := float(ei) * 19.5
+		for side2: float in [-1.0, 1.0]:
+			var hz2 := -8.0 + side2 * 13.5
+			var hh2 := 6.8 if (absi(ei) % 2 == 0) else 7.8
+			_box(yh, Vector3(14.5, hh2, 11.5), Vector3(hx2, hh2 * 0.5, hz2), plaster)
+			_box(yh, Vector3(13.2, 3.2, 0.45), Vector3(hx2, 1.6, hz2 - side2 * 5.85), wood_dark)
+			_box(yh, Vector3(11.4, 1.7, 0.25), Vector3(hx2, 1.8, hz2 - side2 * 5.95), warm_win, 0.0, 0.0, 0.0, false)
+			_box(yh, Vector3(15.2, 0.45, 7.2), Vector3(hx2, hh2 + 1.25, hz2 - 2.6), tile_dark, 0.0, 0.0, 0.42)
+			_box(yh, Vector3(15.2, 0.45, 7.2), Vector3(hx2, hh2 + 1.25, hz2 + 2.6), tile_dark, 0.0, 0.0, -0.42)
+			_cyl(yh, 0.30, 0.26, 0.62, Vector3(hx2, 3.0, hz2 - side2 * 6.8), lantern, 8)
+	# Waterside Opera Stage Pavilion (月河戏台水榭) & Classic Jiangnan Wupeng Canal Boats (乌篷船)
+	_box(yh, Vector3(12.0, 0.9, 10.0), Vector3(-42.0, 0.45, 36.0), stone)
+	_box(yh, Vector3(10.5, 4.8, 8.8), Vector3(-42.0, 3.3, 36.0), wood_dark)
+	_box(yh, Vector3(13.6, 1.5, 11.6), Vector3(-42.0, 6.4, 36.0), tile_dark)
+	_sign(yh, "月 河 古 戏 台", Vector3(-42.0, 5.4, 40.8), 0.0, 48, 0.018, Color(0.98, 0.84, 0.34))
+	for b_off: Vector3 in [Vector3(38.0, 0.35, 34.0), Vector3(54.0, 0.35, 18.0), Vector3(-52.0, 0.35, -36.0)]:
+		_box(yh, Vector3(7.4, 0.7, 2.0), b_off, wood_dark, 0.35)
+		_box(yh, Vector3(4.2, 1.1, 1.7), b_off + Vector3(0.0, 0.8, 0.0), tile_dark, 0.35)
+	_add_light(yh, Vector3(0.0, 8.5, 12.0), Color(1.0, 0.72, 0.38), 64.0, lights)
+	_add_light(yh, Vector3(0.0, 8.5, -28.0), Color(1.0, 0.72, 0.38), 64.0, lights)
 
 
 # =============================================================================================
@@ -422,10 +515,27 @@ static func _zicheng_park(parent: Node3D, center: Vector3, angle: float, lights:
 	_box(zc, Vector3(0.7, 1.3, 0.7), Vector3(5.8, ty + 15.2, 0.0), gold)
 	_sign(zc, "子  城", Vector3(0.0, ty + 10.2, 4.9), 0.0, 88, 0.028, Color(0.98, 0.84, 0.32))
 
-	# Restored 嘉兴府衙 historic timber hall behind the city gate
-	_box(zc, Vector3(32.0, 6.4, 15.0), Vector3(0.0, 3.2, -46.0), plaster)
-	_box(zc, Vector3(36.0, 2.2, 18.5), Vector3(0.0, 7.5, -46.0), tile_dark)
-	_add_light(zc, Vector3(0.0, 12.0, 14.0), Color(1.0, 0.80, 0.44), 48.0, lights)
+	# Restored 嘉兴府衙 historic timber hall, ceremonial stone axis, enclosing brick ramparts & corner watchtowers!
+	var ginkgo := _mat(Color(0.84, 0.68, 0.16), 0.78)
+	_box(zc, Vector3(8.5, 0.14, 72.0), Vector3(0.0, 0.07, -34.0), stone, 0.0, 0.0, 0.0, false)
+	# Enclosing East / West / North ancient brick ramparts & corner pavilions
+	for ws_z: float in [-1.0, 1.0]:
+		_box(zc, Vector3(5.2, 5.6, 86.0), Vector3(ws_z * 42.0, 2.8, -36.0), brick_grey)
+		_box(zc, Vector3(9.5, 6.4, 9.5), Vector3(ws_z * 42.0, 3.2, -78.0), brick_grey)
+		_box(zc, Vector3(11.2, 2.2, 11.2), Vector3(ws_z * 42.0, 7.4, -78.0), tile_dark)
+		# Golden ginkgo trees flanking the ceremonial courtyard axis
+		for gz_t: float in [-24.0, -38.0, -56.0]:
+			_cyl(zc, 0.32, 0.42, 4.6, Vector3(ws_z * 16.0, 2.3, gz_t), wood_red, 8)
+			_cyl(zc, 2.8, 4.2, 4.4, Vector3(ws_z * 16.0, 6.2, gz_t), ginkgo, 10)
+	_box(zc, Vector3(86.0, 5.6, 5.2), Vector3(0.0, 2.8, -78.0), brick_grey)
+	# Ceremonial Yimen Gate (仪门) & Main 嘉兴府衙 Great Hall on raised stone plinth
+	_box(zc, Vector3(20.0, 4.8, 9.0), Vector3(0.0, 2.4, -26.0), plaster)
+	_box(zc, Vector3(23.5, 1.6, 11.5), Vector3(0.0, 5.6, -26.0), tile_dark)
+	_box(zc, Vector3(38.0, 1.1, 20.0), Vector3(0.0, 0.55, -52.0), stone)
+	_box(zc, Vector3(34.0, 7.2, 16.0), Vector3(0.0, 4.6, -52.0), plaster)
+	_box(zc, Vector3(38.5, 2.4, 19.5), Vector3(0.0, 9.2, -52.0), tile_dark)
+	_sign(zc, "嘉 兴 府 衙 遗 址", Vector3(0.0, 7.5, -43.5), 0.0, 58, 0.022, Color(0.98, 0.84, 0.34))
+	_add_light(zc, Vector3(0.0, 12.0, 14.0), Color(1.0, 0.80, 0.44), 52.0, lights)
 
 
 # =============================================================================================

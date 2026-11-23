@@ -51,23 +51,25 @@ def rnd(p):
     return [round(p[0], 2), round(p[1], 2)]
 
 
-# 1. Screenshot bounding box (lat/lon -> game meters)
-MAIN_S, MAIN_N, MAIN_W, MAIN_E = 30.7135, 30.7915, 120.7125, 120.7810
+# 1. Expanded urban bounding box (west of Middle Ring W -> east past 3rd Ring E / Hilton / Wanda!)
+MAIN_S, MAIN_N, MAIN_W, MAIN_E = 30.7135, 30.7915, 120.7125, 120.8125
 _mx0, _my1 = proj(MAIN_S, MAIN_W)
 _mx1, _my0 = proj(MAIN_N, MAIN_E)
 MAIN_RECT = (round(_mx0, 1), round(_my0, 1), round(_mx1, 1), round(_my1, 1))
 
-# 2. East-South corridor boxes outside MAIN_RECT:
-#    - Changshui Rd east from MAIN_E to Qingfeng Rd (lat ~30.7237, ±245m)
-#    - Qingfeng Rd south from Changshui Rd to Jiaxing South Station (lon ~120.7963, ±245m)
-#    - Jiaxing South Station full precinct (center 30.6927, 120.7958, ~840m x 780m)
+# 2. Additional city & scenic precincts seamlessly joined to MAIN_RECT:
+#    - Sam's Club / Shuangxi Lake precinct (south of MAIN_RECT, linking smoothly to Qingfeng Rd -> HSR South Sta.)
+#    - Xiangjiadang Wetland Park & Lake (northeast of MAIN_RECT, full lake & wetland parkways)
+#    - Qingfeng Rd south to Jiaxing South High-Speed Railway Station
 def rect_ll(s, w, n, e):
     x0, y1 = proj(s, w)
     x1, y0 = proj(n, e)
     return (round(x0, 1), round(y0, 1), round(x1, 1), round(y1, 1))
 
 
-CHANGSHUI_CORRIDOR = rect_ll(30.7212, 120.7805, 30.7264, 120.7992)
+CHANGSHUI_CORRIDOR = rect_ll(30.7212, 120.7805, 30.7264, 120.8125)
+SAMS_SHUANGXI_RECT = rect_ll(30.7035, 120.7785, 30.7150, 120.8020)
+XIANGJIADANG_RECT = rect_ll(30.7905, 120.7850, 30.8180, 120.8240)
 QINGFENG_CORRIDOR = rect_ll(30.6945, 120.7936, 30.7264, 120.7992)
 SOUTH_STA_PRECINCT = rect_ll(30.6888, 120.7905, 30.6968, 120.8012)
 # Extended HSR railway track corridor (~1.6km WSW and ~1.5km ENE past Jiaxing South Station along real 沪昆高速线)
@@ -84,7 +86,7 @@ AIRPORT_CORRIDOR_HALF_W = 240.0
 # Jiaxing Nanhu Airport precinct (terminal, ATC tower, cargo hangars, taxiways & 3400m Runway 12/30)
 AIRPORT_PRECINCT = (-10250.0, 4800.0, -6800.0, 7020.0)
 
-ACTIVE_RECTS = [MAIN_RECT, CHANGSHUI_CORRIDOR, QINGFENG_CORRIDOR, SOUTH_STA_PRECINCT]
+ACTIVE_RECTS = [MAIN_RECT, CHANGSHUI_CORRIDOR, SAMS_SHUANGXI_RECT, XIANGJIADANG_RECT, QINGFENG_CORRIDOR, SOUTH_STA_PRECINCT]
 _ALL_BOUNDS_RECTS = ACTIVE_RECTS + [HSR_RAIL_RECT, AIRPORT_PRECINCT]
 BOUNDS = (
     round(min(r[0] for r in _ALL_BOUNDS_RECTS) - 80.0),
@@ -92,24 +94,35 @@ BOUNDS = (
     round(max(r[2] for r in _ALL_BOUNDS_RECTS) + 80.0),
     round(max(r[3] for r in _ALL_BOUNDS_RECTS) + 80.0),
 )
-# Core built immediately on load (centered on Nanhu Lake & Old City); outer city + HSR/Airport corridors stream via CityTiles
+# Core built immediately on load (centered on Nanhu Lake & Old City); outer city + HSR/Airport/Xiangjiadang stream via CityTiles
 CORE_BOUNDS = [-1250.0, -1250.0, 1250.0, 1250.0]
 
-# Key real-world landmark coordinates (projected from verified OSM elements)
+# Key real-world landmark coordinates (projected from verified OSM & GPS elements)
 NANHU_ORIGIN = proj(30.7568, 120.7557)
 YANYU_POS = proj(30.75750, 120.75586)
 HAOGU_PAGODA_POS = (-96.0, -89.0)         # 壕股塔 (Nanhu west/north shore)
 HUIJINGYUAN_POS = (830.0, 56.0)           # 会景园码头 (Nanhu east shore)
+NANHU_GATE_POS = (862.0, 500.0)           # 南湖景区主大门广场
 NANHU_TIANDI_POS = (798.0, -347.0)        # 南湖天地 (Nanhu NE lakeside commercial heritage)
 MEMORIAL_POS = proj(30.74986, 120.75693)  # 南湖革命纪念馆
 GOV_POS = (-95.0, 610.0)                  # 嘉兴市人民政府
 JIAXING_NO1_POS = (1756.0, 1430.0)        # 嘉兴市第一中学
 YUEHE_POS = (-605.0, -2065.0)             # 月河历史街区
 ZICHENG_POS = (-306.0, -816.0)            # 子城遗址公园 · 谯楼
+CATHOLIC_CHURCH_POS = (-522.0, -894.0)    # 嘉兴天主教堂 (圣母显灵堂)
+FIRST_HOSPITAL_POS = (-1362.0, 1765.0)    # 嘉兴市第一医院
+SECOND_HOSPITAL_POS = (-198.0, -1781.0)   # 嘉兴市第二医院
+TCM_HOSPITAL_POS = (-2518.0, -835.0)      # 嘉兴市中医医院
+YAOHAN_POS = (-2339.0, -651.0)            # 八佰伴购物中心 (中山路店)
+YAOHAN_BRIDGE_POS = (-2210.0, -758.0)     # 八佰伴标志性环形人行天桥
 CENTRAL_PARK_POS = (1075.0, 3045.0)       # 嘉兴中央公园
-JIAXING_STA_POS = (710.0, -1265.0)        # 嘉兴火车站 (centered on 沪昆线 platforms)
+JIAXING_STA_POS = (710.0, -1265.0)        # 嘉兴火车站 (森林中的地下火车站 & 南广场)
 BOTANICAL_POS = proj(30.71740, 120.76420) # 嘉兴植物园温室
 SOUTH_STA_POS = proj(30.69275, 120.79580) # 嘉兴南站 (高铁枢纽)
+HILTON_POS = (3636.0, 1610.0)             # 嘉兴希尔顿酒店 (广益路)
+WANDA_NANHU_POS = (4428.0, 1858.0)        # 南湖万达广场 (广益路/庆丰路)
+SAMS_CLUB_POS = proj(30.709753, 120.785248)  # 嘉兴山姆会员商店 (槜李路/商务大道)
+XIANGJIADANG_PARK_POS = (4960.0, -5180.0) # 湘家荡湿地公园 (湖畔观鸟塔与生态栈道)
 AIRPORT_TERM_POS = (-9442.0, 5316.0)      # 嘉兴南湖机场航站楼 (IATA: JNH / ICAO: ZSJX)
 OLD_CITY_CENTER = proj(30.7655, 120.7460)
 
@@ -962,9 +975,10 @@ def build_rail_crossings(graph_edges, railways):
 
 
 # ---------------------------------------------------------------------------------------------
-# 3. Elevated Inner Ring Expressway Viaducts (嘉兴内环快速路全环) + Airport Expressway (机场快速路)
+# 3. Elevated Inner Ring Expressway Viaducts (嘉兴内环快速路全环闭合: 中环北/三环东/三环南/中环西) + Airport Expressway
 # ---------------------------------------------------------------------------------------------
-INNER_RING_NAMES = ("中环北路", "中环东路", "中环南路", "中环西路")
+INNER_RING_NAMES = ("中环北路", "中环西路", "三环东路", "三环南路", "内环快速路", "长水路")
+INNER_RING_BOX = (-3250.0, -4020.0, 5600.0, 3680.0)
 
 
 def build_freeways(nodes, ways):
@@ -1008,14 +1022,16 @@ def build_freeways(nodes, ways):
         cls = t.get("highway", "")
         if cls not in ("motorway", "motorway_link", "trunk", "trunk_link"):
             continue
-        if t.get("tunnel") in ("yes", "building_passage") or t.get("area") == "yes":
+        nm = t.get("name") or t.get("ref") or ""
+        if t.get("area") == "yes":
+            continue
+        if t.get("tunnel") in ("yes", "building_passage") and "内环快速路" not in nm:
             continue
         is_bridge = bool(t.get("bridge")) and t.get("bridge") != "no"
         try:
             layer = int(str(t.get("layer", "0")).split(";")[0])
         except ValueError:
             layer = 0
-        nm = t.get("name") or t.get("ref") or ""
         if cls == "trunk" and not is_bridge and layer <= 0 and "快速路" not in nm:
             continue
         ids = [r for r in refs if r in nodes]
@@ -1051,10 +1067,11 @@ def build_freeways(nodes, ways):
                                           min(a[0], b[0]) - 28, min(a[1], b[1]) - 28,
                                           max(a[0], b[0]) + 28, max(a[1], b[1]) + 28)
 
-    # Pass B: Complete all 4 sides of 嘉兴内环快速路 elevated viaduct directly above 中环北/东/南/西路!
+    # Pass B: Complete all 4 sides of 嘉兴内环快速路 elevated viaduct cleanly forming a 360-deg closed loop!
+    # Real Jiaxing Inner Ring Expressway runs along: 中环北路 (N) -> 三环东路 (E) -> 三环南路 (S) -> 中环西路 (W)
     ring_added = 0
     for wid, (refs, t) in ways.items():
-        if t.get("highway") != "primary":
+        if t.get("highway") not in ("primary", "trunk"):
             continue
         nm = t.get("name", "")
         if not any(rn in nm for rn in INNER_RING_NAMES):
@@ -1064,11 +1081,20 @@ def build_freeways(nodes, ways):
         ids = [r for r in refs if r in nodes]
         if len(ids) < 2:
             continue
-        pts = [nodes[i] for i in ids if in_rect(nodes[i], MAIN_RECT, 40.0)]
+        pts = [nodes[i] for i in ids if in_rect(nodes[i], INNER_RING_BOX, 40.0)]
         if len(pts) < 2:
             continue
-        # Skip pieces where OSM already provides a dedicated 内环快速路 viaduct right overhead
+        # Keep 三环南路 / 三环东路 strictly on the Inner Ring corridor (skip outer suburban branches!)
         mid = pts[len(pts) // 2]
+        if "三环南路" in nm and (mid[1] > 3620.0 or mid[0] < -2900.0 or mid[0] > 5480.0):
+            continue
+        if "长水路" in nm and (mid[1] < 3360.0 or mid[1] > 3560.0 or mid[0] < -2800.0 or mid[0] > 5400.0):
+            continue
+        if "三环东路" in nm and (mid[1] > 3580.0 or mid[1] < -3750.0 or mid[0] < 2400.0):
+            continue
+        if "中环西路" in nm and (mid[1] > 3560.0 or mid[1] < -3750.0):
+            continue
+        # Skip pieces where OSM already provides a dedicated 内环快速路 viaduct right overhead
         already = False
         for (ax, ay, bx, by) in existing_viaduct_grid.query(mid[0] - 26, mid[1] - 26, mid[0] + 26, mid[1] + 26):
             if seg_dist(mid[0], mid[1], ax, ay, bx, by)[0] < 24.0:
@@ -1078,9 +1104,22 @@ def build_freeways(nodes, ways):
             continue
         oneway = t.get("oneway", "no") in ("yes", "1", "-1")
         emit_viaduct(pts, 3 if oneway else 4, oneway, 7.4, "trunk", f"嘉兴内环快速路（{nm}）", is_link=False)
+        for a, b in zip(pts, pts[1:]):
+            existing_viaduct_grid.add((a[0], a[1], b[0], b[1]),
+                                      min(a[0], b[0]) - 28, min(a[1], b[1]) - 28,
+                                      max(a[0], b[0]) + 28, max(a[1], b[1]) + 28)
         ring_added += 1
 
-    print(f"Freeways (Inner Ring Viaduct + Airport Expressway): {len(out)} pieces (+{ring_added} Inner Ring completions)")
+    # Verify 360-degree ring continuity around ring center (1100, -100) across 36 angular sectors
+    ring_sectors = [0] * 36
+    for fw in out:
+        for pt in fw["pts"]:
+            if in_rect((pt[0], pt[1]), INNER_RING_BOX, 80.0):
+                if math.hypot(pt[0] - 1100.0, pt[1] + 100.0) > 2800.0:
+                    ang = math.degrees(math.atan2(pt[1] + 100.0, pt[0] - 1100.0)) % 360.0
+                    ring_sectors[int(ang // 10)] += 1
+    covered = sum(1 for c in ring_sectors if c > 0)
+    print(f"Freeways (Closed Inner Ring + Airport Expressway): {len(out)} pieces (+{ring_added} Inner Ring completions, {covered}/36 ring sectors covered)")
     return out
 
 
@@ -1129,21 +1168,31 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
     out = []
     taken = Grid(40.0)
 
-    # Landmark exclusion zones (bespoke 3D models built by JiaxingLandmarks)
+    # Landmark exclusion zones (bespoke 3D models built by JiaxingLandmarks & JiaxingCivicLandmarks)
     lm_zones = [
         (SOUTH_STA_POS, 195.0, "jiaxing_south_station"),
         (YANYU_POS, 52.0, "yanyu_tower"),
         (HAOGU_PAGODA_POS, 42.0, "haogu_pagoda"),
-        (HUIJINGYUAN_POS, 46.0, "huijingyuan"),
+        (HUIJINGYUAN_POS, 64.0, "huijingyuan"),
+        (NANHU_GATE_POS, 58.0, "nanhu_gate"),
         (NANHU_TIANDI_POS, 115.0, "nanhu_tiandi"),
         (MEMORIAL_POS, 105.0, "nanhu_memorial"),
         (GOV_POS, 125.0, "jiaxing_gov"),
         (JIAXING_NO1_POS, 155.0, "jiaxing_no1_school"),
-        (YUEHE_POS, 118.0, "yuehe_quarter"),
-        (ZICHENG_POS, 78.0, "zicheng_park"),
+        (YUEHE_POS, 145.0, "yuehe_quarter"),
+        (ZICHENG_POS, 92.0, "zicheng_park"),
+        (CATHOLIC_CHURCH_POS, 58.0, "catholic_church"),
+        (FIRST_HOSPITAL_POS, 128.0, "first_hospital"),
+        (SECOND_HOSPITAL_POS, 95.0, "second_hospital"),
+        (TCM_HOSPITAL_POS, 102.0, "tcm_hospital"),
+        (YAOHAN_POS, 88.0, "yaohan_mall"),
         (CENTRAL_PARK_POS, 92.0, "central_park"),
-        (JIAXING_STA_POS, 155.0, "jiaxing_station"),
+        (JIAXING_STA_POS, 165.0, "jiaxing_station"),
         (BOTANICAL_POS, 36.0, "botanical_conservatory"),
+        (HILTON_POS, 96.0, "hilton_hotel"),
+        (WANDA_NANHU_POS, 138.0, "wanda_nanhu"),
+        (SAMS_CLUB_POS, 115.0, "sams_club"),
+        (XIANGJIADANG_PARK_POS, 120.0, "xiangjiadang_park"),
         (AIRPORT_TERM_POS, 260.0, "jiaxing_airport"),
     ]
 
@@ -1911,6 +1960,24 @@ def main():
             best_idist = dd
             island_pts = [rnd(p) for p in ir]
 
+    # Extract ALL real OSM pedestrian stone bridges inside Yuehe Historic Quarter (月河古街步行桥)
+    yuehe_bridges = []
+    for wid, (refs, t) in ways.items():
+        if t.get("highway") in ("footway", "pedestrian", "path") and t.get("bridge") in ("yes", "viaduct", "arch"):
+            bpts = [nodes[r] for r in refs if r in nodes]
+            if len(bpts) < 2:
+                continue
+            bc = centroid(bpts)
+            if -860.0 <= bc[0] <= -420.0 and -2280.0 <= bc[1] <= -1880.0:
+                span = max(11.0, min(32.0, math.hypot(bpts[-1][0] - bpts[0][0], bpts[-1][1] - bpts[0][1]) + 4.0))
+                ang = -math.atan2(bpts[-1][1] - bpts[0][1], bpts[-1][0] - bpts[0][0])
+                yuehe_bridges.append({
+                    "pos": rnd(bc),
+                    "angle": round(ang, 4),
+                    "span": round(span, 1),
+                    "name": t.get("name", "月河石桥"),
+                })
+
     # Graceful Jiangnan stone arch pedestrian bridges over Huancheng Moat / Yuehe / Nanhu channels
     canal_bridges = [
         {"pos": rnd(proj(30.7734, 120.7458)), "angle": 0.45, "span": 22.0},   # 月河古桥
@@ -1919,7 +1986,7 @@ def main():
         {"pos": rnd(proj(30.7495, 120.7465)), "angle": 0.80, "span": 28.0},   # 西南湖步桥
         {"pos": rnd(proj(30.7662, 120.7396)), "angle": 1.45, "span": 32.0},   # 环城西路桥
         {"pos": rnd(proj(30.7730, 120.7495)), "angle": 0.12, "span": 32.0},   # 环城北路桥
-    ]
+    ] + yuehe_bridges
 
     # Extract real OSM Jiaxing Nanhu Airport (嘉兴南湖机场) runway 12/30 & main taxiways
     ap_runway = [[-10101.0, 5712.0], [-6909.0, 6893.0]]
@@ -1941,8 +2008,8 @@ def main():
         {"name": "五芳斋 · 嘉兴总店", "sub": "百年老字号", "pos": rnd((-250.1, -1168.3)), "angle": 0.0, "color": [0.76, 0.12, 0.12]},
         {"name": "戴梦得购物中心", "sub": "DAIMOND PLAZA", "pos": rnd((-722.1, -879.4)), "angle": 0.0, "color": [0.16, 0.20, 0.34]},
         {"name": "旭 辉 广 场", "sub": "CIFI MALL", "pos": rnd((-947.0, -896.5)), "angle": 0.0, "color": [0.80, 0.26, 0.14]},
-        {"name": "嘉兴万达广场", "sub": "WANDA PLAZA", "pos": rnd((-3645.8, -16.9)), "angle": 1.57, "color": [0.08, 0.32, 0.64]},
-        {"name": "八佰伴购物中心", "sub": "YAOHAN PLAZA", "pos": rnd((-2154.0, 2170.0)), "angle": 0.0, "color": [0.14, 0.22, 0.38]},
+        {"name": "经开万达广场", "sub": "WANDA PLAZA", "pos": rnd((-3645.8, -16.9)), "angle": 1.57, "color": [0.08, 0.32, 0.64]},
+        {"name": "华府八佰伴", "sub": "YAOHAN PLAZA", "pos": rnd((-2006.0, 2288.0)), "angle": 0.0, "color": [0.14, 0.22, 0.38]},
     ]
 
     landmarks = {
@@ -1950,15 +2017,25 @@ def main():
         "yanyu_tower": {"pos": rnd(YANYU_POS), "island_pts": island_pts},
         "haogu_pagoda": {"pos": rnd(HAOGU_PAGODA_POS)},
         "huijingyuan": {"pos": rnd(HUIJINGYUAN_POS)},
+        "nanhu_gate": {"pos": rnd(NANHU_GATE_POS), "angle": -0.25},
         "nanhu_tiandi": {"pos": rnd(NANHU_TIANDI_POS)},
         "nanhu_memorial": {"pos": rnd(MEMORIAL_POS), "angle": 0.08},
         "jiaxing_gov": {"pos": rnd(GOV_POS), "angle": 0.04},
         "jiaxing_no1_school": {"pos": rnd(JIAXING_NO1_POS), "angle": 0.02},
-        "yuehe_quarter": {"pos": rnd(YUEHE_POS), "angle": 0.14},
+        "yuehe_quarter": {"pos": rnd(YUEHE_POS), "angle": 0.14, "bridges": yuehe_bridges},
         "zicheng_park": {"pos": rnd(ZICHENG_POS), "angle": 0.05},
+        "catholic_church": {"pos": rnd(CATHOLIC_CHURCH_POS), "angle": 0.06},
+        "first_hospital": {"pos": rnd(FIRST_HOSPITAL_POS), "angle": 0.03},
+        "second_hospital": {"pos": rnd(SECOND_HOSPITAL_POS), "angle": 0.08},
+        "tcm_hospital": {"pos": rnd(TCM_HOSPITAL_POS), "angle": -0.10},
+        "yaohan_mall": {"pos": rnd(YAOHAN_POS), "bridge_pos": rnd(YAOHAN_BRIDGE_POS), "angle": 0.28},
         "central_park": {"pos": rnd(CENTRAL_PARK_POS), "angle": 0.0},
         "jiaxing_station": {"pos": rnd(JIAXING_STA_POS), "angle": round(jx_angle, 4)},
         "botanical_conservatory": {"pos": rnd(BOTANICAL_POS)},
+        "hilton_hotel": {"pos": rnd(HILTON_POS), "angle": 0.08},
+        "wanda_nanhu": {"pos": rnd(WANDA_NANHU_POS), "angle": 0.06},
+        "sams_club": {"pos": rnd(SAMS_CLUB_POS), "angle": 0.05},
+        "xiangjiadang_park": {"pos": rnd(XIANGJIADANG_PARK_POS), "angle": 0.12},
         "jiaxing_airport": {
             "pos": rnd(AIRPORT_TERM_POS),
             "angle": round(rwy_angle, 4),

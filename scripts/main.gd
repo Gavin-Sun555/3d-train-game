@@ -193,6 +193,7 @@ var _land_prev_elev := 0.0
 var _build_elev_idx := 2 # 0=B2(-18m), 1=B1(-10m), 2=G(0m), 3=L1(+7.2m), 4=L2(+13.8m)
 var _underground_view := false
 var _blueprint_root: Node3D = null
+var _underground_landmarks_root: Node3D = null
 var _btn_underground: Button
 var _elev_btns: Array[Button] = []
 var _road_lane_idx := 4
@@ -748,6 +749,9 @@ func _build_city_world() -> void:
 	if _blueprint_root != null and is_instance_valid(_blueprint_root):
 		_blueprint_root.queue_free()
 		_blueprint_root = null
+	if _underground_landmarks_root != null and is_instance_valid(_underground_landmarks_root):
+		_underground_landmarks_root.queue_free()
+		_underground_landmarks_root = null
 	_underground_view = false
 	_city_root.visible = true
 	_bld_grid.clear()
@@ -759,6 +763,17 @@ func _build_city_world() -> void:
 		_sidewalk_mat,
 		_globe_mat
 	)
+	# Reparent underground landmark concourses (e.g. Jiaxing Station B1 Hall) out of _city_root so they stay
+	# crisply visible at B1 (-10m) in Underground X-Ray View (U) for seamless subway interchange planning!
+	var b1_hall := _city_root.get_node_or_null("JiaxingLandmarks/JiaxingForestRailwayStation/JiaxingStationB1Hall") as Node3D
+	if b1_hall != null:
+		_underground_landmarks_root = Node3D.new()
+		_underground_landmarks_root.name = "UndergroundLandmarks"
+		add_child(_underground_landmarks_root)
+		var gtf := b1_hall.global_transform
+		b1_hall.get_parent().remove_child(b1_hall)
+		_underground_landmarks_root.add_child(b1_hall)
+		b1_hall.global_transform = gtf
 	_monorail_curve = lm_info.get("monorail_curve")
 	_monorail_cars = lm_info.get("monorail_cars", [])
 	_spheres_mat = lm_info.get("spheres_mat")
@@ -1057,6 +1072,12 @@ func _apply_underground_track_roof_visibility() -> void:
 			var sr := ch.get_node_or_null("UndergroundStationRoof")
 			if sr != null and sr is Node3D:
 				(sr as Node3D).visible = show_roof
+	if _underground_landmarks_root != null and is_instance_valid(_underground_landmarks_root):
+		for uch in _underground_landmarks_root.get_children():
+			if uch is Node3D:
+				var usr := uch.get_node_or_null("UndergroundStationRoof")
+				if usr != null and usr is Node3D:
+					(usr as Node3D).visible = show_roof
 
 
 func _ensure_blueprint_overlay() -> void:
