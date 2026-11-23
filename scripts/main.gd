@@ -349,6 +349,7 @@ var _lbl_gameover_detail: Label
 # Home Screen & Multi-Slot Save Manager UI
 var _home_overlay: Control
 var _home_card_panels: Dictionary = {}
+var _home_cards_scroll: ScrollContainer
 var _home_card_badges: Dictionary = {}
 var _btn_home_primary: Button
 var _btn_home_demo: Button
@@ -1556,6 +1557,8 @@ func _refresh_home_screen_ui() -> void:
 			sb.content_margin_left = 16; sb.content_margin_right = 16
 			sb.content_margin_top = 14; sb.content_margin_bottom = 14
 			card_pc.add_theme_stylebox_override("panel", sb)
+			if is_sel and _home_cards_scroll != null and is_instance_valid(_home_cards_scroll):
+				_home_cards_scroll.call_deferred("ensure_control_visible", card_pc)
 
 	var sel_sum := SaveManager.get_current_summary(_selected_home_map)
 	var latest_run := SaveManager.get_latest_run_slot(_selected_home_map)
@@ -4512,11 +4515,11 @@ func _build_home_screen_ui(parent: Control) -> void:
 	_home_overlay.add_child(center_wrap)
 
 	var main_card := _make_panel(Color(0.06, 0.08, 0.12, 0.94))
-	main_card.custom_minimum_size = Vector2(1060, 480)
+	main_card.custom_minimum_size = Vector2(920, 520)
 	center_wrap.add_child(main_card)
 
 	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 14)
+	vbox.add_theme_constant_override("separation", 12)
 	main_card.add_child(vbox)
 
 	var top_bar_h := HBoxContainer.new()
@@ -4524,7 +4527,7 @@ func _build_home_screen_ui(parent: Control) -> void:
 	vbox.add_child(top_bar_h)
 
 	var title_sp := Control.new()
-	title_sp.custom_minimum_size = Vector2(210, 0)
+	title_sp.custom_minimum_size = Vector2(180, 0)
 	top_bar_h.add_child(title_sp)
 
 	var title := Label.new()
@@ -4536,7 +4539,7 @@ func _build_home_screen_ui(parent: Control) -> void:
 	top_bar_h.add_child(title)
 
 	var home_lang_box := HBoxContainer.new()
-	home_lang_box.custom_minimum_size = Vector2(210, 0)
+	home_lang_box.custom_minimum_size = Vector2(180, 0)
 	home_lang_box.alignment = BoxContainer.ALIGNMENT_END
 	home_lang_box.add_theme_constant_override("separation", 4)
 	top_bar_h.add_child(home_lang_box)
@@ -4553,27 +4556,66 @@ func _build_home_screen_ui(parent: Control) -> void:
 		"Choose a city map to build · Turf/grooved/monorail tracks · 17 modern, vintage & monorail fleets · 10 manual + 5 auto saves"
 	)
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	sub.custom_minimum_size = Vector2(860, 0)
 	sub.add_theme_color_override("font_color", Color(0.72, 0.80, 0.88))
 	vbox.add_child(sub)
 
 	vbox.add_child(HSeparator.new())
 
+	# Horizontal scrollable city map carousel with left/right arrows (scales cleanly to any number of cities)
+	var carousel_row := HBoxContainer.new()
+	carousel_row.add_theme_constant_override("separation", 8)
+	vbox.add_child(carousel_row)
+
+	var btn_prev_cards := _make_btn("◀", func():
+		if _home_cards_scroll != null:
+			_home_cards_scroll.scroll_horizontal = maxi(0, _home_cards_scroll.scroll_horizontal - 382)
+	)
+	btn_prev_cards.custom_minimum_size = Vector2(30, 88)
+	btn_prev_cards.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	btn_prev_cards.tooltip_text = L10n.t("向左滚动地图列表", "Scroll map list left")
+	carousel_row.add_child(btn_prev_cards)
+
+	_home_cards_scroll = ScrollContainer.new()
+	_home_cards_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	_home_cards_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_home_cards_scroll.custom_minimum_size = Vector2(796, 298)
+	_home_cards_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_home_cards_scroll.follow_focus = true
+	carousel_row.add_child(_home_cards_scroll)
+
+	var scroll_margin := MarginContainer.new()
+	scroll_margin.add_theme_constant_override("margin_bottom", 12)
+	scroll_margin.add_theme_constant_override("margin_left", 2)
+	scroll_margin.add_theme_constant_override("margin_right", 2)
+	_home_cards_scroll.add_child(scroll_margin)
+
 	var cards_row := HBoxContainer.new()
-	cards_row.add_theme_constant_override("separation", 16)
-	vbox.add_child(cards_row)
+	cards_row.add_theme_constant_override("separation", 14)
+	scroll_margin.add_child(cards_row)
+
+	var btn_next_cards := _make_btn("▶", func():
+		if _home_cards_scroll != null:
+			_home_cards_scroll.scroll_horizontal += 382
+	)
+	btn_next_cards.custom_minimum_size = Vector2(30, 88)
+	btn_next_cards.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	btn_next_cards.tooltip_text = L10n.t("向右滚动地图列表", "Scroll map list right")
+	carousel_row.add_child(btn_next_cards)
 
 	_home_card_panels.clear()
 	_home_card_badges.clear()
 	for mkey: String in MAP_ORDER:
 		var preset: Dictionary = MAP_PRESETS[mkey]
 		var card := _make_panel(Color(0.08, 0.11, 0.16, 0.90))
-		card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		card.custom_minimum_size = Vector2(320, 255)
+		card.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+		card.custom_minimum_size = Vector2(368, 274)
 		cards_row.add_child(card)
 		_home_card_panels[mkey] = card
 
 		var cv := VBoxContainer.new()
-		cv.add_theme_constant_override("separation", 8)
+		cv.add_theme_constant_override("separation", 7)
 		card.add_child(cv)
 
 		var head_row := HBoxContainer.new()
@@ -4588,19 +4630,26 @@ func _build_home_screen_ui(parent: Control) -> void:
 
 		var t_lbl := Label.new()
 		t_lbl.text = _map_title(mkey)
-		t_lbl.add_theme_font_size_override("font_size", 20)
+		t_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		t_lbl.clip_text = true
+		t_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		t_lbl.add_theme_font_size_override("font_size", 19)
 		t_lbl.add_theme_color_override("font_color", Color(0.96, 0.97, 0.99))
 		head_row.add_child(t_lbl)
 
 		var sub_lbl := Label.new()
 		sub_lbl.text = _map_subtitle(mkey)
+		sub_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		sub_lbl.custom_minimum_size = Vector2(332, 34)
+		sub_lbl.add_theme_font_size_override("font_size", 13)
 		sub_lbl.add_theme_color_override("font_color", Color(0.62, 0.78, 0.94))
 		cv.add_child(sub_lbl)
 
 		var desc_lbl := Label.new()
 		desc_lbl.text = _map_desc(mkey)
 		desc_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		desc_lbl.custom_minimum_size = Vector2(290, 56)
+		desc_lbl.custom_minimum_size = Vector2(332, 56)
+		desc_lbl.add_theme_font_size_override("font_size", 13)
 		desc_lbl.add_theme_color_override("font_color", Color(0.80, 0.84, 0.88))
 		cv.add_child(desc_lbl)
 
@@ -4608,9 +4657,14 @@ func _build_home_screen_ui(parent: Control) -> void:
 
 		var badge_lbl := Label.new()
 		badge_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		badge_lbl.custom_minimum_size = Vector2(290, 44)
+		badge_lbl.custom_minimum_size = Vector2(332, 42)
+		badge_lbl.add_theme_font_size_override("font_size", 13)
 		cv.add_child(badge_lbl)
 		_home_card_badges[mkey] = badge_lbl
+
+		var card_sp := Control.new()
+		card_sp.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		cv.add_child(card_sp)
 
 		var m_copy := mkey
 		var sel_btn := _make_btn(L10n.t("选择此地图", "Select Map"), func(): _select_home_map_card(m_copy))
