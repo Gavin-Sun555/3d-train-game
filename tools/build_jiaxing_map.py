@@ -70,13 +70,16 @@ def rect_ll(s, w, n, e):
 CHANGSHUI_CORRIDOR = rect_ll(30.7212, 120.7805, 30.7264, 120.7992)
 QINGFENG_CORRIDOR = rect_ll(30.6945, 120.7936, 30.7264, 120.7992)
 SOUTH_STA_PRECINCT = rect_ll(30.6888, 120.7905, 30.6968, 120.8012)
+# Extended HSR railway track corridor (~1.6km WSW and ~1.5km ENE past Jiaxing South Station along real 沪昆高速线)
+HSR_RAIL_RECT = rect_ll(30.6830, 120.7775, 30.7025, 120.8125)
 
 ACTIVE_RECTS = [MAIN_RECT, CHANGSHUI_CORRIDOR, QINGFENG_CORRIDOR, SOUTH_STA_PRECINCT]
+_ALL_BOUNDS_RECTS = ACTIVE_RECTS + [HSR_RAIL_RECT]
 BOUNDS = (
-    round(min(r[0] for r in ACTIVE_RECTS) - 20.0),
-    round(min(r[1] for r in ACTIVE_RECTS) - 20.0),
-    round(max(r[2] for r in ACTIVE_RECTS) + 20.0),
-    round(max(r[3] for r in ACTIVE_RECTS) + 20.0),
+    round(min(r[0] for r in _ALL_BOUNDS_RECTS) - 40.0),
+    round(min(r[1] for r in _ALL_BOUNDS_RECTS) - 40.0),
+    round(max(r[2] for r in _ALL_BOUNDS_RECTS) + 40.0),
+    round(max(r[3] for r in _ALL_BOUNDS_RECTS) + 40.0),
 )
 # Core built immediately on load (centered on Nanhu Lake & Old City); outer city + HSR corridor stream via CityTiles
 CORE_BOUNDS = [-1250.0, -1250.0, 1250.0, 1250.0]
@@ -85,7 +88,8 @@ CORE_BOUNDS = [-1250.0, -1250.0, 1250.0, 1250.0]
 NANHU_ORIGIN = proj(30.7568, 120.7557)
 YANYU_POS = proj(30.75750, 120.75586)
 MEMORIAL_POS = proj(30.74986, 120.75693)
-JIAXING_STA_POS = proj(30.76660, 120.75950)
+# Centered directly on real OSM Jiaxing Railway Station platforms & 沪昆线 tracks
+JIAXING_STA_POS = (710.0, -1265.0)
 BOTANICAL_POS = proj(30.71740, 120.76420)
 SOUTH_STA_POS = proj(30.69275, 120.79580)
 OLD_CITY_CENTER = proj(30.7655, 120.7460)
@@ -572,16 +576,23 @@ def build_areas(nodes, ways, rels):
             if lu in ("residential", "commercial", "retail", "industrial", "governmental"):
                 landuse_zones.append((lu, ring))
         else:
-            # Linear canals / rivers -> buffered water ribbons so every canal on the screenshot renders!
+            # Linear canals / rivers -> buffered water ribbons so every canal & Huancheng Moat ring renders crisply!
             ww = t.get("waterway", "")
             if ww in ("river", "canal", "stream"):
                 pts = [nodes[r] for r in refs if r in nodes]
                 if len(pts) >= 2 and any(in_active(p, 40.0) for p in pts):
-                    hw = 12.0 if ww == "river" else (9.5 if ww == "canal" else 4.5)
+                    # Widen Old City Huancheng Moat (环城河) loop canals so the entire moat ring is prominent and unbroken!
+                    is_moat = wid in (32604136, 32601435, 651519049, 878953886, 878953885, 878953888, 976901775)
+                    if not is_moat and ww == "canal":
+                        cx_w = sum(p[0] for p in pts) / len(pts)
+                        cy_w = sum(p[1] for p in pts) / len(pts)
+                        if -1650.0 <= cx_w <= 550.0 and -2250.0 <= cy_w <= 200.0:
+                            is_moat = True
+                    hw = 15.5 if is_moat else (13.0 if ww == "river" else (10.5 if ww == "canal" else 5.0))
                     if t.get("width"):
                         try:
                             w_tag = float(str(t["width"]).split()[0].rstrip("m"))
-                            hw = max(3.5, min(28.0, w_tag * 0.5))
+                            hw = max(hw, min(28.0, w_tag * 0.5))
                         except (ValueError, IndexError):
                             pass
                     poly = buffer_polyline(pts, hw)
@@ -647,7 +658,122 @@ def build_areas(nodes, ways, rels):
     park_polys.append(sta_plaza)
 
     print(f"Areas: {len(areas)} total ({len(water_polys)} water pieces, {len(raw_islands)} lake islands, {len(park_polys)} parks/plazas, {len(landuse_zones)} landuse zones)")
-    return areas, water_polys, park_polys, named_plazas, landuse_zones
+    return areas, water_polys, park_polys, named_plazas, landuse_zones, raw_islands
+
+
+# ---------------------------------------------------------------------------------------------
+# 2b. Heavy Railways: 沪昆普速铁路 (Conventional Rail across Jiaxing + 嘉兴站)
+#     & 沪昆高速铁路 (Extended HSR Viaducts ~1.6km WSW & ~1.5km ENE around 嘉兴南站)
+# ---------------------------------------------------------------------------------------------
+def clip_segment_rect(ax, ay, bx, by, r):
+    """Liang-Barsky line-segment clip against rectangle (x0, y0, x1, y1)."""
+    dx, dy = bx - ax, by - ay
+    t0, t1 = 0.0, 1.0
+    for p, q in (
+        (-dx, ax - r[0]),
+        (dx, r[2] - ax),
+        (-dy, ay - r[1]),
+        (dy, r[3] - ay),
+    ):
+        if abs(p) < 1e-12:
+            if q < 0.0:
+                return None
+        else:
+            t = q / p
+            if p < 0.0:
+                if t > t1:
+                    return None
+                if t > t0:
+                    t0 = t
+            else:
+                if t < t0:
+                    return None
+                if t < t1:
+                    t1 = t
+    return ((ax + t0 * dx, ay + t0 * dy), (ax + t1 * dx, ay + t1 * dy))
+
+
+def clip_polyline_rect(pts, r):
+    """Split & clip a polyline against a rectangle, returning list of clipped sub-polylines."""
+    runs = []
+    cur = []
+    for a, b in zip(pts, pts[1:]):
+        seg = clip_segment_rect(a[0], a[1], b[0], b[1], r)
+        if seg is None:
+            if len(cur) >= 2:
+                runs.append(cur)
+            cur = []
+            continue
+        p0, p1 = seg
+        if not cur:
+            cur = [p0, p1]
+        elif math.hypot(cur[-1][0] - p0[0], cur[-1][1] - p0[1]) < 0.5:
+            cur.append(p1)
+        else:
+            if len(cur) >= 2:
+                runs.append(cur)
+            cur = [p0, p1]
+    if len(cur) >= 2:
+        runs.append(cur)
+    return runs
+
+
+def build_railways(nodes, ways, water_grid):
+    out = []
+    conv_cnt = 0
+    hsr_cnt = 0
+    for wid, (refs, t) in ways.items():
+        if t.get("railway") != "rail":
+            continue
+        if t.get("tunnel") in ("yes", "building_passage"):
+            continue
+        pts = [nodes[r] for r in refs if r in nodes]
+        if len(pts) < 2:
+            continue
+        nm = t.get("name", "")
+        is_hsr = (
+            "高速" in nm
+            or "嘉兴南" in nm
+            or t.get("highspeed") == "yes"
+            or any(in_rect(p, HSR_RAIL_RECT, 20.0) for p in pts)
+        )
+        is_bridge = bool(t.get("bridge")) and t.get("bridge") != "no"
+        if is_hsr:
+            for sub in clip_polyline_rect(pts, HSR_RAIL_RECT):
+                L = sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(sub, sub[1:]))
+                if L < 6.0:
+                    continue
+                out.append({
+                    "kind": "hsr",
+                    "name": nm or "沪昆高速线",
+                    "elevated": True,
+                    "y": 2.8,
+                    "pts": [rnd(p) for p in sub],
+                })
+                hsr_cnt += 1
+        else:
+            for sub in clip_polyline_rect(pts, MAIN_RECT):
+                L = sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(sub, sub[1:]))
+                if L < 6.0:
+                    continue
+                # Check if segment crosses water (mark as rail bridge!)
+                over_water = is_bridge
+                if not over_water:
+                    mid = sub[len(sub) // 2]
+                    for wp in water_grid.query(mid[0] - 4, mid[1] - 4, mid[0] + 4, mid[1] + 4):
+                        if point_in_poly(mid[0], mid[1], wp):
+                            over_water = True
+                            break
+                out.append({
+                    "kind": "conventional",
+                    "name": nm or "沪昆线",
+                    "elevated": over_water,
+                    "y": 0.45 if over_water else 0.0,
+                    "pts": [rnd(p) for p in sub],
+                })
+                conv_cnt += 1
+    print(f"Railways: {len(out)} tracks ({conv_cnt} conventional 沪昆线/嘉兴站 + {hsr_cnt} extended HSR 沪昆高速线/嘉兴南站)")
+    return out
 
 
 # ---------------------------------------------------------------------------------------------
@@ -762,16 +888,16 @@ def pitched_roof_dict(cx, cy, ang, hl, hw, shape="gabled"):
             "hl": round(hl, 2), "hw": round(hw, 2)}
 
 
-def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, landuse_zones, edges):
+def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_grid, landuse_zones, edges):
     out = []
     taken = Grid(40.0)
 
     # Landmark exclusion zones (bespoke 3D models built by JiaxingLandmarks)
     lm_zones = [
         (SOUTH_STA_POS, 195.0, "jiaxing_south_station"),
-        (YANYU_POS, 48.0, "yanyu_tower"),
+        (YANYU_POS, 52.0, "yanyu_tower"),
         (MEMORIAL_POS, 82.0, "nanhu_memorial"),
-        (JIAXING_STA_POS, 85.0, "jiaxing_station"),
+        (JIAXING_STA_POS, 155.0, "jiaxing_station"),
         (BOTANICAL_POS, 32.0, "botanical_conservatory"),
     ]
 
@@ -782,6 +908,13 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, landuse
         for lpos, lrad, _ in lm_zones:
             if math.hypot(cen[0] - lpos[0], cen[1] - lpos[1]) < lrad:
                 return False
+        # Check heavy railway clearance (never put buildings on top of 沪昆线 or 沪昆高速线 tracks!)
+        for (ax, ay, bx, by, rw) in rail_grid.query(bb[0] - 20, bb[1] - 20, bb[2] + 20, bb[3] + 20):
+            if seg_dist(cen[0], cen[1], ax, ay, bx, by)[0] < rw:
+                return False
+            for p in pts:
+                if seg_dist(p[0], p[1], ax, ay, bx, by)[0] < rw - 1.5:
+                    return False
         # Check road clearance
         for (ax, ay, bx, by, hw) in road_grid.query(bb[0] - 18, bb[1] - 18, bb[2] + 18, bb[3] + 18):
             lim = hw + 2.2
@@ -1065,7 +1198,7 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, landuse
 # ---------------------------------------------------------------------------------------------
 # 5. Roads, Crosswalks, Streetlamps, Avenue Trees, Storefronts
 # ---------------------------------------------------------------------------------------------
-def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_grid, water_grid, bld_grid):
+def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_grid, water_grid, rail_grid, bld_grid):
     deg = defaultdict(int)
     for e in edges:
         deg[e["a"]] += 1
@@ -1143,6 +1276,11 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
         if ok:
             for wp in water_grid.query(tx - 2, ty - 2, tx + 2, ty + 2):
                 if point_in_poly(tx, ty, wp):
+                    ok = False
+                    break
+        if ok:
+            for (ax, ay, bx, by, rw) in rail_grid.query(tx - 14, ty - 14, tx + 14, ty + 14):
+                if seg_dist(tx, ty, ax, ay, bx, by)[0] < rw - 2.5:
                     ok = False
                     break
         if ok:
@@ -1369,13 +1507,24 @@ def main():
     print("MAIN_RECT (screenshot):", MAIN_RECT)
     print("FULL BOUNDS (with Changshui-Qingfeng-South Station corridor):", BOUNDS)
 
-    areas, water_polys, park_polys, named_plazas, landuse_zones = build_areas(nodes, ways, rels)
+    areas, water_polys, park_polys, named_plazas, landuse_zones, raw_islands = build_areas(nodes, ways, rels)
 
     water_grid = Grid(60.0)
     for wp in water_polys:
         xs = [p[0] for p in wp]
         ys = [p[1] for p in wp]
         water_grid.add(wp, min(xs), min(ys), max(xs), max(ys))
+
+    railways = build_railways(nodes, ways, water_grid)
+    rail_grid = Grid(50.0)
+    for rw in railways:
+        rpts = rw["pts"]
+        r_clear = 14.0 if rw["kind"] == "hsr" else 11.5
+        for k in range(len(rpts) - 1):
+            a, b = rpts[k], rpts[k + 1]
+            rail_grid.add((a[0], a[1], b[0], b[1], r_clear),
+                          min(a[0], b[0]) - r_clear, min(a[1], b[1]) - r_clear,
+                          max(a[0], b[0]) + r_clear, max(a[1], b[1]) + r_clear)
 
     park_grid = Grid(60.0)
     for pp in park_polys:
@@ -1395,7 +1544,7 @@ def main():
                           min(a[0], b[0]) - hw, min(a[1], b[1]) - hw,
                           max(a[0], b[0]) + hw, max(a[1], b[1]) + hw)
 
-    blds = build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, landuse_zones, graph_edges)
+    blds = build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_grid, landuse_zones, graph_edges)
 
     bld_grid = Grid(45.0)
     for b in blds:
@@ -1404,15 +1553,30 @@ def main():
         bld_grid.add((min(xs), min(ys), max(xs), max(ys), b["pts"]), min(xs), min(ys), max(xs), max(ys))
 
     roads, cws, lamps, trees, storefronts = build_street_furniture(
-        graph_edges, graph_nodes, blds, poi_nodes, nodes, road_grid, water_grid, bld_grid
+        graph_edges, graph_nodes, blds, poi_nodes, nodes, road_grid, water_grid, rail_grid, bld_grid
     )
     freeways = build_freeways(nodes, ways)
     starter = build_t1_starter_network(graph_nodes, graph_edges)
 
-    # Exact HSR station angle from real OSM platform orientation (~26 deg ENE-WSW)
+    # Exact HSR station angle from real OSM platform orientation (~27 deg ENE-WSW)
     hsr_p0 = proj(30.69175, 120.79370)
     hsr_p1 = proj(30.69370, 120.79790)
     hsr_angle = -math.atan2(hsr_p1[1] - hsr_p0[1], hsr_p1[0] - hsr_p0[0])
+
+    # Exact Jiaxing Railway Station angle from real OSM 沪昆线 platforms (~45.1 deg NE-SW)
+    jx_p0 = (540.4, -1095.9)
+    jx_p1 = (924.9, -1483.4)
+    jx_angle = -math.atan2(jx_p1[1] - jx_p0[1], jx_p1[0] - jx_p0[0])
+
+    # Find Lake Heart Island polygon (closest island to YANYU_POS) for carved Jiangnan seawall & trees
+    island_pts = []
+    best_idist = 1e9
+    for ir in raw_islands:
+        ic = centroid(ir)
+        dd = math.hypot(ic[0] - YANYU_POS[0], ic[1] - YANYU_POS[1])
+        if dd < best_idist:
+            best_idist = dd
+            island_pts = [rnd(p) for p in ir]
 
     # Graceful Jiangnan stone arch pedestrian bridges over Huancheng Moat / Yuehe / Nanhu channels
     canal_bridges = [
@@ -1420,13 +1584,15 @@ def main():
         {"pos": rnd(proj(30.7536, 120.7596)), "angle": 0.15, "span": 28.0},   # 烟雨桥 / 南湖天地
         {"pos": rnd(proj(30.7618, 120.7530)), "angle": -0.35, "span": 26.0},  # 会景园桥
         {"pos": rnd(proj(30.7495, 120.7465)), "angle": 0.80, "span": 28.0},   # 西南湖步桥
+        {"pos": rnd(proj(30.7662, 120.7396)), "angle": 1.45, "span": 32.0},   # 环城西路桥
+        {"pos": rnd(proj(30.7730, 120.7495)), "angle": 0.12, "span": 32.0},   # 环城北路桥
     ]
 
     landmarks = {
         "jiaxing_south_station": {"pos": rnd(SOUTH_STA_POS), "angle": round(hsr_angle, 4)},
-        "yanyu_tower": {"pos": rnd(YANYU_POS)},
+        "yanyu_tower": {"pos": rnd(YANYU_POS), "island_pts": island_pts},
         "nanhu_memorial": {"pos": rnd(MEMORIAL_POS), "angle": 0.08},
-        "jiaxing_station": {"pos": rnd(JIAXING_STA_POS), "angle": 0.10},
+        "jiaxing_station": {"pos": rnd(JIAXING_STA_POS), "angle": round(jx_angle, 4)},
         "botanical_conservatory": {"pos": rnd(BOTANICAL_POS)},
         "canal_bridges": canal_bridges,
     }
@@ -1451,13 +1617,14 @@ def main():
         "plazas": named_plazas,
         "piers": [],
         "freeways": freeways,
+        "railways": railways,
     }
 
     with open(OUT, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, separators=(",", ":"))
     print(f"\nWrote {OUT} ({os.path.getsize(OUT) / 1e6:.1f} MB) — "
           f"{len(graph_nodes)} junctions, {len(graph_edges)} edges, {len(blds)} buildings, "
-          f"{len(areas)} areas, {len(trees)} trees, {len(lamps)} lamps, {len(freeways)} freeway pieces")
+          f"{len(areas)} areas, {len(trees)} trees, {len(lamps)} lamps, {len(freeways)} freeway pieces, {len(railways)} railways")
 
 
 if __name__ == "__main__":

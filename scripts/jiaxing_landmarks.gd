@@ -24,18 +24,20 @@ static func build(parent: Node3D, map_data: Dictionary, lights: Array) -> void:
 	root.name = "JiaxingLandmarks"
 	parent.add_child(root)
 
+	var south_sta_pos := Vector3(4190.0, 0.0, 6883.0)
 	if lm.has("jiaxing_south_station"):
 		var s: Dictionary = lm["jiaxing_south_station"]
-		_jiaxing_south_station(root, _p(s["pos"]), float(s.get("angle", -0.26)), lights)
+		south_sta_pos = _p(s["pos"])
+		_jiaxing_south_station(root, south_sta_pos, float(s.get("angle", 0.47)), lights)
 	if lm.has("yanyu_tower"):
 		var y: Dictionary = lm["yanyu_tower"]
-		_yanyu_tower_and_red_boat(root, _p(y["pos"]), lights)
+		_yanyu_tower_and_red_boat(root, _p(y["pos"]), y.get("island_pts", []), lights)
 	if lm.has("nanhu_memorial"):
 		var m: Dictionary = lm["nanhu_memorial"]
 		_nanhu_memorial_hall(root, _p(m["pos"]), float(m.get("angle", 0.0)), lights)
 	if lm.has("jiaxing_station"):
 		var j: Dictionary = lm["jiaxing_station"]
-		_jiaxing_station(root, _p(j["pos"]), float(j.get("angle", 0.12)), lights)
+		_jiaxing_station(root, _p(j["pos"]), float(j.get("angle", 0.788)), lights)
 	if lm.has("botanical_conservatory"):
 		var bc: Dictionary = lm["botanical_conservatory"]
 		_botanical_conservatory(root, _p(bc["pos"]), lights)
@@ -43,6 +45,9 @@ static func build(parent: Node3D, map_data: Dictionary, lights: Array) -> void:
 	for br in bridges:
 		if br is Dictionary:
 			_jiangnan_arch_bridge(root, _p(br["pos"]), float(br.get("angle", 0.0)), float(br.get("span", 24.0)))
+	var railways: Array = map_data.get("railways", [])
+	if not railways.is_empty():
+		_build_railways(root, railways, south_sta_pos)
 
 
 static func _p(a: Array) -> Vector3:
@@ -321,20 +326,77 @@ static func _add_hsr_train(parent: Node3D, pos: Vector3, heading: float) -> void
 
 
 # =============================================================================================
-# 2. 南湖湖心岛 · 烟雨楼 & 南湖红船 (Yanyu Tower & Red Boat on Nanhu Lake)
+# 2. 南湖湖心岛 · 烟雨楼 & 南湖红船 (Lake Heart Island, Yanyu Tower & Red Boat on Nanhu Lake)
 # =============================================================================================
-static func _yanyu_tower_and_red_boat(parent: Node3D, center: Vector3, lights: Array) -> void:
+static func _yanyu_tower_and_red_boat(parent: Node3D, center: Vector3, island_pts: Array, lights: Array) -> void:
 	var nanhu := Node3D.new()
 	nanhu.name = "NanhuYanyuTowerAndRedBoat"
 	nanhu.position = center
 	parent.add_child(nanhu)
 
 	var stone_white := _mat(Color(0.86, 0.85, 0.81), 0.74, 0.0)
+	var seawall_stone := _mat(Color(0.76, 0.75, 0.71), 0.82, 0.0)
 	var wall_plaster := _mat(Color(0.92, 0.90, 0.85), 0.80, 0.0)
 	var wood_vermilion := _mat(Color(0.56, 0.15, 0.12), 0.55, 0.05)
 	var tile_dark := _mat(Color(0.20, 0.22, 0.26), 0.58, 0.08)
 	var gold_trim := _mat(Color(0.88, 0.72, 0.24), 0.32, 0.65)
 	var lantern_glow := _emissive(Color(1.0, 0.72, 0.32), 2.0)
+
+	# --- Carved White-Stone Jiangnan Island Seawall (湖心岛石驳岸) & Perimeter Weeping Willows ---
+	var trunk_mat := _mat(Color(0.32, 0.24, 0.17), 0.88, 0.0)
+	var willow_mat := _mat(Color(0.28, 0.52, 0.22), 0.82, 0.0)
+	var cypress_mat := _mat(Color(0.16, 0.36, 0.17), 0.84, 0.0)
+	if island_pts.size() >= 3:
+		var wall_st := SurfaceTool.new()
+		wall_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		var local_ring: Array[Vector2] = []
+		for raw_p in island_pts:
+			local_ring.append(Vector2(float(raw_p[0]) - center.x, float(raw_p[1]) - center.z))
+		var tree_acc := 0.0
+		var tree_idx := 0
+		for i in range(local_ring.size()):
+			var a := local_ring[i]
+			var b := local_ring[(i + 1) % local_ring.size()]
+			var seg := b - a
+			var slen := seg.length()
+			if slen < 0.4:
+				continue
+			# Stone embankment coping beam along the island's real OSM shoreline
+			_st_box_along(wall_st, a, b, 1.9, 0.0, 0.54)
+			# Place Jiangnan weeping willows & lakeside cypresses ~6m inside the seawall
+			tree_acc += slen
+			if tree_acc >= 14.5:
+				tree_acc = 0.0
+				var mid := (a + b) * 0.5
+				var to_in := -mid.normalized()
+				var tp := mid + to_in * 6.5
+				# Keep clear of Yanyu Tower terrace and SE Red Boat pier
+				if tp.length() > 19.0 and tp.distance_to(Vector2(34.0, 26.0)) > 16.0:
+					var is_willow := (tree_idx % 3 != 0)
+					var th := 5.5 + float(tree_idx % 4) * 1.1
+					_add_cyl(nanhu, 0.24, 0.36, th * 0.55, Vector3(tp.x, th * 0.28, tp.y), trunk_mat, 7)
+					var crown_r := 4.0 if is_willow else 2.8
+					_add_cyl(nanhu, crown_r * 0.55, crown_r, th * 0.62, Vector3(tp.x, th * 0.68, tp.y), willow_mat if is_willow else cypress_mat, 8)
+					_add_cyl(nanhu, crown_r * 0.2, crown_r * 0.72, th * 0.35, Vector3(tp.x, th * 0.98, tp.y), willow_mat if is_willow else cypress_mat, 8)
+					tree_idx += 1
+		var wall_mi := MeshInstance3D.new()
+		wall_mi.name = "LakeHeartIslandSeawall"
+		wall_mi.mesh = wall_st.commit()
+		seawall_stone.cull_mode = BaseMaterial3D.CULL_DISABLED
+		wall_mi.material_override = seawall_stone
+		nanhu.add_child(wall_mi)
+
+	# Paved stone island courtyard pathways & north lakeside viewing pavilion (观湖亭)
+	_add_box(nanhu, Vector3(4.2, 0.16, 48.0), Vector3(0.0, 0.28, 0.0), stone_white, 0.0, 0.0, 0.0, false)
+	_add_box(nanhu, Vector3(44.0, 0.16, 4.2), Vector3(12.0, 0.28, 12.0), stone_white, -0.35, 0.0, 0.0, false)
+	# Octagonal riverside pavilion on north point of island
+	var pav_pos := Vector3(-16.0, 0.0, -32.0)
+	_add_cyl(nanhu, 4.6, 5.0, 0.9, pav_pos + Vector3(0.0, 0.45, 0.0), stone_white, 8)
+	for pi in range(6):
+		var pa := float(pi) * TAU / 6.0
+		_add_cyl(nanhu, 0.16, 0.18, 3.6, pav_pos + Vector3(cos(pa) * 3.4, 2.7, sin(pa) * 3.4), wood_vermilion, 8)
+	_add_cyl(nanhu, 0.6, 5.6, 2.5, pav_pos + Vector3(0.0, 5.6, 0.0), tile_dark, 8)
+	_add_cyl(nanhu, 0.12, 0.28, 0.9, pav_pos + Vector3(0.0, 7.1, 0.0), gold_trim, 8)
 
 	# Raised stone terrace (台基) + carved balustrade
 	_add_box(nanhu, Vector3(28.0, 2.2, 20.0), Vector3(0.0, 1.1, 0.0), stone_white)
@@ -463,7 +525,7 @@ static func _nanhu_memorial_hall(parent: Node3D, center: Vector3, angle: float, 
 
 
 # =============================================================================================
-# 4. 嘉兴站 ("森林中的火车站" + 1909 历史老站房)
+# 4. 嘉兴火车站 ("森林中的火车站" + 1909 历史老站房 + 沪昆线站台与绿巨人列车)
 # =============================================================================================
 static func _jiaxing_station(parent: Node3D, center: Vector3, angle: float, lights: Array) -> void:
 	var jx := Node3D.new()
@@ -475,26 +537,52 @@ static func _jiaxing_station(parent: Node3D, center: Vector3, angle: float, ligh
 	var solar_dark := _mat(Color(0.16, 0.20, 0.26), 0.28, 0.58)
 	var ceiling_wood := _mat(Color(0.76, 0.58, 0.38), 0.62, 0.04)
 	var steel_white := _mat(Color(0.92, 0.93, 0.95), 0.36, 0.22)
+	var roof_silver := _mat(Color(0.80, 0.83, 0.87), 0.34, 0.48)
+	var granite := _mat(Color(0.78, 0.77, 0.74), 0.70, 0.03)
+	var yellow_line := _mat(Color(0.94, 0.78, 0.18), 0.55, 0.0)
 	var brick_red := _mat(Color(0.60, 0.28, 0.22), 0.80, 0.0)
 	var brick_grey := _mat(Color(0.46, 0.48, 0.50), 0.78, 0.0)
 	var tile_grey := _mat(Color(0.28, 0.30, 0.34), 0.64, 0.06)
 	var glass_clear := _glass(Color(0.36, 0.52, 0.64), 0.55)
 	var warm_glow := _emissive(Color(1.0, 0.90, 0.70), 0.85)
 
-	# Modern MAD "Train Station in the Forest" floating cantilevered roof (124m x 42m)
-	_add_box(jx, Vector3(124.0, 0.55, 42.0), Vector3(0.0, 9.8, 0.0), solar_dark)
-	_add_box(jx, Vector3(122.0, 0.32, 40.0), Vector3(0.0, 9.35, 0.0), ceiling_wood)
-	_add_box(jx, Vector3(92.0, 7.6, 26.0), Vector3(0.0, 4.0, 0.0), glass_clear)
-	_add_box(jx, Vector3(86.0, 6.2, 22.0), Vector3(0.0, 3.4, 0.0), warm_glow, 0.0, 0.0, 0.0, false)
-	for ci in range(-6, 7):
-		var cx := float(ci) * 9.6
-		_add_cyl(jx, 0.28, 0.32, 9.4, Vector3(cx, 4.7, -18.0), steel_white, 10)
-		_add_cyl(jx, 0.28, 0.32, 9.4, Vector3(cx, 4.7, 18.0), steel_white, 10)
-	_add_sign_label(jx, "嘉 兴 站", Vector3(0.0, 11.4, 21.2), 0.0, 100, 0.032, Color(0.92, 0.16, 0.16))
+	# --- A. 3 Covered Rail Platforms along real 沪昆线 tracks (local X = NE-SW track axis) ---
+	for pz: float in [-18.5, 0.0, 18.5]:
+		# Platform slab (290m long, 7.2m wide, 1.25m high)
+		_add_box(jx, Vector3(290.0, 1.25, 7.2), Vector3(0.0, 0.65, pz), granite)
+		_add_box(jx, Vector3(288.0, 0.04, 0.26), Vector3(0.0, 1.30, pz - 3.15), yellow_line, 0.0, 0.0, 0.0, false)
+		_add_box(jx, Vector3(288.0, 0.04, 0.26), Vector3(0.0, 1.30, pz + 3.15), yellow_line, 0.0, 0.0, 0.0, false)
+		# Sleek modern cantilevered platform canopy (warm timber soffit + dark metal roof)
+		_add_box(jx, Vector3(268.0, 0.38, 8.8), Vector3(0.0, 7.6, pz), roof_silver)
+		_add_box(jx, Vector3(266.0, 0.18, 7.6), Vector3(0.0, 7.34, pz), ceiling_wood, 0.0, 0.0, 0.0, false)
+		_add_box(jx, Vector3(264.0, 0.10, 1.1), Vector3(0.0, 7.22, pz), warm_glow, 0.0, 0.0, 0.0, false)
+		for pi in range(-5, 6):
+			var px := float(pi) * 24.0
+			_add_cyl(jx, 0.24, 0.28, 6.2, Vector3(px, 4.3, pz), steel_white, 10)
 
-	# 1909 Historic Brick Old Jiaxing Station (嘉兴老火车站) reconstructed in front plaza
+	# Overhead glass-and-wood passenger footbridge connecting all 3 platforms & main station hall
+	_add_box(jx, Vector3(22.0, 4.4, 72.0), Vector3(0.0, 10.6, -12.0), roof_silver)
+	_add_box(jx, Vector3(22.4, 3.0, 68.0), Vector3(0.0, 10.6, -12.0), glass_clear)
+
+	# --- B. Parked Classic CR200J "复兴号绿巨人" Conventional Passenger Train at Platform 2 ---
+	_add_cr200j_train(jx, Vector3(-12.0, 0.44, -9.2))
+
+	# --- C. Modern MAD "Train Station in the Forest" floating cantilevered roof (NW plaza side, z = -46) ---
+	_add_box(jx, Vector3(132.0, 0.35, 54.0), Vector3(0.0, 0.18, -54.0), granite, 0.0, 0.0, 0.0, false)
+	_add_box(jx, Vector3(128.0, 0.58, 40.0), Vector3(0.0, 9.8, -46.0), solar_dark)
+	_add_box(jx, Vector3(126.0, 0.34, 38.0), Vector3(0.0, 9.35, -46.0), ceiling_wood)
+	_add_box(jx, Vector3(96.0, 7.6, 25.0), Vector3(0.0, 4.0, -46.0), glass_clear)
+	_add_box(jx, Vector3(90.0, 6.2, 21.0), Vector3(0.0, 3.4, -46.0), warm_glow, 0.0, 0.0, 0.0, false)
+	for ci in range(-6, 7):
+		var cx := float(ci) * 9.8
+		_add_cyl(jx, 0.28, 0.32, 9.4, Vector3(cx, 4.7, -63.0), steel_white, 10)
+		_add_cyl(jx, 0.28, 0.32, 9.4, Vector3(cx, 4.7, -29.0), steel_white, 10)
+	_add_sign_label(jx, "嘉 兴 站", Vector3(0.0, 11.4, -66.2), PI, 106, 0.034, Color(0.92, 0.16, 0.16))
+	_add_sign_label(jx, "嘉 兴 站", Vector3(0.0, 11.4, -25.8), 0.0, 100, 0.032, Color(0.92, 0.16, 0.16))
+
+	# --- D. 1909 Historic Brick Old Jiaxing Station (嘉兴老火车站) reconstructed in north heritage plaza ---
 	var old_st := Node3D.new()
-	old_st.position = Vector3(-42.0, 0.0, 38.0)
+	old_st.position = Vector3(-48.0, 0.0, -86.0)
 	jx.add_child(old_st)
 	_add_box(old_st, Vector3(36.0, 10.2, 14.0), Vector3(0.0, 5.1, 0.0), brick_red)
 	_add_box(old_st, Vector3(36.4, 1.4, 14.4), Vector3(0.0, 0.7, 0.0), brick_grey)
@@ -503,16 +591,48 @@ static func _jiaxing_station(parent: Node3D, center: Vector3, angle: float, ligh
 	# Pitched grey tile roof
 	_add_box(old_st, Vector3(38.0, 0.6, 9.2), Vector3(0.0, 11.4, -3.5), tile_grey, 0.0, 0.0, 0.42)
 	_add_box(old_st, Vector3(38.0, 0.6, 9.2), Vector3(0.0, 11.4, 3.5), tile_grey, 0.0, 0.0, -0.42)
-	_add_sign_label(old_st, "嘉 兴 老 站", Vector3(0.0, 13.4, 7.8), 0.0, 56, 0.022, Color(0.96, 0.88, 0.62))
+	_add_sign_label(old_st, "嘉 兴 老 站", Vector3(0.0, 13.4, -7.8), PI, 56, 0.022, Color(0.96, 0.88, 0.62))
 
 	var pl := OmniLight3D.new()
-	pl.position = Vector3(0.0, 8.5, 24.0)
+	pl.position = Vector3(0.0, 9.0, -56.0)
 	pl.light_color = Color(1.0, 0.88, 0.68)
-	pl.omni_range = 48.0
+	pl.omni_range = 55.0
 	pl.light_energy = 0.0
 	pl.visible = false
 	jx.add_child(pl)
 	lights.append(pl)
+
+
+static func _add_cr200j_train(parent: Node3D, pos: Vector3) -> void:
+	var tr := Node3D.new()
+	tr.position = pos
+	parent.add_child(tr)
+
+	var body_green := _mat(Color(0.11, 0.44, 0.25), 0.28, 0.16)
+	var stripe_gold := _mat(Color(0.92, 0.76, 0.16), 0.30, 0.18)
+	var roof_white := _mat(Color(0.86, 0.88, 0.90), 0.34, 0.15)
+	var window_dark := _mat(Color(0.08, 0.11, 0.15), 0.10, 0.52)
+	var bogie_dark := _mat(Color(0.18, 0.19, 0.21), 0.74, 0.25)
+	var head_glow := _emissive(Color(1.0, 0.95, 0.80), 2.0)
+
+	# 7-car CR200J "复兴号绿巨人" (~175m long)
+	var car_len := 24.0
+	for ci in range(7):
+		var cx := (float(ci) - 3.0) * (car_len + 0.45)
+		var is_end := (ci == 0 or ci == 6)
+		var body_l := car_len - (3.0 if is_end else 0.0)
+		var body_x := cx + (-1.5 if ci == 6 else (1.5 if ci == 0 else 0.0))
+		_add_box(tr, Vector3(body_l, 3.2, 3.1), Vector3(body_x, 2.02, 0.0), body_green)
+		_add_box(tr, Vector3(body_l - 0.4, 0.32, 2.85), Vector3(body_x, 3.68, 0.0), roof_white, 0.0, 0.0, 0.0, false)
+		_add_box(tr, Vector3(body_l + 0.05, 0.82, 3.14), Vector3(body_x, 2.38, 0.0), window_dark, 0.0, 0.0, 0.0, false)
+		_add_box(tr, Vector3(body_l + 0.08, 0.24, 3.16), Vector3(body_x, 1.56, 0.0), stripe_gold, 0.0, 0.0, 0.0, false)
+		_add_box(tr, Vector3(body_l - 1.2, 0.45, 2.6), Vector3(body_x, 0.34, 0.0), bogie_dark, 0.0, 0.0, 0.0, false)
+		if is_end:
+			var sgn := -1.0 if ci == 0 else 1.0
+			var nx := cx + sgn * (car_len * 0.5 - 1.5)
+			_add_box(tr, Vector3(3.4, 2.4, 2.95), Vector3(nx + sgn * 1.1, 1.72, 0.0), body_green, 0.0, -sgn * 0.22)
+			_add_box(tr, Vector3(1.8, 0.8, 2.7), Vector3(nx + sgn * 0.9, 2.35, 0.0), window_dark, 0.0, -sgn * 0.30)
+			_add_box(tr, Vector3(0.24, 0.22, 1.7), Vector3(nx + sgn * 2.8, 1.08, 0.0), head_glow, 0.0, 0.0, 0.0, false)
 
 
 # =============================================================================================
@@ -571,3 +691,221 @@ static func _jiangnan_arch_bridge(parent: Node3D, center: Vector3, angle: float,
 		_add_box(br, Vector3(sl, 0.55, 5.2), Vector3(um * span, (h0 + h1) * 0.5, 0.0), stone, 0.0, tilt)
 		_add_box(br, Vector3(sl, 0.95, 0.28), Vector3(um * span, (h0 + h1) * 0.5 + 0.72, -2.45), rail, 0.0, tilt)
 		_add_box(br, Vector3(sl, 0.95, 0.28), Vector3(um * span, (h0 + h1) * 0.5 + 0.72, 2.45), rail, 0.0, tilt)
+
+
+# =============================================================================================
+# 6. Heavy Railways: 沪昆普速铁路 (Conventional Rail) & 沪昆高速铁路 (Extended HSR Viaducts)
+#    Batched into 5 ArrayMeshes for crisp 3D tracks, viaducts, piers, sleepers & catenary!
+# =============================================================================================
+static func _build_railways(parent: Node3D, railways: Array, south_sta_pos: Vector3) -> void:
+	var rail_root := Node3D.new()
+	rail_root.name = "JiaxingHeavyRailways"
+	parent.add_child(rail_root)
+
+	var st_viaduct := SurfaceTool.new()
+	st_viaduct.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var st_ballast := SurfaceTool.new()
+	st_ballast.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var st_sleeper := SurfaceTool.new()
+	st_sleeper.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var st_steel := SurfaceTool.new()
+	st_steel.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var st_cat := SurfaceTool.new()
+	st_cat.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	var has_viaduct := false
+	var has_ballast := false
+	var has_sleeper := false
+	var has_steel := false
+	var has_cat := false
+	var pier_cells := {}
+	var mast_cells := {}
+	var sta_xz := Vector2(south_sta_pos.x, south_sta_pos.z)
+
+	for rw: Dictionary in railways:
+		var raw_pts: Array = rw.get("pts", [])
+		if raw_pts.size() < 2:
+			continue
+		var is_hsr := str(rw.get("kind", "")) == "hsr"
+		var is_elev := bool(rw.get("elevated", false))
+		var base_y := float(rw.get("y", 2.8 if is_hsr else 0.0))
+
+		var pts: Array[Vector2] = []
+		for rp in raw_pts:
+			pts.append(Vector2(float(rp[0]), float(rp[1])))
+
+		var sleeper_acc := 0.0
+		var pier_acc := 16.0
+		var mast_acc := 24.0
+
+		for i in range(pts.size() - 1):
+			var a := pts[i]
+			var b := pts[i + 1]
+			var seg := b - a
+			var slen := seg.length()
+			if slen < 0.25:
+				continue
+			var dir := seg / slen
+			var nrm := Vector2(-dir.y, dir.x)
+			var mid := (a + b) * 0.5
+
+			if is_hsr:
+				var in_sta_box := mid.distance_to(sta_xz) < 224.0
+				# Elevated HSR concrete box-girder viaduct + acoustic parapets outside the station deck
+				if not in_sta_box:
+					_st_box_along(st_viaduct, a, b, 6.2, 1.45, 2.75)
+					# Outer acoustic noise-barrier parapets on both sides of viaduct deck
+					_st_box_along(st_viaduct, a + nrm * 2.9, b + nrm * 2.9, 0.36, 2.75, 3.85)
+					_st_box_along(st_viaduct, a - nrm * 2.9, b - nrm * 2.9, 0.36, 2.75, 3.85)
+					has_viaduct = true
+				# CRTS ballastless concrete slab + twin gleaming steel rails (seamlessly meets station deck at y=2.98!)
+				if mid.distance_to(sta_xz) > 200.0:
+					_st_box_along(st_sleeper, a, b, 2.55, 2.75, 2.88)
+					has_sleeper = true
+					for rside: float in [-0.72, 0.72]:
+						_st_box_along(st_steel, a + nrm * rside, b + nrm * rside, 0.15, 2.88, 3.04)
+					has_steel = true
+					# Overhead HSR contact wire (y = 8.15m)
+					_st_box_along(st_cat, a, b, 0.08, 8.12, 8.20)
+					has_cat = true
+
+				# Viaduct piers every 34m & catenary masts every 52m (deduplicated across twin parallel HSR tracks)
+				var s := 0.0
+				while s < slen:
+					var p := a + dir * s
+					var d_sta := p.distance_to(sta_xz)
+					if d_sta > 228.0:
+						if pier_acc >= 34.0:
+							pier_acc = 0.0
+							var pck := Vector2i(int(floor(p.x / 14.0)), int(floor(p.y / 14.0)))
+							if not pier_cells.has(pck):
+								pier_cells[pck] = true
+								_st_axis_box(st_viaduct, p, dir, 2.2, 4.4, 0.0, 1.55)
+								has_viaduct = true
+						if mast_acc >= 52.0:
+							mast_acc = 0.0
+							var mck := Vector2i(int(floor(p.x / 18.0)), int(floor(p.y / 18.0)))
+							if not mast_cells.has(mck):
+								mast_cells[mck] = true
+								var mp := p + nrm * 2.75
+								_st_axis_box(st_cat, mp, dir, 0.28, 0.28, 2.75, 8.9)
+								_st_axis_box(st_cat, p + nrm * 1.15, dir, 0.16, 3.3, 8.15, 8.32)
+								has_cat = true
+					var step := minf(6.0, slen - s)
+					if step < 0.05:
+						break
+					s += step
+					pier_acc += step
+					mast_acc += step
+			else:
+				# Conventional Railway (沪昆线 & 嘉兴火车站 tracks): ballast bed, bridge girder over water, ties, steel rails, catenary
+				var deck_y := base_y + 0.30
+				if is_elev:
+					_st_box_along(st_viaduct, a, b, 5.2, 0.0, base_y + 0.28)
+					_st_box_along(st_viaduct, a + nrm * 2.45, b + nrm * 2.45, 0.30, base_y + 0.28, base_y + 1.15)
+					_st_box_along(st_viaduct, a - nrm * 2.45, b - nrm * 2.45, 0.30, base_y + 0.28, base_y + 1.15)
+					has_viaduct = true
+				_st_box_along(st_ballast, a, b, 4.4, maxf(0.04, base_y), deck_y)
+				has_ballast = true
+				for rside: float in [-0.72, 0.72]:
+					_st_box_along(st_steel, a + nrm * rside, b + nrm * rside, 0.15, deck_y + 0.06, deck_y + 0.20)
+				has_steel = true
+				_st_box_along(st_cat, a, b, 0.07, deck_y + 5.55, deck_y + 5.62)
+				has_cat = true
+
+				# Sleepers every 2.2m & electrification masts every 56m
+				var s2 := 0.0
+				while s2 < slen:
+					var p2 := a + dir * s2
+					if sleeper_acc >= 2.2:
+						sleeper_acc = 0.0
+						_st_axis_box(st_sleeper, p2, dir, 0.26, 2.45, deck_y - 0.02, deck_y + 0.08)
+						has_sleeper = true
+					if mast_acc >= 56.0:
+						mast_acc = 0.0
+						var mck2 := Vector2i(int(floor(p2.x / 18.0)), int(floor(p2.y / 18.0)))
+						if not mast_cells.has(mck2):
+							mast_cells[mck2] = true
+							var mp2 := p2 + nrm * 2.35
+							_st_axis_box(st_cat, mp2, dir, 0.26, 0.26, maxf(0.0, base_y), deck_y + 6.3)
+							_st_axis_box(st_cat, p2 + nrm * 1.0, dir, 0.14, 2.8, deck_y + 5.58, deck_y + 5.74)
+							has_cat = true
+					var step2 := minf(2.2, slen - s2)
+					if step2 < 0.05:
+						break
+					s2 += step2
+					sleeper_acc += step2
+					mast_acc += step2
+
+	if has_viaduct:
+		_emit_st(rail_root, "RailViaductConcrete", st_viaduct, _mat(Color(0.74, 0.74, 0.72), 0.80, 0.02), true)
+	if has_ballast:
+		_emit_st(rail_root, "RailBallast", st_ballast, _mat(Color(0.45, 0.43, 0.40), 0.94, 0.0), false)
+	if has_sleeper:
+		_emit_st(rail_root, "RailSleepers", st_sleeper, _mat(Color(0.68, 0.67, 0.64), 0.86, 0.0), false)
+	if has_steel:
+		_emit_st(rail_root, "RailSteel", st_steel, _mat(Color(0.50, 0.53, 0.57), 0.28, 0.80), false)
+	if has_cat:
+		_emit_st(rail_root, "RailCatenary", st_cat, _mat(Color(0.38, 0.41, 0.45), 0.42, 0.65), false)
+
+
+static func _emit_st(parent: Node3D, nm: String, st: SurfaceTool, mat: StandardMaterial3D, shadows: bool) -> void:
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var mi := MeshInstance3D.new()
+	mi.name = nm
+	mi.mesh = st.commit()
+	mi.material_override = mat
+	if not shadows:
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(mi)
+
+
+static func _st_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3, n: Vector3) -> void:
+	st.set_normal(n)
+	st.add_vertex(a)
+	st.set_normal(n)
+	st.add_vertex(b)
+	st.set_normal(n)
+	st.add_vertex(c)
+	st.set_normal(n)
+	st.add_vertex(a)
+	st.set_normal(n)
+	st.add_vertex(c)
+	st.set_normal(n)
+	st.add_vertex(d)
+
+
+static func _st_box_along(st: SurfaceTool, a: Vector2, b: Vector2, width: float, y0: float, y1: float) -> void:
+	var seg := b - a
+	var slen := seg.length()
+	if slen < 0.05:
+		return
+	var dir := seg / slen
+	var nrm := Vector2(-dir.y, dir.x) * (width * 0.5)
+	var al := a - nrm
+	var ar := a + nrm
+	var bl := b - nrm
+	var br := b + nrm
+	var p0 := Vector3(al.x, y1, al.y)
+	var p1 := Vector3(ar.x, y1, ar.y)
+	var p2 := Vector3(br.x, y1, br.y)
+	var p3 := Vector3(bl.x, y1, bl.y)
+	var q0 := Vector3(al.x, y0, al.y)
+	var q1 := Vector3(ar.x, y0, ar.y)
+	var q2 := Vector3(br.x, y0, br.y)
+	var q3 := Vector3(bl.x, y0, bl.y)
+	# Top face (clean 2-triangle quad)
+	_st_quad(st, p0, p3, p2, p1, Vector3.UP)
+	# Left & right side walls + end caps
+	var nl := Vector3(-nrm.x, 0.0, -nrm.y).normalized()
+	var nr := -nl
+	var df := Vector3(dir.x, 0.0, dir.y)
+	_st_quad(st, q0, q3, p3, p0, nl)
+	_st_quad(st, q1, p1, p2, q2, nr)
+	_st_quad(st, q0, p0, p1, q1, -df)
+	_st_quad(st, q3, q2, p2, p3, df)
+
+
+static func _st_axis_box(st: SurfaceTool, center: Vector2, dir: Vector2, length: float, width: float, y0: float, y1: float) -> void:
+	var half_d := dir * (length * 0.5)
+	_st_box_along(st, center - half_d, center + half_d, width, y0, y1)

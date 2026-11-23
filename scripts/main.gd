@@ -3316,7 +3316,15 @@ func _overview_snapshot() -> Dictionary:
 	for st: Dictionary in _graph.stations.values():
 		var sp: Vector3 = st["pos"]
 		sts.append(Vector2(sp.x, sp.z))
-	return {"buildings": d.get("buildings", []), "roads": d.get("roads", []), "areas": d.get("areas", []), "freeways": d.get("freeways", []), "tracks": tracks, "stations": sts}
+	return {
+		"buildings": d.get("buildings", []),
+		"roads": d.get("roads", []),
+		"areas": d.get("areas", []),
+		"freeways": d.get("freeways", []),
+		"railways": d.get("railways", []),
+		"tracks": tracks,
+		"stations": sts,
+	}
 
 
 func _overview_thread(snap: Dictionary) -> void:
@@ -3337,7 +3345,7 @@ func _update_city_overview() -> void:
 		_overview_root.visible = _overview_on
 		add_child(_overview_root)
 	var sig := _overview_signature()
-	if (want or _plan_height > OVERVIEW_ON_H * 0.7) and _overview_task < 0 and sig != _overview_sig and Terrain.active:
+	if (want or _plan_height > OVERVIEW_ON_H * 0.7) and _overview_task < 0 and sig != _overview_sig and (Terrain.active or CityTiles.has_tiles(_map_data)):
 		_overview_sig = sig
 		_overview_task = WorkerThreadPool.add_task(_overview_thread.bind(_overview_snapshot()), false, "city overview")
 	# switch only once there is something to show
@@ -3355,7 +3363,7 @@ func _set_overview(on: bool) -> void:
 	if _overview_root != null:
 		_overview_root.visible = on
 	for c in _city_root.get_children():
-		if c is Node3D and c.name != "TerrainGround":
+		if c is Node3D and c.name != "TerrainGround" and c.name != "UrbanSidewalkBase":
 			(c as Node3D).visible = not on
 	_track_root.visible = not on
 	if on:
@@ -3367,7 +3375,7 @@ func _set_overview(on: bool) -> void:
 			_show_toast(L10n.t("全城视图：放大后可以建设 / 规划", "City Overview: zoom in to build or plan"))
 			_overview_toast_cd = 20.0
 	else:
-		_camera.far = _overview_saved_far
+		_camera.far = maxf(_overview_saved_far, maxf(4500.0, _plan_height * 4.8))
 		_sun.shadow_enabled = true
 		var run_vis := _game_mode == GameMode.RUN and not _in_home_menu
 		_traffic_sim.visible = run_vis
@@ -3415,7 +3423,8 @@ func _set_cam_mode(mode: int) -> void:
 
 func _update_camera(dt: float) -> void:
 	if _game_mode != GameMode.RUN or _cam_mode == CamMode.BIRD or _transit_sim.trams.is_empty():
-		# the bird's-eye view looks at the real ground under its target
+		# the bird's-eye view looks at the real ground under its target; scale far clip so zooming out never clips to grey
+		_camera.far = 16000.0 if _overview_on else maxf(4500.0, _plan_height * 4.8)
 		var gy := Terrain.surface(_plan_target.x, _plan_target.z)
 		_plan_target.y = gy if _snap_camera_next else lerpf(_plan_target.y, gy, minf(1.0, dt * 6.0))
 		var cam_pos := _plan_target + Vector3(0.0, _plan_height, _plan_height * 0.20)
@@ -3426,6 +3435,8 @@ func _update_camera(dt: float) -> void:
 			_camera.global_position = _camera.global_position.lerp(cam_pos, minf(1.0, dt * 12.0))
 		_camera.look_at(_plan_target, Vector3.FORWARD)
 		return
+	if not _overview_on:
+		_camera.far = 2800.0
 
 	var tr := _transit_sim.get_active_tram()
 	var tinfo: Dictionary = tr["tram_info"]

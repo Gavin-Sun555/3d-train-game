@@ -1,8 +1,11 @@
 shader_type spatial;
 render_mode diffuse_burley, specular_schlick_ggx, cull_disabled;
 
-// Rich Pacific Northwest city park lawn: subtle mown-turf stripes, organic moss/clover patches,
+// Rich city park lawn: subtle mown-turf stripes, organic moss/clover patches,
 // sunlit meadow variation, and close-up grass-blade roughness micro-detail.
+
+uniform float depth_push = 0.28;
+uniform float depth_slope = 0.00045;
 
 varying vec3 v_world;
 
@@ -36,11 +39,11 @@ float fbm(vec2 p) {
 
 void vertex() {
 	v_world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
-	// Push park/grass fills behind streets (0.12) and tram tracks (0.0) while keeping them in front of
-	// bare TerrainGround (0.35), so park polygons never poke through roads or rails on slopes.
+	// Regular parks sit behind water (0.20), streets (0.12) and tram tracks (0.0) while staying in front of
+	// bare ground (0.35). Lake islands override depth_push to 0.14 so they sit cleanly above water!
 	vec4 vp = MODELVIEW_MATRIX * vec4(VERTEX, 1.0);
 	float d = length(vp.xyz);
-	vp.xyz *= 1.0 + (0.24 + d * 0.0004) / max(d, 0.001);
+	vp.xyz *= 1.0 + (depth_push + d * depth_slope) / max(d, 0.001);
 	POSITION = PROJECTION_MATRIX * vp;
 }
 

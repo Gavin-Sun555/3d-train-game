@@ -248,14 +248,51 @@ func _run() -> void:
 	var jx_yanyu: Node = jx_lm.get_node_or_null("NanhuYanyuTowerAndRedBoat") if jx_lm != null else null
 	var jx_mem: Node = jx_lm.get_node_or_null("NanhuRevolutionaryMemorialHall") if jx_lm != null else null
 	var jx_sta: Node = jx_lm.get_node_or_null("JiaxingForestRailwayStation") if jx_lm != null else null
+	var jx_rail: Node = jx_lm.get_node_or_null("JiaxingHeavyRailways") if jx_lm != null else null
+	var jx_water: Node = m._city_root.get_node_or_null("WaterAreas")
+	var jx_island: Node = m._city_root.get_node_or_null("IslandParkAreas")
+	var jx_seawall: Node = jx_yanyu.get_node_or_null("LakeHeartIslandSeawall") if jx_yanyu != null else null
 	_check(
 		jx_graph.edges.size() >= 1500 and jx_tsim.trams.size() >= 2 and jx_graph.stations.size() >= 5,
 		"Jiaxing street graph & Tram T1 demo loaded (%d edges, %d stations, %d trams)" % [jx_graph.edges.size(), jx_graph.stations.size(), jx_tsim.trams.size()]
 	)
 	_check(
-		jx_hsr != null and jx_yanyu != null and jx_mem != null and jx_sta != null,
-		"All bespoke Jiaxing 3D landmarks built (HSR South Sta., Yanyu Tower & Red Boat, Memorial Hall, Forest Station)"
+		jx_hsr != null and jx_yanyu != null and jx_mem != null and jx_sta != null and jx_rail != null,
+		"All bespoke Jiaxing 3D landmarks & heavy railways built (HSR South Sta., Yanyu Tower, Memorial Hall, Forest Station, Heavy Railways)"
 	)
+	_check(
+		jx_water != null and jx_island != null and jx_seawall != null,
+		"Nanhu Lake, Huancheng Moat water layer, Lake Heart Island turf & stone seawall built"
+	)
+	var conv_cnt := 0
+	var hsr_cnt := 0
+	var hsr_min_x := 1e9
+	var hsr_max_x := -1e9
+	for rw: Dictionary in m._map_data.get("railways", []):
+		if str(rw.get("kind", "")) == "hsr":
+			hsr_cnt += 1
+			for p in rw.get("pts", []):
+				hsr_min_x = minf(hsr_min_x, float(p[0]))
+				hsr_max_x = maxf(hsr_max_x, float(p[0]))
+		else:
+			conv_cnt += 1
+	_check(
+		conv_cnt >= 30 and hsr_cnt >= 20 and (hsr_max_x - hsr_min_x) >= 2400.0,
+		"Jiaxing railways complete (%d conventional 沪昆线, %d extended HSR spanning %.0fm)" % [conv_cnt, hsr_cnt, hsr_max_x - hsr_min_x]
+	)
+	# Verify zoomed-out CityOverview & bird camera far plane on flat tiled Jiaxing map (no grey void clipping)
+	var jx_ov := CityOverview.build(m._overview_snapshot())
+	var ov_ground := jx_ov.get_node_or_null("OverviewGround")
+	var ov_blds := jx_ov.get_node_or_null("OverviewBuildings")
+	m._set_game_mode(0) # BUILD (bird's-eye)
+	m._plan_height = 1800.0
+	m._update_camera(0.05)
+	_check(
+		ov_ground != null and ov_blds != null and m._camera.far >= 4500.0,
+		"Jiaxing zoomed-out CityOverview builds cleanly & camera far plane scales to %.0fm" % m._camera.far
+	)
+	jx_ov.free()
+	m._set_game_mode(2) # back to RUN
 	var jx_ev := {}
 	for _js in range(600): # 60 seconds @ 0.1s
 		jx_ev = jx_tsim.step_all_trams(0.1, jx_graph, m._pax_sim, m._traffic_sim, m._sound)

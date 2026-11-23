@@ -7,14 +7,17 @@ extends RefCounted
 
 const ROAD_COL := Color(0.36, 0.37, 0.39)
 const FREEWAY_COL := Color(0.30, 0.31, 0.33)
+const RAIL_CONV_COL := Color(0.24, 0.26, 0.30)
+const RAIL_HSR_COL := Color(0.56, 0.65, 0.76)
 const PARK_COL := Color(0.42, 0.58, 0.34)
+const ISLAND_COL := Color(0.36, 0.55, 0.28)
 const PLAZA_COL := Color(0.70, 0.69, 0.66)
-const WATER_COL := Color(0.10, 0.25, 0.33)
+const WATER_COL := Color(0.14, 0.36, 0.48)
 const TRACK_COL := Color(0.98, 0.55, 0.12)
 const MONO_COL := Color(0.86, 0.22, 0.24)
 
 
-# snapshot: {buildings, roads, areas, freeways, tracks: [{pts: [Vector2], mono: bool}], stations: [Vector2]}
+# snapshot: {buildings, roads, areas, freeways, railways, tracks: [{pts: [Vector2], mono: bool}], stations: [Vector2]}
 static func build(snap: Dictionary) -> Node3D:
 	var root := Node3D.new()
 	root.name = "CityOverview"
@@ -22,32 +25,39 @@ static func build(snap: Dictionary) -> Node3D:
 	var flat := _Acc.new()
 	var blds := _Acc.new()
 	var net := _Acc.new()
-	# water, parks and plazas
+	# water, parks, islands and plazas — layered cleanly so water wins over enclosing park boundaries (e.g. Nanhu)
+	# and islands (e.g. Lake Heart Island) sit visibly above the lake!
 	for a: Dictionary in snap.get("areas", []):
 		var kind := str(a.get("kind", ""))
-		var col := PARK_COL if kind in ["park", "grass", "wood", "meadow", "garden", "sports", "pitch"] else PLAZA_COL
-		if kind == "wood":
-			col = PARK_COL.darkened(0.18)
+		var col := PLAZA_COL
+		var y_off := 0.72
+		if kind == "island":
+			col = ISLAND_COL
+			y_off = 0.88
 		elif kind == "water":
 			col = WATER_COL
+			y_off = 0.55
+		elif kind in ["park", "grass", "wood", "meadow", "garden", "sports", "pitch"]:
+			col = PARK_COL.darkened(0.18) if kind == "wood" else PARK_COL
+			y_off = 0.25
 		var poly := _poly(a.get("pts", []))
 		if poly.size() < 3:
 			continue
-		var idx := Geometry2D.triangulate_polygon(poly)
-		for i in range(0, idx.size(), 3):
-			for k in [0, 1, 2]:
-				var p := poly[idx[i + k]]
-				flat.add(Vector3(p.x, Terrain.surface(p.x, p.y) + (0.3 if kind == "water" else 0.6), p.y), Vector3.UP, col)
+		_triangulate_flat(flat, poly, y_off, col)
+	# heavy railways (conventional rail + elevated high-speed rail corridors)
+	for rw: Dictionary in snap.get("railways", []):
+		var is_hsr := str(rw.get("kind", "")) == "hsr"
+		_ribbon(flat, rw.get("pts", []), 18.0 if is_hsr else 11.0, 2.4 if is_hsr else 1.05, RAIL_HSR_COL if is_hsr else RAIL_CONV_COL)
 	# streets (wide enough to read from kilometres up) and freeways
 	for r: Dictionary in snap.get("roads", []):
-		_ribbon(flat, r.get("pts", []), maxf(float(r.get("width", 10.0)), 9.0), 1.2, ROAD_COL)
+		_ribbon(flat, r.get("pts", []), maxf(float(r.get("width", 10.0)), 9.0), 1.25, ROAD_COL)
 	for f: Dictionary in snap.get("freeways", []):
 		var fp: Array = []
 		var ys: Array = []
 		for p in f.get("pts", []):
 			fp.append([p[0], p[1]])
 			ys.append(float(p[2]))
-		_ribbon(flat, fp, maxf(float(f.get("w", 12.0)), 12.0), 1.6, FREEWAY_COL, ys)
+		_ribbon(flat, fp, maxf(float(f.get("w", 12.0)), 12.0), 1.65, FREEWAY_COL, ys)
 	# buildings: blocks with a flat roof, sitting on their lowest ground
 	for b: Dictionary in snap.get("buildings", []):
 		var poly := _simplify(_poly(b.get("pts", [])), 1.2)
@@ -97,6 +107,24 @@ static func build(snap: Dictionary) -> Node3D:
 	_emit(root, "OverviewBuildings", blds, false)
 	_emit(root, "OverviewNetwork", net, true)
 	return root
+
+
+static func _triangulate_flat(acc: _Acc, poly: PackedVector2Array, y_off: float, col: Color) -> void:
+	var idx := Geometry2D.triangulate_polygon(poly)
+	if not idx.is_empty():
+		for i in range(0, idx.size(), 3):
+			for k in [0, 1, 2]:
+				var p := poly[idx[i + k]]
+				acc.add(Vector3(p.x, Terrain.surface(p.x, p.y) + y_off, p.y), Vector3.UP, col)
+		return
+	for sub: PackedVector2Array in Geometry2D.merge_polygons(poly, PackedVector2Array()):
+		if sub.size() < 3 or Geometry2D.is_polygon_clockwise(sub):
+			continue
+		var sidx := Geometry2D.triangulate_polygon(sub)
+		for i in range(0, sidx.size(), 3):
+			for k in [0, 1, 2]:
+				var q := sub[sidx[i + k]]
+				acc.add(Vector3(q.x, Terrain.surface(q.x, q.y) + y_off, q.y), Vector3.UP, col)
 
 
 static func _bld_col(b: Dictionary, h: float) -> Color:

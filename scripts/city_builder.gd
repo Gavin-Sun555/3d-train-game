@@ -16,8 +16,11 @@ static func build_city(
 	var bounds: Array = map_data.get("bounds", [-280.0, -320.0, 280.0, 320.0])
 	var cx: float = (float(bounds[0]) + float(bounds[2])) * 0.5
 	var cz: float = (float(bounds[1]) + float(bounds[3])) * 0.5
-	var sx: float = (float(bounds[2]) - float(bounds[0])) + 620.0
-	var sz: float = (float(bounds[3]) - float(bounds[1])) + 620.0
+	var span_x: float = float(bounds[2]) - float(bounds[0])
+	var span_z: float = float(bounds[3]) - float(bounds[1])
+	var pad_margin: float = 2400.0 if maxf(span_x, span_z) > 2000.0 else 620.0
+	var sx: float = span_x + pad_margin
+	var sz: float = span_z + pad_margin
 
 	# 1. Brushed expansion-joint concrete sidewalk ground slab (the real terrain where there is elevation data)
 	if Terrain.active:
@@ -103,7 +106,7 @@ static func rebuild_area_layer(parent: Node3D, areas: Array) -> void:
 			old.queue_free()
 	var non_water: Array = []
 	for a in areas:
-		if str((a as Dictionary).get("kind", "")) != "water":
+		if str((a as Dictionary).get("kind", "")) not in ["water", "island"]:
 			non_water.append(a)
 	if not non_water.is_empty():
 		_build_areas(parent, non_water)
@@ -172,7 +175,7 @@ static func _build_areas(parent: Node3D, areas: Array) -> void:
 	_emit_area_group(parent, "WaterAreas", buckets["water"], 0.026, Color(0.08, 0.22, 0.30), 0.06, 0.35)
 	_emit_area_group(parent, "PlazaAreas", buckets["plaza"], 0.030, Color(0.39, 0.38, 0.36), 0.86, 0.0)
 	_emit_area_group(parent, "BrickPlazas", buckets["brick"], 0.034, Color(0.45, 0.27, 0.22), 0.84, 0.0)
-	_emit_area_group(parent, "IslandParkAreas", buckets["island"], 0.048, Color(0.22, 0.38, 0.16), 0.90, 0.0)
+	_emit_area_group(parent, "IslandParkAreas", buckets["island"], 0.22, Color(0.22, 0.38, 0.16), 0.90, 0.0)
 
 
 # Flat triangle; with terrain, split until no edge is longer than 8 m so the later drape bends smoothly over graded embankments
@@ -283,6 +286,9 @@ static func _emit_area_group(
 	if node_name == "ParkAreas" or node_name == "IslandParkAreas":
 		var pm := ShaderMaterial.new()
 		pm.shader = load("res://shaders/park_lawn.gdshader") as Shader
+		if node_name == "IslandParkAreas":
+			pm.set_shader_parameter("depth_push", 0.14)
+			pm.set_shader_parameter("depth_slope", 0.00024)
 		mi.material_override = pm
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(mi)

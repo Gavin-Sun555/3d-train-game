@@ -4,8 +4,8 @@ render_mode diffuse_burley, specular_schlick_ggx, cull_disabled;
 // Elliott Bay / Lake Union water: layered moving wave normals, Fresnel sky reflection, sun glint,
 // darker deep-water tint further from shore (approximated by large-scale noise), fades detail with distance.
 
-uniform vec3 shallow_col : source_color = vec3(0.11, 0.34, 0.42);
-uniform vec3 deep_col : source_color = vec3(0.04, 0.16, 0.26);
+uniform vec3 shallow_col : source_color = vec3(0.12, 0.38, 0.48);
+uniform vec3 deep_col : source_color = vec3(0.05, 0.20, 0.32);
 uniform vec3 sky_col : source_color = vec3(0.56, 0.72, 0.86);
 uniform float night_factor : hint_range(0.0, 1.0) = 0.0;
 
@@ -35,11 +35,12 @@ float waves(vec2 p, float t) {
 
 void vertex() {
 	v_world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
-	// Bottom layer like the bare ground (same depth push as sidewalk.gdshader): streets pushed back a little
-	// themselves (road_asphalt.gdshader) still win over the water where a low bridge deck crosses it
+	// Sit clearly in front of bare ground (sidewalk 0.35) and park polygons (park_lawn 0.28) so lakes,
+	// moats and canals never get hidden by enclosing scenic-area parks (e.g. Nanhu / Huancheng Moat),
+	// while staying behind islands (0.14), streets/bridges (road_asphalt 0.12) and tracks (0.0).
 	vec4 vp = MODELVIEW_MATRIX * vec4(VERTEX, 1.0);
 	float d = length(vp.xyz);
-	vp.xyz *= 1.0 + (0.35 + d * 0.0006) / max(d, 0.001);
+	vp.xyz *= 1.0 + (0.20 + d * 0.00035) / max(d, 0.001);
 	POSITION = PROJECTION_MATRIX * vp;
 }
 
