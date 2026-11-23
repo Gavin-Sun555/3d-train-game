@@ -280,6 +280,25 @@ func _run() -> void:
 		conv_cnt >= 30 and hsr_cnt >= 20 and (hsr_max_x - hsr_min_x) >= 2400.0,
 		"Jiaxing railways complete (%d conventional 沪昆线, %d extended HSR spanning %.0fm)" % [conv_cnt, hsr_cnt, hsr_max_x - hsr_min_x]
 	)
+	var jx_rc: Array = m._map_data.get("landmarks", {}).get("rail_crossings", [])
+	var tun_rc := 0
+	var br_rc := 0
+	for rc_i: Dictionary in jx_rc:
+		if str(rc_i.get("kind", "")) == "bridge":
+			br_rc += 1
+		else:
+			tun_rc += 1
+	_check(
+		jx_rc.size() >= 8 and tun_rc >= 4 and br_rc >= 2,
+		"沪昆线 crossings connected with grade-separated tunnels & bridges (%d tunnels, %d bridges)" % [tun_rc, br_rc]
+	)
+	# Verify PlazaAreas & RoadMarkings use depth-pushed shaders so tracks are NEVER covered
+	var pl_node := m._city_root.get_node_or_null("PlazaAreas") as MeshInstance3D
+	var rm_node := m._city_root.get_node_or_null("RoadMarkings") as MeshInstance3D
+	_check(
+		(pl_node == null or pl_node.material_override is ShaderMaterial) and (rm_node == null or rm_node.material_override is ShaderMaterial),
+		"PlazaAreas & RoadMarkings use depth-pushed ShaderMaterials behind tram tracks"
+	)
 	# Verify zoomed-out CityOverview & bird camera far plane on flat tiled Jiaxing map (no grey void clipping)
 	var jx_ov := CityOverview.build(m._overview_snapshot())
 	var ov_ground := jx_ov.get_node_or_null("OverviewGround")
@@ -294,14 +313,37 @@ func _run() -> void:
 	jx_ov.free()
 	m._set_game_mode(2) # back to RUN
 	var jx_ev := {}
-	for _js in range(600): # 60 seconds @ 0.1s
+	var last_s_jx: Array[float] = []
+	var max_stuck_jx := 0.0
+	var cur_stuck_jx: Array[float] = []
+	for tr_i: Dictionary in jx_tsim.trams:
+		last_s_jx.append(float(tr_i.get("s", 0.0)))
+		cur_stuck_jx.append(0.0)
+	for _js in range(1800): # 180 seconds @ 0.1s with active street traffic & passengers!
+		var fpos: Vector3 = ((jx_tsim.trams[0]["tram_info"]["sections"] as Array)[0] as Node3D).global_position
+		m._pax_sim.step_simulation(0.1, jx_graph, fpos)
+		m._traffic_sim.step_traffic(0.1, jx_graph, jx_tsim.trams, jx_tsim.active_tram_idx, false, fpos)
 		jx_ev = jx_tsim.step_all_trams(0.1, jx_graph, m._pax_sim, m._traffic_sim, m._sound)
 		if not jx_ev.is_empty():
 			break
+		for ti in range(jx_tsim.trams.size()):
+			var cs := float(jx_tsim.trams[ti].get("s", 0.0))
+			if absf(cs - last_s_jx[ti]) < 0.05:
+				cur_stuck_jx[ti] += 0.1
+				max_stuck_jx = maxf(max_stuck_jx, cur_stuck_jx[ti])
+			else:
+				cur_stuck_jx[ti] = 0.0
+			last_s_jx[ti] = cs
+	var jx_min_d := 1e9
 	var jx_max_d := 0.0
 	for tr: Dictionary in jx_tsim.trams:
-		jx_max_d = maxf(jx_max_d, float(tr.get("st_dist_m", 0.0)))
-	_check(jx_ev.is_empty() and jx_max_d > 100.0, "Jiaxing Tram T1 runs 60s cleanly with zero accidents (max dist %.1fm)" % jx_max_d)
+		var dd := float(tr.get("st_dist_m", 0.0))
+		jx_min_d = minf(jx_min_d, dd)
+		jx_max_d = maxf(jx_max_d, dd)
+	_check(
+		jx_ev.is_empty() and jx_min_d > 500.0 and max_stuck_jx < 60.0,
+		"Jiaxing Tram T1 runs 180s with traffic cleanly & zero deadlocks (min dist %.0fm, max %.0fm, max stop %.1fs)" % [jx_min_d, jx_max_d, max_stuck_jx]
+	)
 
 	_finish(m)
 

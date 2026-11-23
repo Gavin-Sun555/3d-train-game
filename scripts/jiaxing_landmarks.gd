@@ -45,9 +45,13 @@ static func build(parent: Node3D, map_data: Dictionary, lights: Array) -> void:
 	for br in bridges:
 		if br is Dictionary:
 			_jiangnan_arch_bridge(root, _p(br["pos"]), float(br.get("angle", 0.0)), float(br.get("span", 24.0)))
+	var rail_crossings: Array = lm.get("rail_crossings", [])
+	for rc in rail_crossings:
+		if rc is Dictionary:
+			_build_rail_crossing(root, rc)
 	var railways: Array = map_data.get("railways", [])
 	if not railways.is_empty():
-		_build_railways(root, railways, south_sta_pos)
+		_build_railways(root, railways, south_sta_pos, rail_crossings)
 
 
 static func _p(a: Array) -> Vector3:
@@ -175,8 +179,8 @@ static func _jiaxing_south_station(parent: Node3D, center: Vector3, angle: float
 	var yellow_line := _mat(Color(0.94, 0.78, 0.18), 0.55, 0.0)
 
 	# --- A. Elevated Station Concourse & North Plaza (local -Z = North side facing Qingfeng Rd) ---
-	# North forecourt granite plaza
-	_add_box(st, Vector3(210.0, 0.35, 86.0), Vector3(0.0, 0.18, -56.0), granite, 0.0, 0.0, 0.0, false)
+	# North forecourt granite terrace (kept strictly below road/track level & clear of north tram road at z=-84)
+	_add_box(st, Vector3(174.0, 0.06, 28.0), Vector3(0.0, -0.01, -60.0), granite, 0.0, 0.0, 0.0, false)
 	# Elevated station podium deck (departure level +4.2m)
 	_add_box(st, Vector3(168.0, 4.2, 42.0), Vector3(0.0, 2.1, -34.0), concrete)
 	# Grand entrance stair flight on north facade
@@ -486,8 +490,8 @@ static func _nanhu_memorial_hall(parent: Node3D, center: Vector3, angle: float, 
 	var gold_emblem := _mat(Color(0.92, 0.76, 0.24), 0.28, 0.70)
 	var glass_dark := _glass(Color(0.22, 0.28, 0.36), 0.72)
 
-	# Ceremonial granite plaza & stepped podium
-	_add_box(mh, Vector3(132.0, 0.35, 92.0), Vector3(0.0, 0.18, 0.0), granite, 0.0, 0.0, 0.0, false)
+	# Ceremonial granite plaza & stepped podium (flush below street/track surface so tracks never get covered)
+	_add_box(mh, Vector3(118.0, 0.06, 72.0), Vector3(0.0, -0.01, 0.0), granite, 0.0, 0.0, 0.0, false)
 	_add_box(mh, Vector3(108.0, 3.2, 54.0), Vector3(0.0, 1.6, 4.0), red_sandstone)
 	# Wide grand stairs on north facade facing Nanhu Lake
 	for si in range(6):
@@ -568,7 +572,7 @@ static func _jiaxing_station(parent: Node3D, center: Vector3, angle: float, ligh
 	_add_cr200j_train(jx, Vector3(-12.0, 0.44, -9.2))
 
 	# --- C. Modern MAD "Train Station in the Forest" floating cantilevered roof (NW plaza side, z = -46) ---
-	_add_box(jx, Vector3(132.0, 0.35, 54.0), Vector3(0.0, 0.18, -54.0), granite, 0.0, 0.0, 0.0, false)
+	_add_box(jx, Vector3(128.0, 0.06, 46.0), Vector3(0.0, -0.01, -48.0), granite, 0.0, 0.0, 0.0, false)
 	_add_box(jx, Vector3(128.0, 0.58, 40.0), Vector3(0.0, 9.8, -46.0), solar_dark)
 	_add_box(jx, Vector3(126.0, 0.34, 38.0), Vector3(0.0, 9.35, -46.0), ceiling_wood)
 	_add_box(jx, Vector3(96.0, 7.6, 25.0), Vector3(0.0, 4.0, -46.0), glass_clear)
@@ -694,10 +698,111 @@ static func _jiangnan_arch_bridge(parent: Node3D, center: Vector3, angle: float,
 
 
 # =============================================================================================
-# 6. Heavy Railways: 沪昆普速铁路 (Conventional Rail) & 沪昆高速铁路 (Extended HSR Viaducts)
+# 6. Grade-Separated Railway Crossings (下穿铁路隧道/框构桥 & 跨铁路立交桥)
+# =============================================================================================
+static func _build_rail_crossing(parent: Node3D, rc: Dictionary) -> void:
+	var pos := _p(rc["pos"])
+	var kind := str(rc.get("kind", "tunnel"))
+	var road_ang := float(rc.get("road_angle", 0.0))
+	var road_w := clampf(float(rc.get("road_w", 14.0)), 10.0, 32.0)
+	var hw := road_w * 0.5
+
+	var node := Node3D.new()
+	node.name = "RailCrossing_%s" % str(rc.get("name", kind))
+	node.position = pos
+	node.rotation.y = road_ang
+	parent.add_child(node)
+
+	var conc := _mat(Color(0.74, 0.74, 0.72), 0.80, 0.02)
+	var conc_dark := _mat(Color(0.56, 0.57, 0.58), 0.84, 0.02)
+	var steel := _mat(Color(0.84, 0.86, 0.88), 0.36, 0.45)
+	var warn_yellow := _mat(Color(0.95, 0.76, 0.12), 0.48, 0.05)
+	var warn_black := _mat(Color(0.14, 0.14, 0.15), 0.65, 0.05)
+	var tunnel_led := _emissive(Color(1.0, 0.94, 0.80), 1.4)
+
+	if kind == "tunnel":
+		# Underpass box-culvert tunnel beneath elevated 沪昆线 railway girder bridge (5.1m full road/tram headroom!)
+		var tun_len := 26.0
+		var ceiling_y := 5.10
+		# Concrete box-culvert ceiling slab carrying the railway tracks cleanly overhead
+		_add_box(node, Vector3(tun_len, 0.75, road_w + 3.2), Vector3(0.0, ceiling_y + 0.38, 0.0), conc)
+		# Heavy side abutment walls flanking the roadway (completely clear of road & tram envelope!)
+		for side: float in [-1.0, 1.0]:
+			var wz := side * (hw + 1.35)
+			_add_box(node, Vector3(tun_len + 2.0, ceiling_y + 0.5, 1.4), Vector3(0.0, (ceiling_y + 0.5) * 0.5, wz), conc)
+			# Sloped approach retaining wing walls on both tunnel entrances
+			for end_s: float in [-1.0, 1.0]:
+				_add_box(node, Vector3(18.0, 2.2, 0.85), Vector3(end_s * (tun_len * 0.5 + 9.5), 1.1, wz), conc_dark, 0.0, -end_s * 0.11)
+				_add_box(node, Vector3(18.0, 0.9, 0.26), Vector3(end_s * (tun_len * 0.5 + 9.5), 2.55, wz), steel, 0.0, -end_s * 0.11)
+		# Both tunnel portal fascia beams + yellow/black clearance warning stripes (限高 4.5m)
+		for end_s: float in [-1.0, 1.0]:
+			var px := end_s * (tun_len * 0.5 + 0.35)
+			_add_box(node, Vector3(0.65, 1.35, road_w + 4.0), Vector3(px, ceiling_y + 0.65, 0.0), conc)
+			var n_stripes := maxi(6, int(road_w / 1.8))
+			var sw := road_w / float(n_stripes)
+			for si in range(n_stripes):
+				var sz := -hw + (float(si) + 0.5) * sw
+				_add_box(node, Vector3(0.18, 0.34, sw * 0.96), Vector3(px + end_s * 0.35, ceiling_y - 0.12, sz), warn_yellow if (si % 2 == 0) else warn_black, 0.0, 0.0, 0.0, false)
+		# Warm recessed LED strip lights along tunnel ceiling
+		for side: float in [-0.45, 0.45]:
+			_add_box(node, Vector3(tun_len - 2.0, 0.10, 0.42), Vector3(0.0, ceiling_y - 0.05, side * hw), tunnel_led, 0.0, 0.0, 0.0, false)
+	else:
+		# Road overpass bridge across 沪昆线 (中环南路 / 南湖大桥 / 中环东路)
+		var br_len := 58.0
+		# Concrete side parapets, steel guardrails, and modern municipal arch side-ribs flanking the road
+		for side: float in [-1.0, 1.0]:
+			var pz := side * (hw + 0.75)
+			_add_box(node, Vector3(br_len, 1.05, 0.55), Vector3(0.0, 0.55, pz), conc)
+			_add_box(node, Vector3(br_len, 0.14, 0.18), Vector3(0.0, 1.28, pz), steel, 0.0, 0.0, 0.0, false)
+			# Decorative low municipal steel arch rib rising above bridge parapet
+			for k in range(10):
+				var u0 := -0.5 + float(k) / 10.0
+				var u1 := -0.5 + float(k + 1) / 10.0
+				var um := (u0 + u1) * 0.5
+				var h0 := 1.1 + cos(u0 * PI) * 3.8
+				var h1 := 1.1 + cos(u1 * PI) * 3.8
+				var dx := (u1 - u0) * (br_len - 8.0)
+				var dy := h1 - h0
+				var sl := sqrt(dx * dx + dy * dy) + 0.15
+				_add_box(node, Vector3(sl, 0.42, 0.38), Vector3(um * (br_len - 8.0), (h0 + h1) * 0.5, pz), steel, 0.0, atan2(dy, dx))
+			# Bridge entrance concrete abutment pylons
+			for end_s: float in [-1.0, 1.0]:
+				_add_box(node, Vector3(2.2, 2.2, 1.25), Vector3(end_s * (br_len * 0.5), 1.1, pz), conc_dark)
+
+
+# =============================================================================================
+# 7. Heavy Railways: 沪昆普速铁路 (Conventional Rail) & 沪昆高速铁路 (Extended HSR Viaducts)
 #    Batched into 5 ArrayMeshes for crisp 3D tracks, viaducts, piers, sleepers & catenary!
 # =============================================================================================
-static func _build_railways(parent: Node3D, railways: Array, south_sta_pos: Vector3) -> void:
+static func _conv_crossing_lift_and_skip(pt: Vector2, rail_crossings: Array) -> Vector2:
+	# Returns Vector2(lift_y, skip_flag > 0.5 if under road overpass bridge deck)
+	var lift_y := 0.0
+	var skip := 0.0
+	for rc: Dictionary in rail_crossings:
+		var rp: Array = rc["pos"]
+		var c := Vector2(float(rp[0]), float(rp[1]))
+		var d := pt.distance_to(c)
+		if d > 82.0:
+			continue
+		var rw := float(rc.get("road_w", 14.0))
+		if str(rc.get("kind", "tunnel")) == "tunnel":
+			# Smoothly lift 沪昆线 onto a 5.5m railway bridge deck over the underpass tunnel road!
+			var inner := rw * 0.5 + 7.0
+			var outer := inner + 58.0
+			if d <= inner:
+				lift_y = maxf(lift_y, 5.55)
+			elif d < outer:
+				var u := 1.0 - (d - inner) / (outer - inner)
+				var s_u := u * u * (3.0 - 2.0 * u)
+				lift_y = maxf(lift_y, 5.55 * s_u)
+		else:
+			# Under a road overpass bridge (中环南路 / 南湖大桥 / 中环东路): never draw ballast on top of bridge deck!
+			if d < rw * 0.5 + 3.5:
+				skip = 1.0
+	return Vector2(lift_y, skip)
+
+
+static func _build_railways(parent: Node3D, railways: Array, south_sta_pos: Vector3, rail_crossings: Array = []) -> void:
 	var rail_root := Node3D.new()
 	rail_root.name = "JiaxingHeavyRailways"
 	parent.add_child(rail_root)
@@ -732,7 +837,16 @@ static func _build_railways(parent: Node3D, railways: Array, south_sta_pos: Vect
 
 		var pts: Array[Vector2] = []
 		for rp in raw_pts:
-			pts.append(Vector2(float(rp[0]), float(rp[1])))
+			var v := Vector2(float(rp[0]), float(rp[1]))
+			if not pts.is_empty() and not is_hsr and not rail_crossings.is_empty():
+				# Densify conventional railway segments into <=10m steps so bridge/tunnel ramps grade smoothly!
+				var prev := pts[pts.size() - 1]
+				var dl := prev.distance_to(v)
+				if dl > 10.0:
+					var sub_n := int(ceil(dl / 10.0))
+					for sk in range(1, sub_n):
+						pts.append(prev.lerp(v, float(sk) / float(sub_n)))
+			pts.append(v)
 
 		var sleeper_acc := 0.0
 		var pier_acc := 16.0
@@ -798,28 +912,44 @@ static func _build_railways(parent: Node3D, railways: Array, south_sta_pos: Vect
 					pier_acc += step
 					mast_acc += step
 			else:
-				# Conventional Railway (沪昆线 & 嘉兴火车站 tracks): ballast bed, bridge girder over water, ties, steel rails, catenary
-				var deck_y := base_y + 0.30
-				if is_elev:
-					_st_box_along(st_viaduct, a, b, 5.2, 0.0, base_y + 0.28)
-					_st_box_along(st_viaduct, a + nrm * 2.45, b + nrm * 2.45, 0.30, base_y + 0.28, base_y + 1.15)
-					_st_box_along(st_viaduct, a - nrm * 2.45, b - nrm * 2.45, 0.30, base_y + 0.28, base_y + 1.15)
+				# Conventional Railway (沪昆线 & 嘉兴火车站 tracks): grade-separated over underpass tunnels & cleanly under road bridges!
+				var xa := _conv_crossing_lift_and_skip(a, rail_crossings)
+				var xb := _conv_crossing_lift_and_skip(b, rail_crossings)
+				var xm := _conv_crossing_lift_and_skip(mid, rail_crossings)
+				if xm.y > 0.5:
+					continue # railway passes underneath the road overpass bridge deck
+				var ya := base_y + xa.x
+				var yb := base_y + xb.x
+				var ym := (ya + yb) * 0.5
+				var deck_ya := ya + 0.30
+				var deck_yb := yb + 0.30
+				var deck_ym := ym + 0.30
+				var over_tun := ym > 0.35
+				if is_elev or over_tun:
+					var girder_bot_a := maxf(0.0, ya - 0.55) if ya > 3.2 else 0.0
+					var girder_bot_b := maxf(0.0, yb - 0.55) if yb > 3.2 else 0.0
+					_st_box_sloped(st_viaduct, a, b, 5.2, girder_bot_a, ya + 0.28, girder_bot_b, yb + 0.28)
+					_st_box_sloped(st_viaduct, a + nrm * 2.45, b + nrm * 2.45, 0.30, ya + 0.28, ya + 1.15, yb + 0.28, yb + 1.15)
+					_st_box_sloped(st_viaduct, a - nrm * 2.45, b - nrm * 2.45, 0.30, ya + 0.28, ya + 1.15, yb + 0.28, yb + 1.15)
 					has_viaduct = true
-				_st_box_along(st_ballast, a, b, 4.4, maxf(0.04, base_y), deck_y)
+				_st_box_sloped(st_ballast, a, b, 4.4, maxf(0.04, ya), deck_ya, maxf(0.04, yb), deck_yb)
 				has_ballast = true
 				for rside: float in [-0.72, 0.72]:
-					_st_box_along(st_steel, a + nrm * rside, b + nrm * rside, 0.15, deck_y + 0.06, deck_y + 0.20)
+					_st_box_sloped(st_steel, a + nrm * rside, b + nrm * rside, 0.15, deck_ya + 0.06, deck_ya + 0.20, deck_yb + 0.06, deck_yb + 0.20)
 				has_steel = true
-				_st_box_along(st_cat, a, b, 0.07, deck_y + 5.55, deck_y + 5.62)
+				_st_box_sloped(st_cat, a, b, 0.07, deck_ya + 5.55, deck_ya + 5.62, deck_yb + 5.55, deck_yb + 5.62)
 				has_cat = true
 
 				# Sleepers every 2.2m & electrification masts every 56m
 				var s2 := 0.0
 				while s2 < slen:
-					var p2 := a + dir * s2
+					var u2 := s2 / slen
+					var p2 := a.lerp(b, u2)
+					var dy2 := lerpf(deck_ya, deck_yb, u2)
+					var by2 := lerpf(ya, yb, u2)
 					if sleeper_acc >= 2.2:
 						sleeper_acc = 0.0
-						_st_axis_box(st_sleeper, p2, dir, 0.26, 2.45, deck_y - 0.02, deck_y + 0.08)
+						_st_axis_box(st_sleeper, p2, dir, 0.26, 2.45, dy2 - 0.02, dy2 + 0.08)
 						has_sleeper = true
 					if mast_acc >= 56.0:
 						mast_acc = 0.0
@@ -827,8 +957,8 @@ static func _build_railways(parent: Node3D, railways: Array, south_sta_pos: Vect
 						if not mast_cells.has(mck2):
 							mast_cells[mck2] = true
 							var mp2 := p2 + nrm * 2.35
-							_st_axis_box(st_cat, mp2, dir, 0.26, 0.26, maxf(0.0, base_y), deck_y + 6.3)
-							_st_axis_box(st_cat, p2 + nrm * 1.0, dir, 0.14, 2.8, deck_y + 5.58, deck_y + 5.74)
+							_st_axis_box(st_cat, mp2, dir, 0.26, 0.26, maxf(0.0, by2), dy2 + 6.3)
+							_st_axis_box(st_cat, p2 + nrm * 1.0, dir, 0.14, 2.8, dy2 + 5.58, dy2 + 5.74)
 							has_cat = true
 					var step2 := minf(2.2, slen - s2)
 					if step2 < 0.05:
@@ -876,6 +1006,10 @@ static func _st_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vec
 
 
 static func _st_box_along(st: SurfaceTool, a: Vector2, b: Vector2, width: float, y0: float, y1: float) -> void:
+	_st_box_sloped(st, a, b, width, y0, y1, y0, y1)
+
+
+static func _st_box_sloped(st: SurfaceTool, a: Vector2, b: Vector2, width: float, ya0: float, ya1: float, yb0: float, yb1: float) -> void:
 	var seg := b - a
 	var slen := seg.length()
 	if slen < 0.05:
@@ -886,17 +1020,15 @@ static func _st_box_along(st: SurfaceTool, a: Vector2, b: Vector2, width: float,
 	var ar := a + nrm
 	var bl := b - nrm
 	var br := b + nrm
-	var p0 := Vector3(al.x, y1, al.y)
-	var p1 := Vector3(ar.x, y1, ar.y)
-	var p2 := Vector3(br.x, y1, br.y)
-	var p3 := Vector3(bl.x, y1, bl.y)
-	var q0 := Vector3(al.x, y0, al.y)
-	var q1 := Vector3(ar.x, y0, ar.y)
-	var q2 := Vector3(br.x, y0, br.y)
-	var q3 := Vector3(bl.x, y0, bl.y)
-	# Top face (clean 2-triangle quad)
+	var p0 := Vector3(al.x, ya1, al.y)
+	var p1 := Vector3(ar.x, ya1, ar.y)
+	var p2 := Vector3(br.x, yb1, br.y)
+	var p3 := Vector3(bl.x, yb1, bl.y)
+	var q0 := Vector3(al.x, ya0, al.y)
+	var q1 := Vector3(ar.x, ya0, ar.y)
+	var q2 := Vector3(br.x, yb0, br.y)
+	var q3 := Vector3(bl.x, yb0, bl.y)
 	_st_quad(st, p0, p3, p2, p1, Vector3.UP)
-	# Left & right side walls + end caps
 	var nl := Vector3(-nrm.x, 0.0, -nrm.y).normalized()
 	var nr := -nl
 	var df := Vector3(dir.x, 0.0, dir.y)

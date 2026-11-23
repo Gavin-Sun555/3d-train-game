@@ -776,10 +776,11 @@ func _build_city_world() -> void:
 # A streamed map tile is in: clear it for player tracks / station bays and hook up its night lighting
 func _on_city_tile_built(tile: Node3D) -> void:
 	var bays: Array = _graph.get_meta("station_bays", [])
+	var cidx: Dictionary = _graph.get_meta("track_clear_idx", {})
 	var cur_ver := _city_tiles.track_ctx_ver if _city_tiles != null else -1
 	if int(tile.get_meta("clear_ctx_ver", -2)) != cur_ver:
-		CityBuilder.apply_track_clearance(tile, _graph.get_meta("track_clear_idx", {}), bays)
-	CityBuilder.apply_station_bays(tile, CityBuilder._bays_near(tile, bays))
+		CityBuilder.apply_track_clearance(tile, cidx, bays)
+	CityBuilder.apply_station_bays(tile, CityBuilder._bays_near(tile, bays), cidx)
 	var i := 0
 	while i < _city_lights.size():
 		if is_instance_valid(_city_lights[i]):
@@ -1080,7 +1081,7 @@ func _rebuild_tracks_and_operations(seed_pax: bool = false, defer_ops: bool = fa
 	if _city_tiles != null:
 		_city_tiles.set_track_context(_graph.get_meta("track_clear_idx", {}), _graph.get_meta("station_bays", []))
 	CityBuilder.apply_track_clearance(_city_root, _graph.get_meta("track_clear_idx", {}), _graph.get_meta("station_bays", []))
-	CityBuilder.apply_station_bays(_city_root, _graph.get_meta("station_bays", []))
+	CityBuilder.apply_station_bays(_city_root, _graph.get_meta("station_bays", []), _graph.get_meta("track_clear_idx", {}))
 	_track_lights.clear()
 	for l in built["lights"]:
 		_track_lights.append(l)
@@ -3022,7 +3023,7 @@ func _rebuild_tracks_only_visual() -> void:
 	if _city_tiles != null:
 		_city_tiles.set_track_context(_graph.get_meta("track_clear_idx", {}), _graph.get_meta("station_bays", []))
 	CityBuilder.apply_track_clearance(_city_root, _graph.get_meta("track_clear_idx", {}), _graph.get_meta("station_bays", []))
-	CityBuilder.apply_station_bays(_city_root, _graph.get_meta("station_bays", []))
+	CityBuilder.apply_station_bays(_city_root, _graph.get_meta("station_bays", []), _graph.get_meta("track_clear_idx", {}))
 	_track_lights.clear()
 	for l in built["lights"]:
 		_track_lights.append(l)

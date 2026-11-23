@@ -311,16 +311,18 @@ def build_street_graph(nodes, ways, water_grid):
         cls = t.get("highway", "")
         if cls not in ROAD_CLASSES:
             continue
-        if t.get("area") == "yes" or t.get("tunnel") in ("yes", "building_passage"):
+        if t.get("area") == "yes" or t.get("tunnel") == "building_passage":
             continue
         layer = str(t.get("layer", "0")).split(";")[0]
         is_bridge = bool(t.get("bridge")) and t.get("bridge") != "no"
+        is_tunnel = bool(t.get("tunnel")) and t.get("tunnel") != "no"
         # Skip elevated Inner Ring Expressway viaduct decks from the surface buildable street graph
         if cls == "trunk" and (is_bridge or layer not in ("0", "") or "快速路" in t.get("name", "")):
             continue
-        if not is_bridge and layer not in ("0", ""):
+        # Keep real-life railway underpass tunnels (tunnel=yes / layer=-1) and overpass bridges (layer=1/2)
+        if not is_bridge and not is_tunnel and layer not in ("0", "-1", ""):
             continue
-        if is_bridge and layer not in ("0", "1", ""):
+        if is_bridge and layer not in ("0", "1", "2", ""):
             continue
 
         pts_ids = [r for r in refs if r in nodes]
@@ -423,6 +425,8 @@ def build_street_graph(nodes, ways, water_grid):
                         prev["lb"] = max(prev["lb"], lb)
                         prev["width"] = road_width_for(prev["lf"], prev["lb"])
                         prev["divided"] = True
+                        prev["bridge"] = bool(prev.get("bridge")) or (bool(t.get("bridge")) and t.get("bridge") != "no")
+                        prev["tunnel"] = bool(prev.get("tunnel")) or (bool(t.get("tunnel")) and t.get("tunnel") != "no")
                         if nm and nm != "嘉兴支路" and prev["name"] == "嘉兴支路":
                             prev["name"] = nm
                     elif prev is None or (nm != "嘉兴支路" and prev["name"] == "嘉兴支路") or w > prev["width"]:
@@ -430,6 +434,7 @@ def build_street_graph(nodes, ways, water_grid):
                             "a": key[0], "b": key[1], "name": nm, "width": w, "lf": lf, "lb": lb,
                             "length": elen, "pts": full, "cls": cls,
                             "bridge": bool(t.get("bridge")) and t.get("bridge") != "no",
+                            "tunnel": (bool(t.get("tunnel")) and t.get("tunnel") != "no") or str(t.get("layer", "0")).split(";")[0] in ("-1", "-2"),
                         }
                     if nm and nm != "嘉兴支路":
                         jnodes[ja]["streets"].add(nm)
@@ -500,10 +505,12 @@ def build_street_graph(nodes, ways, water_grid):
         }
         if is_br:
             rec["bridge"] = True
+        if ed.get("tunnel"):
+            rec["tunnel"] = True
         out_edges.append(rec)
 
     print(f"Street graph: {len(out_nodes)} junctions, {len(out_edges)} edges "
-          f"({sum(1 for e in out_edges if e.get('bridge'))} canal bridges)")
+          f"({sum(1 for e in out_edges if e.get('bridge'))} bridges, {sum(1 for e in out_edges if e.get('tunnel'))} tunnels)")
     return out_nodes, out_edges
 
 
@@ -774,6 +781,92 @@ def build_railways(nodes, ways, water_grid):
                 conv_cnt += 1
     print(f"Railways: {len(out)} tracks ({conv_cnt} conventional 沪昆线/嘉兴站 + {hsr_cnt} extended HSR 沪昆高速线/嘉兴南站)")
     return out
+
+
+def seg_intersection(a, b, c, d):
+    """Return intersection point (x, y) of segments AB and CD, or None."""
+    r = (b[0] - a[0], b[1] - a[1])
+    s = (d[0] - c[0], d[1] - c[1])
+    denom = r[0] * s[1] - r[1] * s[0]
+    if abs(denom) < 1e-9:
+        return None
+    qp = (c[0] - a[0], c[1] - a[1])
+    t = (qp[0] * s[1] - qp[1] * s[0]) / denom
+    u = (qp[0] * r[1] - qp[1] * r[0]) / denom
+    if 0.0 <= t <= 1.0 and 0.0 <= u <= 1.0:
+        return (a[0] + t * r[0], a[1] + t * r[1])
+    return None
+
+
+def build_rail_crossings(graph_edges, railways):
+    """Detect every road crossing the 沪昆线 conventional railway and classify as real-life tunnel vs bridge."""
+    rail_segs = []
+    for rw in railways:
+        if rw.get("kind") != "conventional":
+            continue
+        rpts = rw["pts"]
+        for ra, rb in zip(rpts, rpts[1:]):
+            rail_segs.append((ra, rb))
+
+    raw_hits = []
+    for e in graph_edges:
+        epts = e["pts"]
+        for ea, eb in zip(epts, epts[1:]):
+            for ra, rb in rail_segs:
+                ix = seg_intersection(ea, eb, ra, rb)
+                if ix is not None:
+                    r_ang = -math.atan2(eb[1] - ea[1], eb[0] - ea[0])
+                    rw_ang = -math.atan2(rb[1] - ra[1], rb[0] - ra[0])
+                    is_br = bool(e.get("bridge")) and not bool(e.get("tunnel"))
+                    raw_hits.append({
+                        "pos": ix,
+                        "kind": "bridge" if is_br else "tunnel",
+                        "road_angle": r_ang,
+                        "rail_angle": rw_ang,
+                        "road_w": float(e.get("width", 12.0)),
+                        "name": e.get("name", ""),
+                    })
+                    break
+
+    # Cluster nearby hits (multi-track rail + dual-carriageway roads within 38m)
+    clusters = []
+    for h in raw_hits:
+        placed = False
+        for cl in clusters:
+            cx = sum(x["pos"][0] for x in cl) / len(cl)
+            cy = sum(x["pos"][1] for x in cl) / len(cl)
+            if math.hypot(h["pos"][0] - cx, h["pos"][1] - cy) < 38.0:
+                cl.append(h)
+                placed = True
+                break
+        if not placed:
+            clusters.append([h])
+
+    BRIDGE_NAMES = ("中环南路", "南湖大桥", "中环东路")
+    crossings = []
+    for cl in clusters:
+        cx = sum(x["pos"][0] for x in cl) / len(cl)
+        cy = sum(x["pos"][1] for x in cl) / len(cl)
+        nm = next((x["name"] for x in cl if x["name"] and x["name"] != "嘉兴支路"), "跨铁通道")
+        br_votes = sum(1 for x in cl if x["kind"] == "bridge")
+        kind = "bridge" if (br_votes > 0 or any(bn in nm for bn in BRIDGE_NAMES)) else "tunnel"
+        rep = max(cl, key=lambda x: x["road_w"])
+        max_w = max(x["road_w"] for x in cl)
+        span_w = min(32.0, max_w + (10.0 if len(cl) >= 4 else 4.0))
+        crossings.append({
+            "pos": rnd((cx, cy)),
+            "kind": kind,
+            "road_angle": round(rep["road_angle"], 4),
+            "rail_angle": round(rep["rail_angle"], 4),
+            "road_w": round(span_w, 1),
+            "name": nm,
+        })
+    print(f"Rail crossings across 沪昆线: {len(crossings)} grade-separated "
+          f"({sum(1 for c in crossings if c['kind'] == 'tunnel')} underpass tunnels, "
+          f"{sum(1 for c in crossings if c['kind'] == 'bridge')} overpass bridges):")
+    for c in crossings:
+        print(f"  - [{c['kind']:6s}] {c['name']} at {c['pos']} (w={c['road_w']}m)")
+    return crossings
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1533,6 +1626,7 @@ def main():
         park_grid.add(pp, min(xs), min(ys), max(xs), max(ys))
 
     graph_nodes, graph_edges = build_street_graph(nodes, ways, water_grid)
+    rail_crossings = build_rail_crossings(graph_edges, railways)
 
     road_grid = Grid(45.0)
     for e in graph_edges:
@@ -1595,6 +1689,7 @@ def main():
         "jiaxing_station": {"pos": rnd(JIAXING_STA_POS), "angle": round(jx_angle, 4)},
         "botanical_conservatory": {"pos": rnd(BOTANICAL_POS)},
         "canal_bridges": canal_bridges,
+        "rail_crossings": rail_crossings,
     }
 
     out = {

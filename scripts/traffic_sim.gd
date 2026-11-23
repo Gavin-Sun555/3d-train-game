@@ -1012,20 +1012,25 @@ func step_traffic(
 		if bool(c["crashed"]):
 			continue
 
+		if bool(c.get("force_respawn", false)):
+			c.erase("force_respawn")
+			_respawn_car_near(c, graph, edge_ids, focus_pos, trams, true)
+			continue
+
 		if (c["pos"] as Vector3).distance_squared_to(focus_pos) > 460.0 * 460.0:
 			_respawn_car_near(c, graph, edge_ids, focus_pos, trams)
 			continue
 
 		var eid := int(c["edge_id"])
 		if not graph.edges.has(eid):
-			_respawn_car_near(c, graph, edge_ids, focus_pos, trams)
+			_respawn_car_near(c, graph, edge_ids, focus_pos, trams, true)
 			continue
-		if not bool(c.get("turning", false)) and _edge_rides_rails(graph, eid):
-			_respawn_car_near(c, graph, edge_ids, focus_pos, trams)
+		if _is_transit_mall_double_track(graph, eid) or (not bool(c.get("turning", false)) and _edge_rides_rails(graph, eid)):
+			_respawn_car_near(c, graph, edge_ids, focus_pos, trams, true)
 			continue
-		if not bool(c.get("turning", false)) and not car_dir_allowed(graph, eid, float(c["dir"])):
-			# Turned back at a dead end into a one-way street: take the car off and bring it back elsewhere
-			_respawn_car_near(c, graph, edge_ids, focus_pos, trams)
+		if not car_dir_allowed(graph, eid, float(c["dir"])):
+			# Wrong-way on a one-way street (including aborted dead-end U-turn): relocate cleanly
+			_respawn_car_near(c, graph, edge_ids, focus_pos, trams, true)
 			if not car_dir_allowed(graph, int(c["edge_id"]), float(c["dir"])):
 				c["dir"] = -float(c["dir"])
 			continue
@@ -1216,6 +1221,14 @@ func step_traffic(
 		if emerg_stop:
 			cur_spd = 0.0
 		c["speed"] = cur_spd
+
+		# Anti-gridlock recovery: if a car stays deadlocked (especially near a tram or longer than a full signal cycle),
+		# cleanly relocate it to an open street so road gridlock can never freeze a tram route!
+		var stuck_t := (float(c.get("stuck_t", 0.0)) + dt) if cur_spd < 0.25 else 0.0
+		c["stuck_t"] = stuck_t
+		if stuck_t >= 48.0 or (stuck_t >= 20.0 and _is_any_tram_occupying_point(trams_c, c_pos, 42.0)):
+			_respawn_car_near(c, graph, edge_ids, focus_pos, trams, true)
+			continue
 
 		# Smooth Quadratic Bezier corner turn between edges (STRICTLY obeys emerg_stop & cur_spd == 0!)
 		if bool(c.get("turning", false)):
@@ -1501,6 +1514,10 @@ func _advance_car_to_next_edge(c: Dictionary, graph: NetworkGraph, at_node: int,
 	var new_k := int(plan["k"])
 	c.erase("plan")
 	c.erase("xcommit_nid")
+	if not car_dir_allowed(graph, new_eid, new_dir) or _is_transit_mall_double_track(graph, new_eid):
+		c["force_respawn"] = true
+		c["speed"] = 0.0
+		return
 
 	var new_ed: Dictionary = graph.edges[new_eid]
 	var new_len := float(new_ed["length"])
@@ -1839,37 +1856,49 @@ static func _any_tram_within(trams: Array[Dictionary], pt: Vector3, r: float) ->
 	return _is_any_tram_occupying_point(trams, pt, r)
 
 
-func _respawn_car_near(c: Dictionary, graph: NetworkGraph, edge_ids: Array, focus_pos: Vector3, trams: Array[Dictionary]) -> void:
-	var eid := _pick_spawn_edge(graph, edge_ids, focus_pos, true)
-	if eid < 0:
+func _respawn_car_near(c: Dictionary, graph: NetworkGraph, edge_ids: Array, focus_pos: Vector3, trams: Array[Dictionary], force_clear: bool = false) -> void:
+	var attempts := 14 if force_clear else 1
+	for _try in range(attempts):
+		var eid := _pick_spawn_edge(graph, edge_ids, focus_pos, _try < 8)
+		if eid < 0:
+			continue
+		var ed: Dictionary = graph.edges[eid]
+		var elen := float(ed["length"])
+		if elen < 26.0:
+			continue
+		var new_dir := 1.0 if _rng.randf() < 0.5 else -1.0
+		if not car_dir_allowed(graph, eid, new_dir):
+			new_dir = -new_dir
+		if not car_dir_allowed(graph, eid, new_dir):
+			continue
+		var new_s := lerpf(11.0, elen - 11.0, _rng.randf())
+		var smp := graph.sample_edge(eid, new_s / elen)
+		var sp3: Vector3 = smp["pos"]
+		var min_focus := 110.0 if (force_clear and _try >= 6) else 170.0
+		if sp3.distance_squared_to(focus_pos) < min_focus * min_focus:
+			continue
+		if _is_any_tram_occupying_point(trams, sp3, 28.0):
+			continue
+		c["edge_id"] = eid
+		c["edge_len"] = elen
+		c["dir"] = new_dir
+		c["s"] = new_s
+		c["turning"] = false
+		c["stuck_t"] = 0.0
+		c["speed"] = float(c.get("cruise_speed", 7.8))
+		c.erase("plan")
+		c.erase("xcommit_nid")
+		c["lane_k"] = _rng.randi() % maxi(1, dir_lanes(graph, eid, new_dir))
+		c["lane_offset"] = _compute_dynamic_lane_offset(graph, eid, new_s, elen, new_dir, int(c["lane_k"]))
+		_update_car_transform(c, graph)
 		return
-	var ed: Dictionary = graph.edges[eid]
-	var elen := float(ed["length"])
-	if elen < 26.0:
-		return
-	var new_dir := 1.0 if _rng.randf() < 0.5 else -1.0
-	if not car_dir_allowed(graph, eid, new_dir):
-		new_dir = -new_dir
-	var new_s := lerpf(11.0, elen - 11.0, _rng.randf())
-	var smp := graph.sample_edge(eid, new_s / elen)
-	var sp3: Vector3 = smp["pos"]
-	if sp3.distance_squared_to(focus_pos) < 170.0 * 170.0:
-		return
-	if _is_any_tram_occupying_point(trams, sp3, 24.0):
-		return
-	c["edge_id"] = eid
-	c["edge_len"] = elen
-	c["dir"] = new_dir
-	c["s"] = new_s
-	c["turning"] = false
-	c["lane_k"] = _rng.randi() % maxi(1, dir_lanes(graph, eid, new_dir))
-	c["lane_offset"] = _compute_dynamic_lane_offset(graph, eid, new_s, elen, new_dir, int(c["lane_k"]))
-	_update_car_transform(c, graph)
 
 
 func _pick_spawn_edge(graph: NetworkGraph, edge_ids: Array, focus_pos: Vector3, near_focus: bool) -> int:
+	if edge_ids.is_empty():
+		return -1
 	var f2 := Vector2(focus_pos.x, focus_pos.z)
-	for _attempt in range(18):
+	for _attempt in range(28):
 		var eid := int(edge_ids[_rng.randi() % edge_ids.size()])
 		var ed: Dictionary = graph.edges[eid]
 		if float(ed["length"]) < 26.0:
@@ -1877,12 +1906,20 @@ func _pick_spawn_edge(graph: NetworkGraph, edge_ids: Array, focus_pos: Vector3, 
 		if near_focus:
 			var p2: Vector2 = (ed["pts"] as Array)[0]
 			var d2 := f2.distance_squared_to(p2)
-			if d2 < 60.0 * 60.0 or d2 > 350.0 * 350.0:
+			if d2 < 60.0 * 60.0 or d2 > 380.0 * 380.0:
 				continue
 		if _is_transit_mall_double_track(graph, eid) or _edge_rides_rails(graph, eid):
 			continue
 		return eid
-	return int(edge_ids[_rng.randi() % edge_ids.size()])
+	# Fallback anywhere on the map, still strictly respecting tram-only & rail-riding exclusions!
+	for _fb in range(40):
+		var eid2 := int(edge_ids[_rng.randi() % edge_ids.size()])
+		if float(graph.edges[eid2]["length"]) < 26.0:
+			continue
+		if _is_transit_mall_double_track(graph, eid2) or _edge_rides_rails(graph, eid2):
+			continue
+		return eid2
+	return -1
 
 
 static func _is_transit_mall_double_track(graph: NetworkGraph, eid: int) -> bool:

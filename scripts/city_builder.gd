@@ -293,6 +293,15 @@ static func _emit_area_group(
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(mi)
 		return
+	if node_name == "PlazaAreas" or node_name == "BrickPlazas":
+		var plm := ShaderMaterial.new()
+		plm.shader = load("res://shaders/plaza_surface.gdshader") as Shader
+		plm.set_shader_parameter("base_col", col)
+		plm.set_shader_parameter("rough_val", rough)
+		mi.material_override = plm
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		parent.add_child(mi)
+		return
 	mi.material_override = mat
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(mi)
@@ -344,7 +353,8 @@ static func _build_roads_and_curbs(
 	crosswalks: Array,
 	road_mat: ShaderMaterial,
 	emit_n: int = -1,
-	bays: Array = []
+	bays: Array = [],
+	clear_idx: Dictionary = {}
 ) -> void:
 	if roads.is_empty():
 		return
@@ -572,17 +582,16 @@ static func _build_roads_and_curbs(
 	parent.set_meta("kerb_roads", kerb_src)
 	parent.set_meta("kerb_emit_n", emit_n)
 	parent.set_meta("road_mat", road_mat)
-	_build_kerbs(parent, kerb_src, bays, road_mat)
+	_build_kerbs(parent, kerb_src, bays, road_mat, clear_idx)
 
 	if has_mark:
 		var mark_mi := MeshInstance3D.new()
 		mark_mi.name = "RoadMarkings"
 		mark_mi.mesh = Terrain.commit_draped(mark_st, mark_mi)
-		var m_mat := StandardMaterial3D.new()
-		m_mat.albedo_color = Color(0.78, 0.77, 0.73)
-		m_mat.roughness = 0.82
-		m_mat.metallic_specular = 0.18
-		m_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		var m_mat := ShaderMaterial.new()
+		m_mat.shader = load("res://shaders/road_marking.gdshader") as Shader
+		m_mat.set_shader_parameter("paint_col", Color(0.78, 0.77, 0.73))
+		m_mat.set_shader_parameter("rough_val", 0.82)
 		mark_mi.material_override = m_mat
 		mark_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(mark_mi)
@@ -590,10 +599,10 @@ static func _build_roads_and_curbs(
 		var y_mi := MeshInstance3D.new()
 		y_mi.name = "RoadCentreLines"
 		y_mi.mesh = Terrain.commit_draped(yellow_st, y_mi)
-		var y_mat := StandardMaterial3D.new()
-		y_mat.albedo_color = Color(0.86, 0.68, 0.18)
-		y_mat.roughness = 0.8
-		y_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		var y_mat := ShaderMaterial.new()
+		y_mat.shader = load("res://shaders/road_marking.gdshader") as Shader
+		y_mat.set_shader_parameter("paint_col", Color(0.86, 0.68, 0.18))
+		y_mat.set_shader_parameter("rough_val", 0.80)
 		y_mi.material_override = y_mat
 		y_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(y_mi)
@@ -2165,21 +2174,43 @@ static func _station_bays_sig(bays: Array) -> String:
 	return "|".join(parts)
 
 
-static func apply_station_bays(city_root: Node3D, bays: Array) -> void:
+static func _tile_clear_sig(node: Node3D, clear_idx: Dictionary) -> String:
+	var grid: Dictionary = clear_idx.get("grid", {})
+	if grid.is_empty():
+		return ""
+	var nm := str(node.name)
+	var parts := nm.split("_")
+	if parts.size() == 3 and parts[0] == "Tile":
+		var r := Rect2(Vector2(float(parts[1]), float(parts[2])) * CityTiles.TILE, Vector2(CityTiles.TILE, CityTiles.TILE)).grow(24.0)
+		var x0 := int(floor(r.position.x / TrackBuilder.CLEAR_CELL))
+		var x1 := int(floor(r.end.x / TrackBuilder.CLEAR_CELL))
+		var z0 := int(floor(r.position.y / TrackBuilder.CLEAR_CELL))
+		var z1 := int(floor(r.end.y / TrackBuilder.CLEAR_CELL))
+		var cnt := 0
+		var h := 0
+		for k: Vector2i in grid.keys():
+			if k.x >= x0 and k.x <= x1 and k.y >= z0 and k.y <= z1:
+				cnt += 1
+				h = hash([h, k, (grid[k] as PackedVector2Array).size()])
+		return "%d:%d" % [cnt, h]
+	return "c:%d" % grid.size()
+
+
+static func apply_station_bays(city_root: Node3D, bays: Array, clear_idx: Dictionary = {}) -> void:
 	if city_root == null:
 		return
 	var tiles := city_root.get_node_or_null("CityTiles")
 	if tiles != null:
 		for tile: Node in tiles.get_children():
 			if tile is Node3D:
-				apply_station_bays(tile as Node3D, _bays_near(tile as Node3D, bays))
+				apply_station_bays(tile as Node3D, _bays_near(tile as Node3D, bays), clear_idx)
 	if not city_root.has_meta("kerb_roads"):
 		return
-	var sig := _station_bays_sig(bays)
+	var sig := _station_bays_sig(bays) + "#" + _tile_clear_sig(city_root, clear_idx)
 	if city_root.has_meta("last_bays_sig") and str(city_root.get_meta("last_bays_sig")) == sig:
 		return
 	city_root.set_meta("last_bays_sig", sig)
-	_build_kerbs(city_root, city_root.get_meta("kerb_roads"), bays, city_root.get_meta("road_mat"))
+	_build_kerbs(city_root, city_root.get_meta("kerb_roads"), bays, city_root.get_meta("road_mat"), clear_idx)
 
 
 # Station bays that touch a tile (its kerbs are only rebuilt when one of these changes)
@@ -2215,8 +2246,9 @@ const KERB_H := 0.15
 const ROAD_Y := 0.042
 
 
-static func _build_kerbs(parent: Node3D, roads: Array, bays: Array, road_mat: Material) -> void:
-	parent.set_meta("last_bays_sig", _station_bays_sig(bays))
+static func _build_kerbs(parent: Node3D, roads: Array, bays: Array, road_mat: Material, clear_idx: Dictionary = {}) -> void:
+	parent.set_meta("last_bays_sig", _station_bays_sig(bays) + "#" + _tile_clear_sig(parent, clear_idx))
+	var has_tracks := not clear_idx.is_empty() and not (clear_idx.get("grid", {}) as Dictionary).is_empty()
 	for nm: String in ["GraniteCurbs", "StationKerbBays", "Sidewalks", "StreetFurniture"]:
 		var old := parent.get_node_or_null(nm)
 		if old != null:
@@ -2296,6 +2328,8 @@ static func _build_kerbs(parent: Node3D, roads: Array, bays: Array, road_mat: Ma
 					var t := minf(float(k) * 0.5, run)
 					var kp := c_start + dir * t + nrm * hw
 					var keep := (bays.is_empty() or not _in_bay(bays, kp)) and _other_road_clear(seg_grid, kp, road_i) > -0.2
+					if keep and has_tracks and TrackBuilder.track_clearance_dist(clear_idx, kp) < 1.92:
+						keep = false
 					if keep and cur0 < 0.0:
 						cur0 = t
 					if (not keep or k == n_s) and cur0 >= 0.0:
@@ -2309,13 +2343,13 @@ static func _build_kerbs(parent: Node3D, roads: Array, bays: Array, road_mat: Ma
 					var p0 := c_start + dir * t0
 					var p1 := c_start + dir * t1
 					_kerb_piece(curb_st, p0 + nrm * hw, p1 + nrm * hw, nrm, ROAD_Y)
-					# Sidewalk in <=2m chunks, each as wide as it can be before reaching another carriageway
+					# Sidewalk in <=2m chunks, each as wide as it can be before reaching another carriageway or tram track
 					var n_ch := maxi(1, int(ceil((t1 - t0) / 2.0)))
-					var w_prev := _walk_width(seg_grid, c_start + dir * t0 + nrm * (hw + 0.32), nrm, road_i)
+					var w_prev := _walk_width(seg_grid, c_start + dir * t0 + nrm * (hw + 0.32), nrm, road_i, clear_idx if has_tracks else {})
 					for ch in range(n_ch):
 						var ta := lerpf(t0, t1, float(ch) / float(n_ch))
 						var tb := lerpf(t0, t1, float(ch + 1) / float(n_ch))
-						var w_next := _walk_width(seg_grid, c_start + dir * tb + nrm * (hw + 0.32), nrm, road_i)
+						var w_next := _walk_width(seg_grid, c_start + dir * tb + nrm * (hw + 0.32), nrm, road_i, clear_idx if has_tracks else {})
 						var w_use := minf(w_prev, w_next)
 						if w_use >= 0.6:
 							_walk_strip(walk_st, c_start + dir * ta + nrm * (hw + 0.32), c_start + dir * tb + nrm * (hw + 0.32), nrm, u_acc + trim0 + ta, u_acc + trim0 + tb, w_use, float((road_i * 5 + i * 2 + (1 if side > 0.0 else 0)) % 12) * 0.0008)
@@ -2407,12 +2441,16 @@ static func _other_road_clear(seg_grid: Dictionary, p: Vector2, own_road: int) -
 	return best
 
 
-# How far the sidewalk can extend from the kerb back before it would run onto another street
-static func _walk_width(seg_grid: Dictionary, kerb_back: Vector2, out_n: Vector2, own_road: int) -> float:
+# How far the sidewalk can extend from the kerb back before it would run onto another street or tram track
+static func _walk_width(seg_grid: Dictionary, kerb_back: Vector2, out_n: Vector2, own_road: int, clear_idx: Dictionary = {}) -> float:
 	var o := out_n.normalized()
+	var chk_trk := not clear_idx.is_empty()
 	var d := 0.0
 	while d < SIDEWALK_W:
-		if _other_road_clear(seg_grid, kerb_back + o * (d + 0.5), own_road) < 0.35:
+		var pt := kerb_back + o * (d + 0.5)
+		if _other_road_clear(seg_grid, pt, own_road) < 0.35:
+			return d
+		if chk_trk and TrackBuilder.track_clearance_dist(clear_idx, pt) < 1.92:
 			return d
 		d += 0.5
 	return SIDEWALK_W

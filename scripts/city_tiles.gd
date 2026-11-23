@@ -364,7 +364,7 @@ static func build_tile_node(
 			root.set_meta("shop_mat", shop_mat)
 	var roads: Array = td["roads"]
 	if not roads.is_empty():
-		CityBuilder._build_roads_and_curbs(root, roads + (td["context"] as Array), td["crosswalks"], mats["road"], roads.size(), bays)
+		CityBuilder._build_roads_and_curbs(root, roads + (td["context"] as Array), td["crosswalks"], mats["road"], roads.size(), bays, clear_idx)
 		FreewayBuilder.build_street_bridges(root, roads)
 	if not (td["freeways"] as Array).is_empty():
 		FreewayBuilder.build(root, td["freeways"], mats["road"])
