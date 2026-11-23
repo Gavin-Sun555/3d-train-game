@@ -35,3 +35,4 @@ lights_and_shadows/directional_shadow/size=2048
 lights_and_shadows/directional_shadow/soft_shadow_filter_quality=1
 environment/ssao/quality=1
 environment/ssao/half_size=true
+textures/vram_compression/import_etc2_astc=true
