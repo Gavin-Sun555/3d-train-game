@@ -2079,14 +2079,24 @@ static func lane_base_offset(graph: NetworkGraph, eid: int, dir: float, lane_k: 
 	var n := maxi(1, dir_lanes(graph, eid, dir))
 	var k := clampi(lane_k, 0, n - 1)
 	var max_off := maxf(1.6, w * 0.5 - 1.7)
+	var bike_cap := _bike_lane_car_cap(graph, eid)
+	max_off = minf(max_off, bike_cap)
 	if _is_tram_edge(graph, eid):
 		var inner := QUAD_CAR_LANE if graph.is_quad(eid) else _safe_motor_lane_offset(graph, eid)
+		if not graph.is_quad(eid):
+			# As far out as tram clearance needs, but no farther into the non-motorised lane than that
+			inner = maxf(graph.get_edge_track_half_sep(eid) + TRAM_CAR_CLEAR, minf(inner, bike_cap))
 		return minf(inner + float(k) * LANE_W, maxf(inner, max_off))
 	var other := dir_lanes(graph, eid, -dir)
 	if other == 0:
-		return minf(-float(n) * LANE_W * 0.5 + (float(k) + 0.5) * LANE_W, max_off) # one-way street
+		# One-way street: lanes spread across the carriageway, shifted left as a block if the kerb-side lane
+		# would reach the non-motorised lane
+		var off1 := -float(n) * LANE_W * 0.5 + (float(k) + 0.5) * LANE_W
+		var right_most := -float(n) * LANE_W * 0.5 + (float(n) - 0.5) * LANE_W
+		var sh1 := maxf(0.0, right_most - max_off)
+		return clampf(off1 - sh1, -maxf(1.4, w * 0.5 - 1.1), max_off)
 	if n == 1 and k == 0:
-		return _safe_motor_lane_offset(graph, eid)
+		return minf(_safe_motor_lane_offset(graph, eid), maxf(1.4, max_off))
 	var median := 0.8 if n + other >= 4 else 0.0
 	var off := median + (float(k) + 0.5) * LANE_W
 	var shift := maxf(0.0, median + float(n) * LANE_W - max_off - LANE_W * 0.5)
@@ -2189,6 +2199,18 @@ static func _safe_motor_lane_offset(graph: NetworkGraph, eid: int) -> float:
 			return maxf(4.95, w * 0.34)
 		return maxf(3.85, w * 0.28)
 	return clampf(w * 0.24, 2.35, 3.65)
+
+
+# Farthest a motor lane centre may sit from the street centre: keep the whole car body (half-width ~0.95 m) on
+# the motor side of the non-motorised lane's divider line, where the street has one
+const BIKE_CAR_CLEAR := 1.15
+
+static func _bike_lane_car_cap(graph: NetworkGraph, eid: int) -> float:
+	var ed: Dictionary = graph.edges[eid]
+	if not bool(ed.get("bike_lane", false)):
+		return 1e9
+	var hw := clampf(float(ed["width"]) * 0.5, 3.2, 13.5)
+	return maxf(1.4, hw - NetworkGraph.bike_lane_width(hw) - BIKE_CAR_CLEAR)
 
 
 static func _edge_side_has_station(graph: NetworkGraph, eid: int, car_dir: float) -> bool:

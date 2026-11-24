@@ -136,7 +136,7 @@ static func rebuild_road_layer(parent: Node3D, roads: Array, crosswalks: Array, 
 # Player edits: rebuild the generic buildings and their shopfronts (demolished ones have no footprint).
 # Returns the new storefront night material (or null).
 static func rebuild_building_layer(parent: Node3D, buildings: Array, storefronts: Array, building_mat: ShaderMaterial) -> ShaderMaterial:
-	for nm: String in ["Buildings", "BuildingFrames3D", "RooftopBeacons", "StorefrontSigns", "StorefrontFrames", "StorefrontGlazing"]:
+	for nm: String in ["Buildings", "BuildingFrames3D", "BuildingBalconies", "RooftopBeacons", "StorefrontSigns", "StorefrontFrames", "StorefrontGlazing"]:
 		var old := parent.get_node_or_null(nm)
 		if old != null:
 			parent.remove_child(old)
@@ -702,6 +702,14 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 
 	var b_idx := 0
 	var any_geom := false
+	var is_zh := building_mat != null and float(building_mat.get_shader_parameter("chinese_style")) > 0.5
+	# Balconies: own meshes per BALC_CELL map cell, drawn only near the camera (one city-wide batch would be
+	# far too heavy and cannot be distance-culled)
+	var bal_cells := {} # Vector2i -> Terrain accumulator
+	var bal_st := SurfaceTool.new()
+	bal_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var bal_used := false
+	var bal_key := Vector2i.ZERO
 	# Terrain: every building is built into its own small tools, then appended to the batch raised onto the
 	# lowest ground under its footprint (rigid: level roofs, walls reaching down into the slope)
 	var acc_st := Terrain.acc_new()
@@ -715,6 +723,13 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 			Terrain.acc_add(acc_st, st, cur_y0)
 			Terrain.acc_add(acc_fr, frame_st, cur_y0)
 			Terrain.acc_add(acc_rf, roof_st, cur_y0)
+			if bal_used:
+				if not bal_cells.has(bal_key):
+					bal_cells[bal_key] = Terrain.acc_new()
+				Terrain.acc_add(bal_cells[bal_key], bal_st, cur_y0)
+				bal_st = SurfaceTool.new()
+				bal_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+				bal_used = false
 			pending = false
 			st = SurfaceTool.new()
 			st.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -849,16 +864,47 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 			has_frames = true
 			any_geom = true
 			continue
+		var kind_s := str(b.get("kind", ""))
+		var resid := kind_s in ["apartments", "residential", "dormitory"]
+		# Plain buildings (a recorded facade colour is fine; named landmarks keep their own modelling)
+		var generic := (b.get("roof", {}) as Dictionary).is_empty() and str(b.get("lm", "")) == ""
+		# Balconies line up with the facade shader's floor / bay grid (Chinese slab towers: balcony bays
+		# alternate; Seattle apartment blocks: every other window bay)
+		var balc := {}
+		if generic and resid and style == 2 and h >= 9.0:
+			bal_key = Vector2i(int(floor(center2.x / BALC_CELL)), int(floor(center2.y / BALC_CELL)))
+			var wall_c := base_c.lerp(Color(0.86, 0.83, 0.78), 0.45)
+			if is_zh:
+				balc = {"fh": 3.05, "bw": 4.2, "seed": seed_i, "zh": true, "y0": 4.6, "depth": 1.35,
+					"slab": wall_c, "rail": wall_c.lightened(0.06), "st": bal_st}
+			else:
+				balc = {"fh": 3.55, "bw": 3.4, "seed": seed_i, "zh": false, "y0": 3.0, "depth": 1.15,
+					"slab": base_c.lerp(Color(0.80, 0.80, 0.78), 0.5), "rail": Color(0.20, 0.21, 0.23), "st": bal_st}
+		var top_piece := poly
+		var top_h := h
 		if has_setback:
 			# Extrude street-edge podium (0 .. podium_h) + setback upper tower (podium_h .. h)
 			_extrude_tier_with_3d_relief(st, frame_st, poly, 0.0, podium_h, style, vcol, trim_c, true)
-			_extrude_tier_with_3d_relief(st, frame_st, tower_poly, podium_h, h, style, vcol, trim_c, false)
+			_extrude_tier_with_3d_relief(st, frame_st, tower_poly, podium_h, h, style, vcol, trim_c, false, balc)
 			has_frames = true
 			any_geom = true
+			top_piece = tower_poly
 		else:
-			_extrude_tier_with_3d_relief(st, frame_st, poly, 0.0, h, style, vcol, trim_c, true)
+			# Varied massing instead of one plain box: long slabs step down floor by floor at their ends,
+			# point towers get a set-back crown (top floors), the rest stay simple
+			var fh_m := 3.05 if is_zh else 3.4
+			var pieces: Array = _massing_pieces(poly, h, fh_m) if generic and poly.size() >= 4 else [[poly, 0.0, h]]
+			for pc: Array in pieces:
+				_extrude_tier_with_3d_relief(st, frame_st, pc[0], float(pc[1]), float(pc[2]), style, vcol, trim_c, float(pc[1]) < 0.5, balc)
+				if float(pc[2]) >= top_h - 0.01:
+					top_piece = pc[0]
 			has_frames = true
 			any_geom = true
+		if not balc.is_empty() and bool(balc.get("used", false)):
+			bal_used = true
+		if generic and resid and style == 2 and h >= 24.0 and span.x > 14.0 and span.y > 14.0:
+			_emit_roof_core(frame_st, top_piece, top_h, base_c, trim_c, seed_i)
+			has_frames = true
 
 		# Landmark detail: Collegiate Gothic halls / churches (steep slate roofs, buttresses, pinnacles, towers),
 		# King Street Station's campanile
@@ -897,7 +943,8 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 
 		# Rooftop mechanical penthouse, HVAC chillers batched into BuildingFrames3D + skyscraper beacons
 		var top_poly := tower_poly if has_setback else poly
-		if Geometry2D.is_point_in_polygon(center2, top_poly) and span.x > 16.0 and span.y > 16.0 and h >= 15.0:
+		var got_core := str(b.get("kind", "")) in ["apartments", "residential", "dormitory"] and style == 2 and h >= 24.0 and span.x > 14.0 and span.y > 14.0 and (b.get("roof", {}) as Dictionary).is_empty() and str(b.get("lm", "")) == ""
+		if not got_core and Geometry2D.is_point_in_polygon(center2, top_poly) and span.x > 16.0 and span.y > 16.0 and h >= 15.0:
 			var pw := clampf(span.x * 0.25, 4.2, 11.5)
 			var pd := clampf(span.y * 0.25, 4.2, 11.5)
 			var ph := clampf(h * 0.048 + 2.2, 2.5, 5.2)
@@ -929,7 +976,32 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 		Terrain.acc_add(acc_st, st, cur_y0)
 		Terrain.acc_add(acc_fr, frame_st, cur_y0)
 		Terrain.acc_add(acc_rf, roof_st, cur_y0)
+		if bal_used:
+			if not bal_cells.has(bal_key):
+				bal_cells[bal_key] = Terrain.acc_new()
+			Terrain.acc_add(bal_cells[bal_key], bal_st, cur_y0)
 	roof_props.set_meta("on_terrain", true)
+	if not bal_cells.is_empty():
+		var bal_root := Node3D.new()
+		bal_root.name = "BuildingBalconies"
+		parent.add_child(bal_root)
+		var bal_mat := StandardMaterial3D.new()
+		bal_mat.vertex_color_use_as_albedo = true
+		bal_mat.roughness = 0.82
+		bal_mat.metallic_specular = 0.25
+		for ck: Vector2i in bal_cells.keys():
+			var acc_b: Dictionary = bal_cells[ck]
+			if Terrain.acc_empty(acc_b):
+				continue
+			var bmi := MeshInstance3D.new()
+			bmi.name = "Balconies_%d_%d" % [ck.x, ck.y]
+			bmi.set_meta("on_terrain", true)
+			bmi.mesh = Terrain.acc_mesh(acc_b)
+			bmi.material_override = bal_mat
+			bmi.visibility_range_end = BALC_VIS
+			bmi.visibility_range_end_margin = 30.0
+			bmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+			bal_root.add_child(bmi)
 	any_geom = any_geom and not Terrain.acc_empty(acc_st)
 	has_roofs = has_roofs and not Terrain.acc_empty(acc_rf)
 	has_frames = has_frames and not Terrain.acc_empty(acc_fr)
@@ -1466,9 +1538,13 @@ static func _extrude_tier_with_3d_relief(
 	style: int,
 	vcol: Color,
 	trim_c: Color,
-	include_ground_cornice: bool
+	include_ground_cornice: bool,
+	balc: Dictionary = {}
 ) -> void:
 	var parapet_h := 0.90 if style != 0 else 1.15
+	var max_edge := 0.0
+	for i in range(poly.size()):
+		max_edge = maxf(max_edge, poly[i].distance_to(poly[(i + 1) % poly.size()]))
 	var wall_top := y_top + parapet_h
 	var u_accum := 0.0
 	var pier_spacing := 5.55 if style == 0 else (6.0 if style == 1 else 6.8)
@@ -1504,6 +1580,11 @@ static func _extrude_tier_with_3d_relief(
 			wall_top,
 			vcol
 		)
+
+		# 1b. Balconies on the long facades (residential): slab, parapet and side returns per balcony bay
+		if not balc.is_empty() and elen >= 9.0 and elen >= max_edge * 0.55:
+			if _emit_balconies(balc, p0, dir2, nrm2, u0, u1, y_bot, y_top):
+				balc["used"] = true
 
 		# 2. 3D Corner Pilasters + Intermediate Vertical Structural Columns!
 		var bays := maxi(1, int(round(elen / pier_spacing)))
@@ -1574,6 +1655,142 @@ static func _extrude_tier_with_3d_relief(
 			st.set_normal(Vector3.UP)
 			st.set_uv(Vector2.ZERO)
 			st.add_vertex(Vector3(rp.x, y_top, rp.y))
+
+
+const BALC_CELL := 120.0 # balcony mesh cell size (m)
+const BALC_VIS := 320.0 # balconies drawn within this distance of their cell
+
+
+# Balconies on one wall edge (u0..u1 along the facade, as the facade shader counts it). Returns true if any.
+static func _emit_balconies(balc: Dictionary, p0: Vector2, dir2: Vector2, nrm2: Vector2, u0: float, u1: float, y_bot: float, y_top: float) -> bool:
+	var bst: SurfaceTool = balc["st"]
+	var fh := float(balc["fh"])
+	var bw := float(balc["bw"])
+	var zh := bool(balc["zh"])
+	var seed_f := float(balc["seed"])
+	var depth := float(balc["depth"])
+	var slab_c: Color = balc["slab"]
+	var rail_c: Color = balc["rail"]
+	var x_in := 0.08 if zh else 0.12
+	var basis := Basis(Vector3(dir2.x, 0.0, dir2.y), Vector3.UP, Vector3(nrm2.x, 0.0, nrm2.y))
+	var k0 := int(ceil(maxf(float(balc["y0"]), y_bot + 0.5) / fh))
+	var any := false
+	var bay := int(ceil((u0 + 0.4) / bw))
+	while float(bay + 1) * bw <= u1 - 0.4:
+		var is_balc := posmod(bay + int(floor(seed_f * 0.5)), 2) == 0 if zh else posmod(bay, 2) == 0
+		if is_balc:
+			var xa := (float(bay) + x_in) * bw - u0
+			var xb := (float(bay) + 1.0 - x_in) * bw - u0
+			var w := xb - xa
+			var k := k0
+			while float(k) * fh + fh <= y_top + 0.05:
+				var yk := float(k) * fh
+				var mid := p0 + dir2 * ((xa + xb) * 0.5)
+				# floor slab (top flush with the floor line)
+				_emit_colored_box(bst, Transform3D(basis, Vector3(mid.x, yk - 0.09, mid.y) + basis.z * (depth * 0.5)), Vector3(w + 0.10, 0.18, depth), slab_c)
+				# front parapet
+				_emit_colored_box(bst, Transform3D(basis, Vector3(mid.x, yk + 0.52, mid.y) + basis.z * (depth - 0.06)), Vector3(w + 0.10, 1.04, 0.12), rail_c)
+				# side returns
+				for sx: float in [-0.5, 0.5]:
+					_emit_colored_box(bst, Transform3D(basis, Vector3(mid.x, yk + 0.52, mid.y) + basis.x * (sx * (w + 0.10) - signf(sx) * 0.05) + basis.z * (depth * 0.5)), Vector3(0.10, 1.04, depth - 0.02), rail_c)
+				any = true
+				k += 1
+		bay += 1
+	return any
+
+
+# Building massing: [[poly, y_bot, y_top], ...]. Long slab blocks step down at one or both ends (退台);
+# point towers get a set-back crown of their top two floors; small or low buildings stay one volume.
+static func _massing_pieces(poly: PackedVector2Array, h: float, fh: float) -> Array:
+	var one: Array = [[poly, 0.0, h]]
+	if h < 12.0:
+		return one
+	var ob := _obb2d(poly)
+	if ob.is_empty():
+		return one
+	var c: Vector2 = ob[0]
+	var u: Vector2 = ob[1]
+	var hl := float(ob[2])
+	var hs := float(ob[3])
+	var v := Vector2(-u.y, u.x)
+	var rnd := absf(sin(poly[0].x * 12.9898 + poly[0].y * 78.233) * 43758.5453)
+	rnd = rnd - floor(rnd)
+	var floors := int(round(h / fh))
+	if hl * 2.0 >= 34.0 and hl >= hs * 2.0 and floors >= 5:
+		var cuts: Array[float] = [-hl]
+		var drops: Array = []
+		if hl * 2.0 >= 56.0:
+			cuts.append(-hl + hl * 2.0 * (0.20 + 0.10 * rnd))
+			cuts.append(hl - hl * 2.0 * (0.20 + 0.10 * fposmod(rnd * 7.0, 1.0)))
+			drops = [1 + int(rnd * 3.0) % 3, 0, (2 + int(rnd * 5.0)) % 4]
+		else:
+			cuts.append(-hl + hl * 2.0 * (0.36 + 0.14 * rnd))
+			drops = [0, 1 + int(rnd * 4.0) % 3] if rnd < 0.5 else [1 + int(rnd * 4.0) % 3, 0]
+		cuts.append(hl)
+		var out: Array = []
+		for i in range(cuts.size() - 1):
+			var a := cuts[i]
+			var bb := cuts[i + 1]
+			var ext := hs + 4.0
+			var rect := PackedVector2Array([c + u * a - v * ext, c + u * bb - v * ext, c + u * bb + v * ext, c + u * a + v * ext])
+			var hp := maxf(fh * 3.0, h - float(mini(int(drops[i]), floors - 3)) * fh)
+			for part: PackedVector2Array in Geometry2D.intersect_polygons(poly, rect):
+				if part.size() < 3 or absf(_poly_area(part)) < 25.0:
+					continue
+				var pp := part
+				if Geometry2D.is_polygon_clockwise(pp):
+					pp.reverse()
+				out.append([pp, 0.0, hp])
+		return out if not out.is_empty() else one
+	if h >= 27.0 and hs * 2.0 >= 12.0 and floors >= 9:
+		var inset := Geometry2D.offset_polygon(poly, -1.6)
+		if inset.size() == 1 and inset[0].size() >= 3 and absf(_poly_area(inset[0])) > absf(_poly_area(poly)) * 0.45:
+			var crown: PackedVector2Array = inset[0]
+			if Geometry2D.is_polygon_clockwise(crown):
+				crown.reverse()
+			var hb := h - fh * 2.0
+			return [[poly, 0.0, hb], [crown, hb, h]]
+	return one
+
+
+static func _poly_area(poly: PackedVector2Array) -> float:
+	var a := 0.0
+	for i in range(poly.size()):
+		var p := poly[i]
+		var q := poly[(i + 1) % poly.size()]
+		a += p.x * q.y - q.x * p.y
+	return a * 0.5
+
+
+# Roof of a residential tower: stair / lift core housing (楼梯间·电梯机房) with a decorative open frame (屋顶构架)
+static func _emit_roof_core(fst: SurfaceTool, poly: PackedVector2Array, h: float, base_c: Color, trim_c: Color, seed_i: int) -> void:
+	var ob := _obb2d(poly)
+	if ob.is_empty():
+		return
+	var c: Vector2 = ob[0]
+	var u: Vector2 = ob[1]
+	var hl := float(ob[2])
+	var hs := float(ob[3])
+	var basis := Basis(Vector3(u.x, 0.0, u.y), Vector3.UP, Vector3(-u.y, 0.0, u.x))
+	var core_l := clampf(hl * 0.42, 4.0, 9.0)
+	var core_w := clampf(hs * 0.70, 3.6, 6.5)
+	var core_h := 3.4
+	var wall := base_c.lerp(Color(0.88, 0.86, 0.82), 0.35)
+	var off := (float(seed_i % 3) - 1.0) * minf(hl * 0.3, 6.0)
+	var cc := c + u * off
+	_emit_colored_box(fst, Transform3D(basis, Vector3(cc.x, h + core_h * 0.5, cc.y)), Vector3(core_l, core_h, core_w), wall)
+	# open frame on top of the core: corner posts + perimeter beams + a cross beam
+	var fy := h + core_h
+	var fhgt := 2.2
+	var beam := trim_c.lerp(Color(0.90, 0.88, 0.84), 0.5)
+	for sx: float in [-0.5, 0.5]:
+		for sz: float in [-0.5, 0.5]:
+			var pp := Vector3(cc.x, fy + fhgt * 0.5, cc.y) + basis.x * (sx * (core_l + 1.0)) + basis.z * (sz * (core_w + 1.0))
+			_emit_colored_box(fst, Transform3D(basis, pp), Vector3(0.35, fhgt, 0.35), beam)
+	for sz2: float in [-0.5, 0.5]:
+		_emit_colored_box(fst, Transform3D(basis, Vector3(cc.x, fy + fhgt - 0.2, cc.y) + basis.z * (sz2 * (core_w + 1.0))), Vector3(core_l + 1.35, 0.4, 0.35), beam)
+	for sx2: float in [-0.5, 0.0, 0.5]:
+		_emit_colored_box(fst, Transform3D(basis, Vector3(cc.x, fy + fhgt - 0.2, cc.y) + basis.x * (sx2 * (core_l + 1.0))), Vector3(0.35, 0.4, core_w + 1.35), beam)
 
 
 static func _emit_3d_beam_along_wall(
@@ -2467,6 +2684,18 @@ static func _build_kerbs(parent: Node3D, roads: Array, bays: Array, road_mat: Ma
 
 # Track-aware Chinese Non-Motorized Bike Lanes (非机动车道): green outer asphalt strip + solid white divider line.
 # Rebuilt whenever tracks change so green bike lanes NEVER overlap laid tram tracks or station bays!
+# Kerb sides (+1: right of a -> b) that carry a non-motorised lane. A one-way carriageway (the usual case: one
+# half of a divided arterial) has it at its kerb only, not along the median.
+static func _bike_sides(r: Dictionary) -> Array[float]:
+	var lf := int(r.get("lanes_f", 1))
+	var lb := int(r.get("lanes_b", 1))
+	if lf > 0 and lb == 0:
+		return [1.0]
+	if lb > 0 and lf == 0:
+		return [-1.0]
+	return [-1.0, 1.0]
+
+
 static func _build_bike_lane_strips(
 	parent: Node3D, roads: Array, emit_n: int,
 	bays: Array, clear_idx: Dictionary, has_tracks: bool
@@ -2504,8 +2733,20 @@ static func _build_bike_lane_strips(
 			var s1 := seg_len - s0
 			if s1 - s0 < 4.0:
 				continue
-			for bside: float in [-1.0, 1.0]:
-				var inner_o := bside * (hw - bl_w)
+			for bside: float in _bike_sides(r):
+				# Tram street: start the lane outside the motor lane that keeps clear of the tracks (narrower lane)
+				var inner_abs := hw - bl_w
+				if has_tracks:
+					var need := 0.0
+					var sq := s0
+					while sq <= s1 + 0.01:
+						var pq := a + dir * minf(sq, s1) + nrm * (bside * inner_abs)
+						need = maxf(need, NetworkGraph.BIKE_TRACK_CLEAR - TrackBuilder.track_clearance_dist(clear_idx, pq))
+						sq += 4.0
+					inner_abs += maxf(0.0, need)
+				if hw - 0.14 - inner_abs < NetworkGraph.BIKE_MIN_W:
+					continue
+				var inner_o := bside * inner_abs
 				var outer_o := bside * (hw - 0.14)
 				var mid_o := (inner_o + outer_o) * 0.5
 				var o_lo := minf(inner_o, outer_o)
@@ -2520,8 +2761,7 @@ static func _build_bike_lane_strips(
 					var p_in := a + dir * s_cl + nrm * inner_o
 					var ok := not _in_bay(bays, p_mid)
 					if ok and has_tracks:
-						ok = TrackBuilder.track_clearance_dist(clear_idx, p_in) >= 2.25 \
-							and TrackBuilder.track_clearance_dist(clear_idx, p_mid) >= 2.75
+						ok = TrackBuilder.track_clearance_dist(clear_idx, p_in) >= NetworkGraph.BIKE_TRACK_CLEAR - 0.05
 					if ok and sc <= s1:
 						if run_a < 0.0:
 							run_a = s_cl
@@ -2620,7 +2860,7 @@ static func _build_bike_guardrails(
 			var n3 := Vector3(nrm.x, 0.0, nrm.y)
 			var s_start := 13.5
 			var s_end := sl - 13.5
-			for side: float in [-1.0, 1.0]:
+			for side: float in _bike_sides(r):
 				var run_a := -1.0
 				var s := s_start
 				while s <= s_end + 0.01:

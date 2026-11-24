@@ -50,12 +50,22 @@ void fragment() {
 			float d3 = abs(v_local_pos.z - 1.18);
 			door_seam = smoothstep(0.006, 0.022, min(min(d1, d2), d3));
 		}
-		col = v_col.rgb * (0.96 + 0.07 * flake) * mix(0.76, 1.0, lower_ao) * mix(0.32, 1.0, door_seam);
-		rough = 0.20;
-		metal = 0.42;
-		spec = 0.85;
-		ccoat = 0.90;
-		ccoat_rough = 0.06;
+		// Real car paint is a pigmented (dielectric) base coat under a clear coat: only silver / grey paints carry
+		// metal flakes. A thin film of city dust and some wear keep the coat from mirroring the sky.
+		vec3 base = v_col.rgb;
+		float sat = max(max(base.r, base.g), base.b) - min(min(base.r, base.g), base.b);
+		float val = max(max(base.r, base.g), base.b);
+		float flake_paint = (1.0 - smoothstep(0.06, 0.14, sat)) * smoothstep(0.28, 0.40, val) * (1.0 - smoothstep(0.80, 0.90, val));
+		float grime = hash21(floor(v_world.xz * 6.0)) * 0.5 + 0.5 * hash21(floor(v_world.xz * 23.0 + 7.0));
+		float up = clamp(v_world_nrm.y, 0.0, 1.0);
+		vec3 dust = vec3(0.56, 0.54, 0.50);
+		col = base * (0.97 + 0.04 * flake * flake_paint) * mix(0.80, 1.0, lower_ao) * mix(0.35, 1.0, door_seam);
+		col = mix(col, dust, 0.06 + 0.07 * up + 0.10 * (1.0 - lower_ao));
+		rough = mix(0.46, 0.36, flake_paint) + 0.08 * grime;
+		metal = mix(0.0, 0.22, flake_paint);
+		spec = 0.42;
+		ccoat = 0.2;
+		ccoat_rough = 0.22 + 0.10 * grime;
 	} else if (mat_id == 1) {
 		// === Dark Tinted Automotive Glass with Sky Fresnel Reflection & Interior Silhouette ===
 		vec3 sky_refl = vec3(0.54, 0.66, 0.78);
@@ -63,13 +73,13 @@ void fragment() {
 		// Subtle black ceramic frit border around windshield/window edges
 		float edge_frit = smoothstep(0.0, 0.08, v_uv.x) * smoothstep(0.0, 0.08, 1.0 - v_uv.x)
 						* smoothstep(0.0, 0.10, v_uv.y) * smoothstep(0.0, 0.10, 1.0 - v_uv.y);
-		col = mix(cabin_dark, sky_refl, clamp(0.14 + fresnel * 0.76, 0.0, 0.88));
+		col = mix(cabin_dark, sky_refl * 0.8, clamp(0.10 + fresnel * 0.55, 0.0, 0.65));
 		col = mix(vec3(0.04, 0.045, 0.05), col, edge_frit);
-		rough = mix(0.35, 0.05, edge_frit);
-		metal = 0.35;
-		spec = 0.92;
-		ccoat = 0.95;
-		ccoat_rough = 0.03;
+		rough = mix(0.40, 0.08, edge_frit);
+		metal = 0.0;
+		spec = 0.5;
+		ccoat = 0.0;
+		ccoat_rough = 0.1;
 	} else if (mat_id == 2) {
 		// === Tire Rubber Tread + 5-Spoke Brushed Silver Alloy Wheel Rim ===
 		// v_uv encodes radial (x = 0 center -> 1 outer tire) & angular (y = angle -PI..PI) on wheel cap!
@@ -81,9 +91,9 @@ void fragment() {
 			float outer_lip = smoothstep(0.84, 0.94, r);
 			float alloy_mask = clamp(spokes + hub + outer_lip, 0.0, 1.0);
 			col = mix(vec3(0.08, 0.085, 0.095), vec3(0.74, 0.77, 0.81), alloy_mask);
-			rough = mix(0.65, 0.24, alloy_mask);
-			metal = mix(0.20, 0.86, alloy_mask);
-			spec = 0.80;
+			rough = mix(0.70, 0.38, alloy_mask);
+			metal = mix(0.0, 0.70, alloy_mask);
+			spec = 0.5;
 		} else {
 			// Grooved black tire rubber
 			float tread = 0.90 + 0.14 * sin(v_local_pos.z * 95.0);
@@ -94,11 +104,12 @@ void fragment() {
 		}
 	} else if (mat_id == 3) {
 		// === Matte Dark Trim / Honeycomb Grille / Chrome ===
-		float grille = 0.85 + 0.18 * sin(v_local_pos.x * 75.0) * sin(v_local_pos.y * 75.0);
+		// Bumper / sill / trim plastic and the number plate: matte, non-metallic (faint texture, no checkerboard)
+		float grille = 0.97 + 0.04 * sin(v_local_pos.x * 75.0) * sin(v_local_pos.y * 75.0);
 		col = v_col.rgb * grille;
-		rough = 0.42;
-		metal = 0.55;
-		spec = 0.60;
+		rough = 0.66;
+		metal = 0.0;
+		spec = 0.38;
 	} else if (mat_id == 4) {
 		// === Warm Projector LED Headlight ===
 		col = vec3(0.98, 0.96, 0.90);

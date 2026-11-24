@@ -338,11 +338,21 @@ static func _build_one(fst: SurfaceTool, gst: SurfaceTool, labels: Node3D, sf: D
 	_box(ctx, d1, w - pil, 0.0, sill, 0.0, 0.22, bulk_c)
 	_box(ctx, pil, d0, sill, sill + 0.05, 0.0, 0.26, frame_c.lightened(0.1))
 	_box(ctx, d1, w - pil, sill, sill + 0.05, 0.0, 0.26, frame_c.lightened(0.1))
-	# Glazing (shop windows + door glass), interior shader
-	var col := Color((st["accent"] as Color).r, (st["accent"] as Color).g, (st["accent"] as Color).b, float(int(st["interior"])) / 255.0)
+	# Glazing (shop windows + door glass), interior shader. Code: interior | 8 door | 16 posters | 32 local shop
+	var acc_c: Color = st["accent"]
+	var code := int(st["interior"]) + (32 if is_local_zh else 0)
+	var win_code := code + (16 if (is_zh_shop and nh % 5 < 3) or (not is_zh_shop and nh % 4 == 0) else 0)
+	var col := Color(acc_c.r, acc_c.g, acc_c.b, float(win_code) / 255.0)
+	var door_col := Color(acc_c.r, acc_c.g, acc_c.b, float(code + 8) / 255.0)
 	_glass(gst, o, U, N, pil, d0, sill, glass_top, 0.10, col)
 	_glass(gst, o, U, N, d1, w - pil, sill, glass_top, 0.10, col)
-	_glass(gst, o, U, N, d0, d1, 0.02, glass_top, -0.22, col) # door set back into a shallow vestibule
+	_glass(gst, o, U, N, d0, d1, 0.02, glass_top, -0.22, door_col) # door set back into a shallow vestibule
+	# Scrolling red LED text board over the door (LED走字屏) on many local shops
+	if is_local_zh and nh % 3 == 0 and glass_top > 2.9:
+		var lb0 := maxf(pil + 0.05, d0 - 0.35)
+		var lb1 := minf(w - pil - 0.05, d1 + 0.35)
+		_box(ctx, lb0 - 0.04, lb1 + 0.04, glass_top - 0.66, glass_top - 0.30, 0.10, 0.20, Color(0.08, 0.08, 0.09))
+		_panel(gst, o, U, N, lb0, lb1, glass_top - 0.62, glass_top - 0.34, 0.205, Color(0.0, 0.0, 0.0, 5.0 / 255.0))
 	# Door vestibule: reveals, granite step threshold, welcome mat, aluminum door stiles, frosted stripe & stainless handles!
 	_box(ctx, d0 - 0.06, d0, 0.0, glass_top, -0.26, 0.28, frame_c)
 	_box(ctx, d1, d1 + 0.06, 0.0, glass_top, -0.26, 0.28, frame_c)
@@ -360,6 +370,14 @@ static func _build_one(fst: SurfaceTool, gst: SurfaceTool, labels: Node3D, sf: D
 	if is_local_zh or (is_zh_shop and str(sf.get("kind", "")) in ["convenience", "hardware", "greengrocer", "pharmacy"]):
 		_box(ctx, pil, w - pil, glass_top - 0.24, glass_top, 0.0, 0.32, Color(0.70, 0.72, 0.74))
 		_box(ctx, pil, w - pil, glass_top - 0.26, glass_top - 0.24, 0.26, 0.33, Color(0.45, 0.47, 0.50))
+		# A few shutters are part-way down (opening / closing up) or shut (closed today), with guide rails
+		var sh_k := nh % 17
+		if is_local_zh and sh_k < 3:
+			var sh_bot := 0.02 if sh_k == 0 else glass_top - 0.95 - 0.35 * float(sh_k)
+			_panel(gst, o, U, N, pil, w - pil, sh_bot, glass_top - 0.26, 0.29, Color(0.0, 0.0, 0.0, 6.0 / 255.0))
+			_box(ctx, pil, pil + 0.06, 0.0, glass_top - 0.26, 0.10, 0.31, Color(0.55, 0.57, 0.60))
+			_box(ctx, w - pil - 0.06, w - pil, 0.0, glass_top - 0.26, 0.10, 0.31, Color(0.55, 0.57, 0.60))
+			_box(ctx, pil, w - pil, sh_bot - 0.05, sh_bot, 0.24, 0.32, Color(0.40, 0.42, 0.45))
 	# Window mullions and transom bar
 	var spans: Array = [[pil, d0], [d1, w - pil]]
 	for sp: Array in spans:
@@ -394,6 +412,25 @@ static func _build_one(fst: SurfaceTool, gst: SurfaceTool, labels: Node3D, sf: D
 			_box(ctx, r_u0, r_u1, WALK_Y, WALK_Y + 0.58, 0.26, 0.88, Color(0.24, 0.46, 0.22))
 			_box(ctx, r_u0 + 0.08, (r_u0 + r_u1) * 0.5 - 0.04, WALK_Y + 0.58, WALK_Y + 0.74, 0.30, 0.84, Color(0.92, 0.52, 0.12))
 			_box(ctx, (r_u0 + r_u1) * 0.5 + 0.04, r_u1 - 0.08, WALK_Y + 0.58, WALK_Y + 0.74, 0.30, 0.84, Color(0.84, 0.20, 0.16))
+
+	# 4) Out-front seating of small eateries (外摆): folding tables with red plastic stools
+	var kind_s := str(sf.get("kind", ""))
+	if is_local_zh and kind_s in ["restaurant", "fast_food"] and nh % 10 < 3 and w >= 5.0:
+		for tu: float in [w * 0.25, w * 0.75]:
+			if absf(tu - door_c) < door_w * 0.8:
+				continue
+			_box(ctx, tu - 0.42, tu + 0.42, WALK_Y + 0.70, WALK_Y + 0.74, 1.10, 1.80, Color(0.90, 0.88, 0.84))
+			for lu: float in [-0.36, 0.36]:
+				for ld: float in [1.16, 1.74]:
+					_box(ctx, tu + lu - 0.02, tu + lu + 0.02, WALK_Y, WALK_Y + 0.70, ld - 0.02, ld + 0.02, Color(0.55, 0.56, 0.58))
+			for su: Vector2 in [Vector2(-0.62, 1.45), Vector2(0.62, 1.45), Vector2(0.0, 2.15)]:
+				_box(ctx, tu + su.x - 0.15, tu + su.x + 0.15, WALK_Y, WALK_Y + 0.45, su.y - 0.15, su.y + 0.15, Color(0.78, 0.14, 0.12))
+	# 5) Convenience / snack shops: ice-cream chest freezer and a drinks cooler out on the pavement
+	if is_zh_shop and kind_s in ["convenience", "supermarket", "beverages"] and nh % 5 < 2 and w >= 4.0:
+		var fu := pil + 0.75 if door_c > w * 0.5 else w - pil - 0.75
+		_box(ctx, fu - 0.62, fu + 0.62, WALK_Y, WALK_Y + 0.82, 0.25, 0.95, Color(0.93, 0.93, 0.92))
+		_box(ctx, fu - 0.58, fu + 0.58, WALK_Y + 0.82, WALK_Y + 0.86, 0.29, 0.91, Color(0.70, 0.82, 0.90))
+		_box(ctx, fu - 0.62, fu + 0.62, WALK_Y + 0.55, WALK_Y + 0.70, 0.95, 0.96, acc_c)
 
 	# Sign lettering
 	var letters := bool(st["letters"])
@@ -530,6 +567,23 @@ static func _tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, col: Color
 		st.set_color(col)
 		st.set_normal(nrm)
 		st.add_vertex(v)
+
+
+# A flat panel in the glazing mesh with its own 0..w, 0..h UVs (LED board, roller shutter)
+static func _panel(st: SurfaceTool, o: Vector3, U: Vector3, N: Vector3, u0: float, u1: float, y0: float, y1: float, d: float, col: Color) -> void:
+	if u1 - u0 < 0.1 or y1 - y0 < 0.05:
+		return
+	var vs := [
+		[o + U * u0 + N * d + Vector3.UP * y0, Vector2(0.0, 0.0)],
+		[o + U * u1 + N * d + Vector3.UP * y0, Vector2(u1 - u0, 0.0)],
+		[o + U * u1 + N * d + Vector3.UP * y1, Vector2(u1 - u0, y1 - y0)],
+		[o + U * u0 + N * d + Vector3.UP * y1, Vector2(0.0, y1 - y0)],
+	]
+	for idx: int in [0, 1, 2, 0, 2, 3]:
+		st.set_color(col)
+		st.set_normal(N)
+		st.set_uv(vs[idx][1])
+		st.add_vertex(vs[idx][0])
 
 
 static func _glass(st: SurfaceTool, o: Vector3, U: Vector3, N: Vector3, u0: float, u1: float, y0: float, y1: float, d: float, col: Color) -> void:

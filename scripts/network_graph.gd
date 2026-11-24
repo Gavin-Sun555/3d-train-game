@@ -285,6 +285,22 @@ const LINE_PALETTE: Array[Color] = [
 ]
 
 
+static func _bike_key(p0: Variant, p1: Variant) -> String:
+	return "%.1f,%.1f|%.1f,%.1f" % [float(p0[0]), float(p0[1]), float(p1[0]), float(p1[1])]
+
+
+# Width (m) of the painted non-motorised lane at each kerb, for a street of half-width hw (same rule as the
+# road markings in CityBuilder._build_bike_lane_strips)
+static func bike_lane_width(hw: float) -> float:
+	return 2.05 if hw >= 5.75 else (1.55 if hw >= 4.8 else 1.25)
+
+
+# On a tram street the motor lane must keep TrafficSim.TRAM_CAR_CLEAR (3.8 m) from the nearest track centre, so the
+# non-motorised lane starts no closer to the track than that plus a car half-width and a small gap
+const BIKE_TRACK_CLEAR := 4.9
+const BIKE_MIN_W := 0.9 # narrower than this the lane is not painted (bikes share the kerb lane)
+
+
 func load_from_map_data(map_data: Dictionary, use_starter: bool = true) -> void:
 	nodes.clear()
 	edges.clear()
@@ -315,6 +331,17 @@ func load_from_map_data(map_data: Dictionary, use_starter: bool = true) -> void:
 		}
 		adj[nid] = []
 
+	# Streets painted with a non-motorised lane (非机动车道) at both kerbs: the road list carries the flag and
+	# shares its polyline with the graph edge, so match by end points
+	var bike_keys := {}
+	for r_raw in map_data.get("roads", []):
+		if not bool(r_raw.get("bike_lane", false)):
+			continue
+		var rp: Array = r_raw.get("pts", [])
+		if rp.size() >= 2:
+			bike_keys[_bike_key(rp[0], rp[rp.size() - 1])] = true
+			bike_keys[_bike_key(rp[rp.size() - 1], rp[0])] = true
+
 	for e_raw in map_data.get("graph_edges", []):
 		var eid := int(e_raw["id"])
 		var a := int(e_raw["a"])
@@ -338,6 +365,9 @@ func load_from_map_data(map_data: Dictionary, use_starter: bool = true) -> void:
 			edges[eid]["bridge"] = true # carried over the ground (overpass / canal bridge)
 		if bool(e_raw.get("underground", false)):
 			edges[eid]["underground"] = true # subterranean road tunnel (hidden on surface, shown in B1 blueprint)
+		var ep_raw: Array = e_raw.get("pts", [])
+		if not bike_keys.is_empty() and ep_raw.size() >= 2 and bike_keys.has(_bike_key(ep_raw[0], ep_raw[ep_raw.size() - 1])):
+			edges[eid]["bike_lane"] = true
 		if adj.has(a):
 			adj[a].append({"to": b, "edge_id": eid, "length": elen})
 		if adj.has(b):
