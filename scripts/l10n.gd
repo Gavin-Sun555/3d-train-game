@@ -128,6 +128,8 @@ static func station_en_name(raw_name: String) -> String:
 		"庆丰路基地站": "Qingfeng Road Tram Depot",
 		"庆丰路长水路站": "Qingfeng Road and Changshui Road",
 		"庆丰路长水路": "Qingfeng Road and Changshui Road",
+		"由拳路双溪路站": "Youquan Road and Shuangxi Road",
+		"由拳路双溪路": "Youquan Road and Shuangxi Road",
 		"由拳路商务大道站": "Youquan Road and Shangwu Avenue",
 		"由拳路商务大道": "Youquan Road and Shangwu Avenue",
 		"纺工路由拳路站": "Fanggong Road and Youquan Road",

@@ -600,6 +600,12 @@ func _run() -> void:
 	var jx_sta_b1_y := 0.0
 	var jh_pos := Vector3.ZERO
 	var rm_pos := Vector3.ZERO
+	var sx_pos := Vector3.ZERO
+	var fy_pos := Vector3.ZERO
+	var fy_road := ""
+	var yz_pos := Vector3.ZERO
+	var ps_pos := Vector3.ZERO
+	var hx_pos := Vector3.ZERO
 	var en_tts_ok := true
 	for sid_v in t1_sids:
 		var sd: Dictionary = jx_graph.stations.get(int(sid_v), {})
@@ -611,12 +617,25 @@ func _run() -> void:
 			var uc := en_nm.unicode_at(ci)
 			if uc >= 0x4E00 and uc <= 0x9FFF:
 				en_tts_ok = false
+		var spos: Vector3 = sd["pos"]
 		if sname == "嘉兴火车站":
-			jx_sta_b1_y = (sd["pos"] as Vector3).y
+			jx_sta_b1_y = spos.y
 		elif sname == "纺工路景湖路站":
-			jh_pos = sd["pos"] as Vector3
+			jh_pos = spos
 		elif sname == "人民公园":
-			rm_pos = sd["pos"] as Vector3
+			rm_pos = spos
+		elif sname == "由拳路双溪路站":
+			sx_pos = spos
+		elif sname == "纺工路由拳路站":
+			fy_pos = spos
+			var fy_eid := int(sd.get("edge_id", -1))
+			fy_road = str(jx_graph.edges.get(fy_eid, {}).get("name", ""))
+		elif sname == "嘉兴一中站":
+			yz_pos = spos
+		elif sname == "中山东路建国南路(瓶山)":
+			ps_pos = spos
+		elif sname == "中山东路禾兴南路":
+			hx_pos = spos
 	var t1_surf_edges := 0
 	var t1_center_blvd := 0
 	for tr_rec in (m._map_data.get("starter_network", {}) as Dictionary).get("tracks", []):
@@ -630,10 +649,15 @@ func _run() -> void:
 	var center_blvd_pct := 100.0 * float(t1_center_blvd) / float(maxi(1, t1_surf_edges))
 	var jh_on_fanggong := jh_pos.x >= 1110.0 and jh_pos.x <= 1175.0 and jh_pos.z <= -220.0 and jh_pos.z >= -400.0
 	var rm_on_hcd := rm_pos.x >= 145.0 and rm_pos.x <= 220.0 and rm_pos.z <= -1320.0 and rm_pos.z >= -1515.0
+	var sx_ok := sx_pos.x >= 3040.0 and sx_pos.x <= 3255.0 and absf(sx_pos.z - 2531.0) < 35.0
+	var fy_ok := "纺工" in fy_road and fy_pos.z < 2515.0
+	var yz_ok := yz_pos.z < 1600.0 and yz_pos.z > 1300.0
+	var ps_ok := ps_pos.x < -220.0 and ps_pos.x > -420.0
+	var hx_ok := hx_pos.x < -695.0 and hx_pos.x > -860.0
 	var pcut_cnt := (jx_graph.get_meta("portal_cutouts", []) as Array).size()
 	_check(
-		str(t1_ln.get("model_key", "")) == "crrc-jiaxing-nanhu" and t1_sids.size() == 15 and t1_tr_secs == 5 and jx_sta_b1_y < -8.0 and jh_on_fanggong and rm_on_hcd and pcut_cnt >= 2 and pcut_cnt <= 16 and en_tts_ok and center_blvd_pct >= 90.0,
-		"Jiaxing T1 real alignment: 15 Amap stations (100%% EN TTS), %.0f%% center-median boulevards, straight 景湖路(%.0f,%.0f), B1 嘉兴站(y=%.1fm), 人民公园(%.0f,%.0f), %d portal cutouts" % [center_blvd_pct, jh_pos.x, jh_pos.z, jx_sta_b1_y, rm_pos.x, rm_pos.z, pcut_cnt]
+		str(t1_ln.get("model_key", "")) == "crrc-jiaxing-nanhu" and t1_sids.size() == 16 and t1_tr_secs == 5 and jx_sta_b1_y < -8.0 and jh_on_fanggong and rm_on_hcd and sx_ok and fy_ok and yz_ok and ps_ok and hx_ok and pcut_cnt >= 2 and pcut_cnt <= 16 and en_tts_ok and center_blvd_pct >= 90.0,
+		"Jiaxing T1 real alignment: 16 Amap stations (100%% EN TTS), %.0f%% center-median boulevards, 双溪路(%.0f), 纺工路由拳路(%s z=%.0f), 一中北(z=%.0f), 瓶山西(x=%.0f), 禾兴西(x=%.0f)" % [center_blvd_pct, sx_pos.x, fy_road, fy_pos.z, yz_pos.z, ps_pos.x, hx_pos.x]
 	)
 	_check(
 		t1_dock_checks > 0 and t1_misaligned == 0,

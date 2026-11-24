@@ -2384,8 +2384,8 @@ def build_t1_starter_network(nodes_list, edges_list):
         path.reverse()
         return path
 
-    # All 15 authentic operational stations of Jiaxing Tram Line T1 in exact real-world Amap (高德地图) sequence:
-    # Part A (Surface South -> North): 嘉兴南站(站前东行平滑北转) -> 庆丰路(庆丰路基地/长水路) -> 由拳路(商务大道) -> 纺工路(由拳路/一中/烟雨路/南溪西路/景湖路/滨河路) -> 跨平湖塘桥 -> 干地入口
+    # All 16 authentic operational stations of Jiaxing Tram Line T1 in exact real-world Amap (高德地图) sequence:
+    # Part A (Surface South -> North): 嘉兴南站(站前东行平滑北转) -> 庆丰路(庆丰路基地/长水路) -> 由拳路(双溪路/商务大道) -> 纺工路(由拳路/一中/烟雨路/南溪西路/景湖路/滨河路) -> 跨平湖塘桥 -> 干地入口
     # Part B (B1 Underground Tunnel): 东隧道坡道 -> 嘉兴火车站(B1中央无遮挡廊道) -> 下穿沪昆铁路 -> 勤俭路出口坡道
     # Part C (Surface West): 勤俭路西行 -> 环城东路南行(人民公园) -> 中山东路(瓶山 -> 禾兴南路 -> 中山东路安乐路)
     waypoints_south = [
@@ -2396,9 +2396,10 @@ def build_t1_starter_network(nodes_list, edges_list):
         ("有轨电车庆丰路基地站", 4252.0, 4297.0, "庆丰路"),
         ("庆丰路长水路站", 4242.0, 3527.0, "庆丰路"),
         ("__qf_yq_corner__", 4216.26, 2577.23, "由拳路"),
+        ("由拳路双溪路站", 3255.4, 2531.6, "由拳路"),
         ("由拳路商务大道站", 2408.0, 2529.0, "由拳路"),
-        ("纺工路由拳路站", 1435.0, 2436.0, "纺工路"),
-        ("嘉兴一中站", 1433.0, 1540.0, "纺工路"),
+        ("纺工路由拳路站", 1410.6, 2519.6, "纺工路"),
+        ("嘉兴一中站", 1446.6, 1602.3, "纺工路"),
         ("纺工路烟雨路站", 1294.0, 724.0, "纺工路"),
         ("纺工路南溪西路站", 1185.54, 117.30, ""),
         ("纺工路景湖路站", 1139.92, -351.19, ""),
@@ -2573,7 +2574,21 @@ def build_t1_starter_network(nodes_list, edges_list):
                     xover_eids.add(cand_eid)
                     break
 
-    # Assign each of the 21 real stations cleanly to an ordered distinct edge (or well-spaced slot on a long avenue edge!)
+    # Exact real-world side-of-intersection coordinates for stations pinned just past their cross street:
+    # - 由拳路双溪路站: on 由拳路 immediately WEST of 双溪路 (x < 3255.4)
+    # - 纺工路由拳路站: on 纺工路 immediately NORTH of 由拳路 (y < 2519.6), NOT on 由拳路!
+    # - 嘉兴一中站: on 纺工路 immediately NORTH of 中环南路 (y < 1602.3), NOT south!
+    # - 中山东路建国南路(瓶山): on 中山东路 immediately WEST of 建国南路 (x < -217.7), NOT east!
+    # - 中山东路禾兴南路: on 中山东路 immediately WEST of 禾兴南路 (x < -689.3), NOT east!
+    exact_station_pos = {
+        "由拳路双溪路站": (3193.0, 2531.3),
+        "纺工路由拳路站": (1413.0, 2448.0),
+        "嘉兴一中站": (1432.0, 1532.0),
+        "中山东路建国南路(瓶山)": (-288.0, -1097.5),
+        "中山东路禾兴南路": (-754.0, -1015.5),
+    }
+
+    # Assign each of the 16 real operational stations cleanly to its exact ordered edge & side of intersection!
     stations = []
     used_slots = defaultdict(list)  # eid -> list of t positions already placed
     min_track_idx = 0
@@ -2584,6 +2599,35 @@ def build_t1_starter_network(nodes_list, edges_list):
             chosen_eid = forced_eid
             chosen_t = 0.28  # Right inside Jiaxing Station B1 South Tram Interchange Hall (lx=0, y=-10.0m)!
             min_track_idx = max(min_track_idx, hint_idx)
+        elif nm in exact_station_pos:
+            tx_p, ty_p = exact_station_pos[nm]
+            best_ti = -1
+            best_dist = 1e18
+            best_t = 0.5
+            for ti in range(min_track_idx, len(track_eids)):
+                eid = track_eids[ti]
+                if eid in xover_eids or eid in ug_elev_map:
+                    continue
+                elen = float(edge_by_id[eid]["length"])
+                if elen < 48.0:
+                    continue
+                pts_e = edge_by_id[eid]["pts"]
+                pa, pb = pts_e[0], pts_e[-1]
+                d_seg, _ = seg_dist(tx_p, ty_p, pa[0], pa[1], pb[0], pb[1])
+                if d_seg < best_dist:
+                    dx, dy = pb[0] - pa[0], pb[1] - pa[1]
+                    l2 = dx * dx + dy * dy
+                    t_raw = 0.5 if l2 < 1e-6 else ((tx_p - pa[0]) * dx + (ty_p - pa[1]) * dy) / l2
+                    margin_t = min(0.36, 42.0 / elen)
+                    t_clamped = max(margin_t, min(1.0 - margin_t, t_raw))
+                    if all(abs(t_clamped - prev_t) * elen >= 95.0 for prev_t in used_slots[eid]):
+                        best_dist = d_seg
+                        best_ti = ti
+                        best_t = t_clamped
+            if best_ti >= 0:
+                chosen_eid = track_eids[best_ti]
+                chosen_t = best_t
+                min_track_idx = max(min_track_idx, best_ti)
         else:
             if st_i == 0:
                 cand_order = list(range(0, min(4, len(track_eids))))
