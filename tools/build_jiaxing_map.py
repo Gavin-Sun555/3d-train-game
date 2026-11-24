@@ -2258,6 +2258,8 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
             r["bridge"] = True
         if ed.get("tram_median"):
             r["tram_median"] = True
+        if ed.get("bike_buffer"):
+            r["bike_buffer"] = ed["bike_buffer"]
         if ed.get("underground"):
             r["underground"] = True
             roads.append(r)
@@ -3256,6 +3258,7 @@ def build_gated_compounds(landuse_zones, ways, nodes, road_grid, water_grid, rai
         nm = raw_nm if raw_nm else COMPOUND_NAMES_ZH[name_idx % len(COMPOUND_NAMES_ZH)]
         name_idx += 1
         compounds.append({
+            "_ring": shrunk,
             "name": nm,
             "segs": final_segs,
             "gate_pos": rnd((gx, gy)),
@@ -3335,6 +3338,28 @@ def main():
     starter = build_t1_starter_network(graph_nodes, graph_edges)
     t1_surf_segs = starter.pop("_surface_segs", [])
 
+    # 机非隔离带: major non-tram roads get a 1.5 m planted buffer between the motor lanes and each non-motorised
+    # lane. The OSM-derived 24 m section has no room for it (3 lanes + 2.05 m bike lane per side), so those roads
+    # widen by the two buffers; a road gets one only where every motor lane still fits at >= 3.0 m (sims clamp the
+    # half-width at 13.5 m)
+    BUF = 1.5
+    n_buf = 0
+    for e in graph_edges:
+        w0 = float(e["width"])
+        if e.get("tram_median") or e.get("underground") or e.get("bridge") or w0 < 23.5:
+            continue
+        w1 = min(27.0, w0 + 2.0 * BUF) if w0 < 27.0 else w0
+        hw = min(13.5, w1 * 0.5)
+        lf, lb = int(e.get("lanes_f", 1)), int(e.get("lanes_b", 1))
+        med = 0.8 if lf + lb >= 4 else 0.0
+        room = hw - 2.05 - BUF - 1.15 - med
+        if room < (max(lf, lb) - 0.5) * 3.0:
+            continue
+        e["width"] = round(w1, 1)
+        e["bike_buffer"] = BUF
+        n_buf += 1
+    print(f"机非隔离带: {n_buf} major road edges with planted buffers")
+
     # Update road_grid with widened T1 boulevard widths AND clear ANY building whose footprint encroaches on
     # the widened T1 corridor (guarantees ZERO tram tracks ever drive through a building or storefront!)
     t1_corridor_grid = Grid(80.0)
@@ -3388,6 +3413,135 @@ def main():
         graph_edges, graph_nodes, blds, poi_nodes, nodes, road_grid, water_grid, rail_grid, bld_grid, freeway_grid, raw_islands
     )
     gated_compounds = build_gated_compounds(landuse_zones, ways, nodes, road_grid, water_grid, rail_grid, bld_grid)
+
+    # 小区绿化: the courtyard of every gated compound is landscaped lawn (buildings stand on it) with trees in the
+    # gaps between blocks. A lawn is only laid where its whole outline keeps clear of roads, rail, water and other
+    # mapped areas (no coplanar overlaps); it is a plain lawn layer, not a detailed park
+    area_grid = Grid(120.0)
+    for a in areas:
+        if a.get("kind") == "water":
+            continue
+        axs = [q[0] for q in a["pts"]]
+        ays = [q[1] for q in a["pts"]]
+        area_grid.add((min(axs), min(ays), max(axs), max(ays)), min(axs), min(ays), max(axs), max(ays))
+    n_lawn, n_ctree = 0, 0
+    rng_cg = random.Random(20261124)
+    for comp in gated_compounds:
+        ring = comp.pop("_ring", None)
+        if not ring or len(ring) < 3:
+            continue
+        c = centroid(ring)
+        lawn = []
+        for q in ring:
+            vx, vy = q[0] - c[0], q[1] - c[1]
+            L = math.hypot(vx, vy)
+            lawn.append((q[0] - vx / L * 1.0, q[1] - vy / L * 1.0) if L > 3.0 else q)
+        xs = [q[0] for q in lawn]
+        ys = [q[1] for q in lawn]
+        bb = (min(xs), min(ys), max(xs), max(ys))
+        ok = not any(not (o[2] < bb[0] or o[0] > bb[2] or o[3] < bb[1] or o[1] > bb[3])
+                     for o in area_grid.query(bb[0], bb[1], bb[2], bb[3]))
+        if ok:
+            for i in range(len(lawn)):
+                a0, a1 = lawn[i], lawn[(i + 1) % len(lawn)]
+                L = math.hypot(a1[0] - a0[0], a1[1] - a0[1])
+                n = max(1, int(L / 5.0))
+                for k in range(n + 1):
+                    px = a0[0] + (a1[0] - a0[0]) * k / n
+                    py = a0[1] + (a1[1] - a0[1]) * k / n
+                    for (rax, ray, rbx, rby, rhw) in road_grid.query(px - 16, py - 16, px + 16, py + 16):
+                        if seg_dist(px, py, rax, ray, rbx, rby)[0] < rhw + 1.0:
+                            ok = False
+                            break
+                    if ok:
+                        for (rax, ray, rbx, rby, rw) in rail_grid.query(px - 16, py - 16, px + 16, py + 16):
+                            if seg_dist(px, py, rax, ray, rbx, rby)[0] < rw:
+                                ok = False
+                                break
+                    if ok:
+                        for wp in water_grid.query(px - 2, py - 2, px + 2, py + 2):
+                            if point_in_poly(px, py, wp):
+                                ok = False
+                                break
+                    if not ok:
+                        break
+                if not ok:
+                    break
+        if not ok:
+            continue
+        areas.append({"kind": "compound_green", "pts": [rnd(q) for q in lawn]})
+        area_grid.add(bb, bb[0], bb[1], bb[2], bb[3])
+        n_lawn += 1
+        # trees between the blocks (香樟 / 桂花 / 银杏 groups), clear of every building by 4.5 m
+        cnt = 0
+        gy = bb[1] + 7.0
+        while gy < bb[3] - 6.0 and cnt < 18:
+            gx = bb[0] + 7.0 + rng_cg.uniform(-2.0, 2.0)
+            while gx < bb[2] - 6.0 and cnt < 18:
+                tx, ty = gx + rng_cg.uniform(-2.5, 2.5), gy + rng_cg.uniform(-2.5, 2.5)
+                if point_in_poly(tx, ty, lawn):
+                    clear = True
+                    for ob in bld_grid.query(tx - 6, ty - 6, tx + 6, ty + 6):
+                        if ob[0] - 4.5 <= tx <= ob[2] + 4.5 and ob[1] - 4.5 <= ty <= ob[3] + 4.5:
+                            clear = False
+                            break
+                    if clear and rng_cg.random() < 0.7:
+                        trees.append([round(tx, 2), round(ty, 2)])
+                        cnt += 1
+                        n_ctree += 1
+                gx += 12.0
+            gy += 12.0
+    print(f"小区绿化: {n_lawn} landscaped compound lawns, {n_ctree} courtyard trees")
+
+    # Undeveloped plots (待开发用地) are rough grass, not bare paving: 50 m squares with no building, road (plus its
+    # pavement), rail, freeway, water or mapped area anywhere near them
+    CELL = 50.0
+    n_vac = 0
+    bx0, by0, bx1, by1 = BOUNDS
+    gy = by0
+    while gy < by1:
+        gx = bx0
+        while gx < bx1:
+            cx, cy = gx + CELL * 0.5, gy + CELL * 0.5
+            gx += CELL
+            if not in_active((cx, cy), -30.0):
+                continue
+            r0 = (cx - CELL * 0.5, cy - CELL * 0.5, cx + CELL * 0.5, cy + CELL * 0.5)
+            if any(not (o[2] < r0[0] - 10 or o[0] > r0[2] + 10 or o[3] < r0[1] - 10 or o[1] > r0[3] + 10)
+                   for o in bld_grid.query(r0[0] - 12, r0[1] - 12, r0[2] + 12, r0[3] + 12)):
+                continue
+            if any(not (o[2] < r0[0] or o[0] > r0[2] or o[3] < r0[1] or o[1] > r0[3])
+                   for o in area_grid.query(r0[0], r0[1], r0[2], r0[3])):
+                continue
+            near = False
+            for (rax, ray, rbx, rby, rhw) in road_grid.query(cx - 60, cy - 60, cx + 60, cy + 60):
+                if seg_dist(cx, cy, rax, ray, rbx, rby)[0] < rhw + 5.0 + CELL * 0.71:
+                    near = True
+                    break
+            if not near:
+                for (rax, ray, rbx, rby, rw) in rail_grid.query(cx - 60, cy - 60, cx + 60, cy + 60):
+                    if seg_dist(cx, cy, rax, ray, rbx, rby)[0] < rw + CELL * 0.71:
+                        near = True
+                        break
+            if not near:
+                for (fax, fay, fbx, fby, fhw) in freeway_grid.query(cx - 70, cy - 70, cx + 70, cy + 70):
+                    if seg_dist(cx, cy, fax, fay, fbx, fby)[0] < fhw + 6.0 + CELL * 0.71:
+                        near = True
+                        break
+            if not near:
+                for wp in water_grid.query(r0[0] - 2, r0[1] - 2, r0[2] + 2, r0[3] + 2):
+                    if any(point_in_poly(qx, qy, wp) for qx, qy in ((cx, cy), (r0[0], r0[1]), (r0[2], r0[1]), (r0[2], r0[3]), (r0[0], r0[3]))):
+                        near = True
+                        break
+            if near:
+                continue
+            areas.append({"kind": "vacant_green", "pts": [rnd((r0[0], r0[1])), rnd((r0[2], r0[1])), rnd((r0[2], r0[3])), rnd((r0[0], r0[3]))]})
+            n_vac += 1
+            # a few self-seeded trees / scrub clumps break up the open ground
+            for _t in range(rng_cg.choice([0, 0, 1, 1, 2, 3])):
+                trees.append([round(cx + rng_cg.uniform(-20.0, 20.0), 2), round(cy + rng_cg.uniform(-20.0, 20.0), 2)])
+        gy += CELL
+    print(f"待开发用地: {n_vac} rough-grass plots")
 
     # Exact HSR station angle from real OSM platform orientation (~27 deg ENE-WSW)
     hsr_p0 = proj(30.69175, 120.79370)

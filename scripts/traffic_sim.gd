@@ -2216,7 +2216,7 @@ static func _bike_lane_car_cap(graph: NetworkGraph, eid: int) -> float:
 	if not bool(ed.get("bike_lane", false)):
 		return 1e9
 	var hw := clampf(float(ed["width"]) * 0.5, 3.2, 13.5)
-	return maxf(1.4, hw - NetworkGraph.bike_lane_width(hw) - BIKE_CAR_CLEAR)
+	return maxf(1.4, hw - NetworkGraph.bike_lane_width(hw) - float(ed.get("bike_buffer", 0.0)) - BIKE_CAR_CLEAR)
 
 
 static func _edge_side_has_station(graph: NetworkGraph, eid: int, car_dir: float) -> bool:

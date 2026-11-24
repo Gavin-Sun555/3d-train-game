@@ -5,6 +5,7 @@ render_mode diffuse_burley, specular_schlick_ggx, cull_disabled;
 // sunlit meadow variation, and close-up grass-blade roughness micro-detail.
 
 uniform float depth_push = 0.28;
+uniform vec3 tint_mul = vec3(1.0); // < 1 / > 1 per channel: drier rough grass on vacant plots
 uniform float depth_slope = 0.0014;
 uniform int portal_count = 0;
 uniform vec4 portal_pos_hl[16];
@@ -92,7 +93,7 @@ void fragment() {
 		NORMAL = normalize((VIEW_MATRIX * vec4(nw, 0.0)).xyz);
 	}
 
-	ALBEDO = col;
+	ALBEDO = col * tint_mul;
 	ROUGHNESS = clamp(0.84 + (0.5 - fine) * 0.12, 0.72, 0.94);
 	METALLIC = 0.0;
 	SPECULAR = 0.18;

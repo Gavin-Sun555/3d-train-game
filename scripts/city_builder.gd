@@ -168,6 +168,8 @@ static func _build_areas(parent: Node3D, areas: Array) -> void:
 		"island": [],
 		"brick": [],
 		"plaza": [],
+		"lawn": [],
+		"vacant": [],
 	}
 	for a in areas:
 		var kind: String = str(a.get("kind", ""))
@@ -179,10 +181,18 @@ static func _build_areas(parent: Node3D, areas: Array) -> void:
 			buckets["park"].append(a)
 		elif kind == "brick_plaza":
 			buckets["brick"].append(a)
+		elif kind == "compound_green":
+			buckets["lawn"].append(a)
+		elif kind == "vacant_green":
+			buckets["vacant"].append(a)
 		else:
 			buckets["plaza"].append(a)
 
 	_emit_area_group(parent, "ParkAreas", buckets["park"], 0.014, Color(0.20, 0.35, 0.14), 0.90, 0.0)
+	# compound courtyards: own height (never coplanar with parks, which they are kept apart from anyway)
+	_emit_area_group(parent, "CompoundLawns", buckets["lawn"], 0.006, Color(0.20, 0.32, 0.14), 0.92, 0.0)
+	# undeveloped plots: rough, slightly dry grass (kept apart from every other area, same height as the lawns)
+	_emit_area_group(parent, "VacantPlots", buckets["vacant"], 0.006, Color(0.30, 0.34, 0.18), 0.95, 0.0)
 	_emit_area_group(parent, "WaterAreas", buckets["water"], 0.026, Color(0.08, 0.22, 0.30), 0.06, 0.35)
 	_emit_area_group(parent, "PlazaAreas", buckets["plaza"], 0.030, Color(0.39, 0.38, 0.36), 0.86, 0.0)
 	_emit_area_group(parent, "BrickPlazas", buckets["brick"], 0.034, Color(0.45, 0.27, 0.22), 0.84, 0.0)
@@ -294,9 +304,13 @@ static func _emit_area_group(
 		parent.set_meta("water_mat", wm)
 		parent.add_child(mi)
 		return
-	if node_name == "ParkAreas" or node_name == "IslandParkAreas":
+	if node_name in ["ParkAreas", "IslandParkAreas", "CompoundLawns", "VacantPlots"]:
 		var pm := ShaderMaterial.new()
 		pm.shader = load("res://shaders/park_lawn.gdshader") as Shader
+		if node_name == "VacantPlots":
+			pm.set_shader_parameter("tint_mul", Vector3(1.04, 0.94, 0.72))
+		elif node_name == "CompoundLawns":
+			pm.set_shader_parameter("tint_mul", Vector3(0.96, 0.98, 0.94))
 		if node_name == "IslandParkAreas":
 			pm.set_shader_parameter("depth_push", 0.13)
 			pm.set_shader_parameter("depth_slope", 0.00050)
@@ -2696,7 +2710,7 @@ const ROAD_Y := 0.042
 static func _build_kerbs(parent: Node3D, roads: Array, bays: Array, road_mat: Material, clear_idx: Dictionary = {}) -> void:
 	parent.set_meta("last_bays_sig", _station_bays_sig(bays) + "#" + _tile_clear_sig(parent, clear_idx))
 	var has_tracks := not clear_idx.is_empty() and not (clear_idx.get("grid", {}) as Dictionary).is_empty()
-	for nm: String in ["GraniteCurbs", "StationKerbBays", "Sidewalks", "StreetFurniture", "BikeLaneStrips", "BikeLaneLines", "BikeLaneGuardrails"]:
+	for nm: String in ["GraniteCurbs", "StationKerbBays", "Sidewalks", "StreetFurniture", "BikeLaneStrips", "BikeLaneLines", "BikeLaneGuardrails", "BikeBufferStrips", "BikeBufferShrubs"]:
 		var old := parent.get_node_or_null(nm)
 		if old != null:
 			parent.remove_child(old)
@@ -2901,6 +2915,11 @@ static func _build_bike_lane_strips(
 	line_st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var has_line := false
 	var ym := ROAD_Y + 0.016
+	var buf_st := SurfaceTool.new()
+	buf_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var has_buf := false
+	var shrub_tfs: Array[Transform3D] = []
+	var shrub_cols: Array[Color] = []
 
 	for ri in range(mini(emit_n, roads.size())):
 		var r: Dictionary = roads[ri]
@@ -2992,9 +3011,27 @@ static func _build_bike_lane_strips(
 			for k in range(samp_p.size()):
 				var pm := samp_p[k] + samp_n[k] * (bside * ((sm_in[k] + hw - 0.14) * 0.5))
 				ok_arr.append(not _in_bay(bays, pm))
+			# 机非隔离带 on major roads: a planted strip just inside the bike lane, wherever a motor lane still
+			# fits between it and any tramway
+			var buf := float(r.get("bike_buffer", 0.0))
+			var strip_ok: Array[bool] = []
+			for k in range(samp_p.size()):
+				var s_k := minf(t0 + 2.0 * float(k), t1)
+				# keep clear of the crosswalks (centred 7.8 m from each junction)
+				var good := buf > 0.0 and ok_arr[k] and s_k >= 11.0 and s_k <= total - 11.0
+				if good and has_tracks:
+					var pin := samp_p[k] + samp_n[k] * (bside * (sm_in[k] - buf))
+					good = TrackBuilder.track_clearance_dist(clear_idx, pin) >= 5.0
+				strip_ok.append(good)
+			if buf > 0.0:
+				_emit_bike_buffer(buf_st, shrub_tfs, shrub_cols, samp_p, samp_n, sm_in, strip_ok, bside, buf)
+				for sk in range(samp_p.size() - 1):
+					has_buf = has_buf or (strip_ok[sk] and strip_ok[sk + 1])
 			for k in range(samp_p.size() - 1):
 				if not (ok_arr[k] and ok_arr[k + 1]):
 					continue
+				if strip_ok[k] and strip_ok[k + 1]:
+					continue # the strip's kerb replaces the painted divider
 				if samp_p[k].distance_to(samp_p[k + 1]) < 0.05:
 					continue
 				# solid white divider along the (possibly narrowed) inner edge
@@ -3006,6 +3043,45 @@ static func _build_bike_lane_strips(
 					Vector3(lb.x + ln_b.x, ym, lb.y + ln_b.y), Vector3(lb.x - ln_b.x, ym, lb.y - ln_b.y), Vector3.UP)
 				has_line = true
 
+	if has_buf:
+		var b_mi := MeshInstance3D.new()
+		b_mi.name = "BikeBufferStrips"
+		b_mi.mesh = Terrain.commit_draped(buf_st, b_mi)
+		var b_mat := StandardMaterial3D.new()
+		b_mat.vertex_color_use_as_albedo = true
+		b_mat.roughness = 0.9
+		b_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		b_mi.material_override = b_mat
+		b_mi.visibility_range_end = 650.0
+		b_mi.visibility_range_end_margin = 40.0
+		parent.add_child(b_mi)
+		if not shrub_tfs.is_empty():
+			var ball := SphereMesh.new()
+			ball.radius = 0.5
+			ball.height = 0.86
+			ball.radial_segments = 10
+			ball.rings = 5
+			var s_mat := StandardMaterial3D.new()
+			s_mat.vertex_color_use_as_albedo = true
+			s_mat.roughness = 0.95
+			ball.material = s_mat
+			var mm := MultiMesh.new()
+			mm.transform_format = MultiMesh.TRANSFORM_3D
+			mm.use_colors = true
+			mm.mesh = ball
+			mm.instance_count = shrub_tfs.size()
+			for i in range(shrub_tfs.size()):
+				mm.set_instance_transform(i, shrub_tfs[i])
+				mm.set_instance_color(i, shrub_cols[i])
+			var s_mi := MultiMeshInstance3D.new()
+			s_mi.name = "BikeBufferShrubs"
+			s_mi.multimesh = mm
+			s_mi.set_meta("base_tfs", shrub_tfs)
+			s_mi.visibility_range_end = 380.0
+			s_mi.visibility_range_end_margin = 30.0
+			if Terrain.active:
+				s_mi.set_meta("on_terrain", true)
+			parent.add_child(s_mi)
 	# The non-motorised lane is plain asphalt like the motor lanes (no coloured surfacing); only its divider line is painted
 	if has_line:
 		var l_mi := MeshInstance3D.new()
@@ -3018,6 +3094,88 @@ static func _build_bike_lane_strips(
 		l_mi.material_override = l_mat
 		l_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(l_mi)
+
+
+# One kerb side of a 机非隔离带: granite kerbs on both edges, a soil bed, a clipped boxwood hedge and topiary
+# balls (红叶石楠 / 海桐) every few metres. The strip spans [inner - buf, inner] from the street centre line.
+static func _emit_bike_buffer(st: SurfaceTool, shrub_tfs: Array[Transform3D], shrub_cols: Array[Color],
+		samp_p: Array[Vector2], samp_n: Array[Vector2], sm_in: Array[float], strip_ok: Array[bool], bside: float, buf: float) -> void:
+	var kerb_c := Color(0.64, 0.64, 0.62)
+	var soil_c := Color(0.27, 0.22, 0.16)
+	var hedge_c := Color(0.16, 0.31, 0.13)
+	var hedge_top_c := Color(0.21, 0.38, 0.16)
+	var y_kerb := ROAD_Y + 0.18
+	var y_soil := ROAD_Y + 0.14
+	var y_hedge := ROAD_Y + 0.80
+	var acc := 0.0
+	var next_ball := 2.0
+	var ball_i := 0
+	for k in range(samp_p.size() - 1):
+		if not (strip_ok[k] and strip_ok[k + 1]):
+			continue
+		var p0 := samp_p[k]
+		var p1 := samp_p[k + 1]
+		if p0.distance_to(p1) < 0.05:
+			continue
+		var n0 := samp_n[k] * bside
+		var n1 := samp_n[k + 1] * bside
+		var o0 := sm_in[k] - buf # strip edge toward the motor lanes
+		var o1 := sm_in[k + 1] - buf
+		var i0 := sm_in[k]
+		var i1 := sm_in[k + 1]
+		# kerbs (0.15 m wide) on both edges + soil bed between them
+		_buf_ribbon(st, p0, p1, n0, n1, o0, o1, o0 + 0.15, o1 + 0.15, ROAD_Y, y_kerb, kerb_c)
+		_buf_ribbon(st, p0, p1, n0, n1, i0 - 0.15, i1 - 0.15, i0, i1, ROAD_Y, y_kerb, kerb_c)
+		_buf_ribbon(st, p0, p1, n0, n1, o0 + 0.15, o1 + 0.15, i0 - 0.15, i1 - 0.15, ROAD_Y, y_soil, soil_c)
+		# hedge
+		_buf_ribbon(st, p0, p1, n0, n1, o0 + 0.32, o1 + 0.32, i0 - 0.32, i1 - 0.32, y_soil, y_hedge, hedge_c, hedge_top_c)
+		# end caps where the strip starts / stops
+		if k == 0 or not strip_ok[k - 1]:
+			_buf_cap(st, p0, n0, o0, i0, y_kerb, kerb_c)
+		if k + 2 >= samp_p.size() or not strip_ok[k + 2]:
+			_buf_cap(st, p1, n1, o1, i1, y_kerb, kerb_c)
+		# topiary balls along the centre line
+		var seg_l := p0.distance_to(p1)
+		while next_ball <= acc + seg_l:
+			var f := (next_ball - acc) / seg_l
+			var pc := p0.lerp(p1, f)
+			var nc := n0.lerp(n1, f).normalized()
+			var oc := lerpf((o0 + i0) * 0.5, (o1 + i1) * 0.5, f)
+			var q := pc + nc * oc
+			var sc := 0.92 + 0.16 * float((ball_i * 7) % 5) / 4.0
+			shrub_tfs.append(Transform3D(Basis().scaled(Vector3(sc, sc, sc)), Vector3(q.x, y_hedge + 0.12, q.y)))
+			shrub_cols.append(Color(0.52, 0.17, 0.12) if ball_i % 2 == 0 else Color(0.19, 0.37, 0.15))
+			ball_i += 1
+			next_ball += 4.0
+		acc += seg_l
+
+
+static func _buf_ribbon(st: SurfaceTool, p0: Vector2, p1: Vector2, n0: Vector2, n1: Vector2, a0: float, a1: float, b0: float, b1: float, y0: float, y1: float, col: Color, top_col: Color = Color(-1, 0, 0)) -> void:
+	var tc := col if top_col.r < 0.0 else top_col
+	var qa0 := p0 + n0 * a0
+	var qa1 := p1 + n1 * a1
+	var qb0 := p0 + n0 * b0
+	var qb1 := p1 + n1 * b1
+	# top
+	_buf_quad(st, Vector3(qa0.x, y1, qa0.y), Vector3(qb0.x, y1, qb0.y), Vector3(qb1.x, y1, qb1.y), Vector3(qa1.x, y1, qa1.y), Vector3.UP, tc)
+	# side faces toward the motor lanes (-n) and toward the bike lane (+n)
+	var nn := Vector3(-n0.x, 0.0, -n0.y)
+	_buf_quad(st, Vector3(qa0.x, y0, qa0.y), Vector3(qa1.x, y0, qa1.y), Vector3(qa1.x, y1, qa1.y), Vector3(qa0.x, y1, qa0.y), nn, col)
+	_buf_quad(st, Vector3(qb0.x, y0, qb0.y), Vector3(qb1.x, y0, qb1.y), Vector3(qb1.x, y1, qb1.y), Vector3(qb0.x, y1, qb0.y), -nn, col)
+
+
+static func _buf_cap(st: SurfaceTool, p: Vector2, n: Vector2, a: float, b: float, y1: float, col: Color) -> void:
+	var qa := p + n * a
+	var qb := p + n * b
+	var fwd := Vector3(n.y, 0.0, -n.x)
+	_buf_quad(st, Vector3(qa.x, ROAD_Y, qa.y), Vector3(qb.x, ROAD_Y, qb.y), Vector3(qb.x, y1, qb.y), Vector3(qa.x, y1, qa.y), fwd, col)
+
+
+static func _buf_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3, n: Vector3, col: Color) -> void:
+	for v: Vector3 in [a, b, c, a, c, d]:
+		st.set_color(col)
+		st.set_normal(n)
+		st.add_vertex(v)
 
 
 # Low white municipal Chinese bike-lane separation guardrails (机非隔离护栏) on wide bike_lane avenues.
@@ -3037,6 +3195,8 @@ static func _build_bike_guardrails(
 		var r: Dictionary = roads[ri]
 		if not bool(r.get("bike_lane", false)) or bool(r.get("underground", false)) or int(r.get("layer", 0)) != 0:
 			continue
+		if float(r.get("bike_buffer", 0.0)) > 0.0:
+			continue # the planted 机非隔离带 separates the lanes there
 		var hw := clampf(float(r.get("width", 12.0)) * 0.5, 3.2, 13.5)
 		if hw < 5.75:
 			continue

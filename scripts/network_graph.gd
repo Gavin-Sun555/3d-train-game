@@ -340,8 +340,9 @@ func load_from_map_data(map_data: Dictionary, use_starter: bool = true) -> void:
 			continue
 		var rp: Array = r_raw.get("pts", [])
 		if rp.size() >= 2:
-			bike_keys[_bike_key(rp[0], rp[rp.size() - 1])] = true
-			bike_keys[_bike_key(rp[rp.size() - 1], rp[0])] = true
+			var buf := float(r_raw.get("bike_buffer", 0.0))
+			bike_keys[_bike_key(rp[0], rp[rp.size() - 1])] = buf
+			bike_keys[_bike_key(rp[rp.size() - 1], rp[0])] = buf
 
 	for e_raw in map_data.get("graph_edges", []):
 		var eid := int(e_raw["id"])
@@ -369,6 +370,9 @@ func load_from_map_data(map_data: Dictionary, use_starter: bool = true) -> void:
 		var ep_raw: Array = e_raw.get("pts", [])
 		if not bike_keys.is_empty() and ep_raw.size() >= 2 and bike_keys.has(_bike_key(ep_raw[0], ep_raw[ep_raw.size() - 1])):
 			edges[eid]["bike_lane"] = true
+			var bbuf := float(bike_keys[_bike_key(ep_raw[0], ep_raw[ep_raw.size() - 1])])
+			if bbuf > 0.0:
+				edges[eid]["bike_buffer"] = bbuf # planted 机非隔离带 between the motor lanes and the bike lane
 		if adj.has(a):
 			adj[a].append({"to": b, "edge_id": eid, "length": elen})
 		if adj.has(b):
