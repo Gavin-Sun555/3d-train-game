@@ -256,9 +256,11 @@ func _run() -> void:
 		jx_graph.edges.size() >= 1500 and jx_tsim.trams.size() >= 2 and jx_graph.stations.size() >= 5,
 		"Jiaxing street graph & Tram T1 demo loaded (%d edges, %d stations, %d trams)" % [jx_graph.edges.size(), jx_graph.stations.size(), jx_tsim.trams.size()]
 	)
+	var jx_s_plaza: Node = jx_hsr.get_node_or_null("JiaxingSouthNorthPlaza") if jx_hsr != null else null
+	var jx_s_bus: Node = jx_hsr.get_node_or_null("JiaxingSouthBusHub") if jx_hsr != null else null
 	_check(
-		jx_hsr != null and jx_yanyu != null and jx_mem != null and jx_sta != null and jx_rail != null,
-		"All bespoke Jiaxing 3D landmarks & heavy railways built (HSR South Sta., Yanyu Tower, Memorial Hall, Forest Station, Heavy Railways)"
+		jx_hsr != null and jx_s_plaza != null and jx_s_bus != null and jx_yanyu != null and jx_mem != null and jx_sta != null and jx_rail != null,
+		"All bespoke Jiaxing 3D landmarks & heavy railways built (2F/1F HSR South Sta. + North Plaza + Bus Hub, Yanyu Tower, Memorial Hall, Forest Station)"
 	)
 	var jx_gov: Node = jx_lm.get_node_or_null("JiaxingMunicipalGovernment") if jx_lm != null else null
 	var jx_no1: Node = jx_lm.get_node_or_null("JiaxingNo1HighSchool") if jx_lm != null else null

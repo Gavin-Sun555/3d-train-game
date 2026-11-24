@@ -170,7 +170,9 @@ static func _jiaxing_south_station(parent: Node3D, center: Vector3, angle: float
 	var roof_rib := _mat(Color(0.66, 0.70, 0.75), 0.35, 0.60)
 	var steel_white := _mat(Color(0.90, 0.91, 0.93), 0.38, 0.22)
 	var concrete := _mat(Color(0.75, 0.74, 0.72), 0.78, 0.02)
-	var granite := _mat(Color(0.79, 0.78, 0.75), 0.68, 0.04)
+	var granite := _mat(Color(0.80, 0.79, 0.76), 0.68, 0.04)
+	var granite_dark := _mat(Color(0.56, 0.57, 0.59), 0.72, 0.05)
+	var asphalt_mat := _mat(Color(0.22, 0.23, 0.25), 0.86, 0.02)
 	var dark_stone := _mat(Color(0.32, 0.34, 0.38), 0.62, 0.08)
 	var glass_curtain := _glass(Color(0.28, 0.44, 0.58), 0.68)
 	var warm_hall := _emissive(Color(1.0, 0.90, 0.72), 0.95)
@@ -178,62 +180,116 @@ static func _jiaxing_south_station(parent: Node3D, center: Vector3, angle: float
 	var rail_steel := _mat(Color(0.45, 0.47, 0.50), 0.32, 0.75)
 	var ballast := _mat(Color(0.46, 0.45, 0.43), 0.92, 0.0)
 	var yellow_line := _mat(Color(0.94, 0.78, 0.18), 0.55, 0.0)
+	var lawn_mat := _mat(Color(0.22, 0.48, 0.22), 0.86, 0.0)
+	var water_pool := _mat(Color(0.18, 0.48, 0.62), 0.18, 0.25)
+	var trunk_mat := _mat(Color(0.34, 0.25, 0.17), 0.88, 0.0)
+	var foliage_mat := _mat(Color(0.20, 0.46, 0.21), 0.82, 0.0)
+	var foliage_lt := _mat(Color(0.29, 0.55, 0.25), 0.80, 0.0)
+	var exit_green := _emissive(Color(0.18, 0.88, 0.46), 1.35)
+	var depart_blue := _emissive(Color(0.20, 0.68, 0.98), 1.45)
 
-	# --- A. Elevated Station Concourse & North Plaza (local -Z = North side facing Qingfeng Rd) ---
-	# North forecourt granite terrace (kept strictly below road/track level & clear of north tram road at z=-84)
-	_add_box(st, Vector3(174.0, 0.06, 28.0), Vector3(0.0, -0.01, -60.0), granite, 0.0, 0.0, 0.0, false)
-	# Elevated station podium deck (departure level +4.2m)
-	_add_box(st, Vector3(168.0, 4.2, 42.0), Vector3(0.0, 2.1, -34.0), concrete)
-	# Grand entrance stair flight on north facade
-	for si in range(7):
-		var sh := 0.6 * float(si + 1)
-		_add_box(st, Vector3(54.0, 0.6, 1.4), Vector3(0.0, sh - 0.3, -55.5 - float(6 - si) * 1.15), granite)
+	# --- A. Authentic 2-Level HSR Station (二楼进站 2F Departures · 一楼出站 1F Arrivals/Exit) ---
+	# 1F Ground Arrival Forecourt Terrace (z = -97..-52, strictly flush & clear of north T1 tramway at z = -109!)
+	_add_box(st, Vector3(286.0, 0.05, 45.0), Vector3(0.0, -0.015, -74.5), granite, 0.0, 0.0, 0.0, false)
+	_add_box(st, Vector3(44.0, 0.06, 44.0), Vector3(0.0, -0.005, -74.5), granite_dark, 0.0, 0.0, 0.0, false)
 
-	# Main Departure Hall core (warm lit interior backing behind glass curtain wall)
-	_add_box(st, Vector3(148.0, 14.5, 29.0), Vector3(0.0, 11.4, -34.0), warm_hall, 0.0, 0.0, 0.0, false)
-	# Blue-tinted glass curtain walls on all four sides
-	_add_box(st, Vector3(154.0, 15.8, 0.5), Vector3(0.0, 12.1, -49.5), glass_curtain)
-	_add_box(st, Vector3(154.0, 15.8, 0.5), Vector3(0.0, 12.1, -18.5), glass_curtain)
-	_add_box(st, Vector3(0.5, 15.8, 31.0), Vector3(-77.0, 12.1, -34.0), glass_curtain)
-	_add_box(st, Vector3(0.5, 15.8, 31.0), Vector3(77.0, 12.1, -34.0), glass_curtain)
+	# 1F Ground-Level Arrival Concourse & Exit Hall (y = 0.0m .. 6.0m, 一楼出站层)
+	_add_box(st, Vector3(164.0, 5.8, 36.0), Vector3(0.0, 2.9, -33.0), concrete)
+	_add_box(st, Vector3(148.0, 4.6, 30.0), Vector3(0.0, 2.5, -36.5), warm_hall, 0.0, 0.0, 0.0, false)
+	_add_box(st, Vector3(154.0, 5.4, 0.45), Vector3(0.0, 2.8, -51.4), glass_curtain)
+	# Twin 1F Arrival Exit Portals (东/西出站口) with glowing green exit headers & automatic glass doors
+	for ex_x: float in [-34.0, 34.0]:
+		_add_box(st, Vector3(18.0, 0.55, 4.2), Vector3(ex_x, 4.7, -53.2), dark_stone)
+		_add_box(st, Vector3(16.0, 0.22, 0.25), Vector3(ex_x, 4.7, -55.4), exit_green, 0.0, 0.0, 0.0, false)
+		_add_sign_label(st, "出站口 · 1F EXIT", Vector3(ex_x, 5.15, -55.5), PI, 48, 0.022, Color(0.55, 1.0, 0.68))
+
+	# 2F Elevated Departure Viaduct Drop-Off Deck (二楼高架落客平台, y = 6.2m, z = -67..-51, x = -94..+94)
+	_add_box(st, Vector3(188.0, 0.90, 16.0), Vector3(0.0, 5.85, -59.0), concrete)
+	_add_box(st, Vector3(186.0, 0.12, 13.6), Vector3(0.0, 6.35, -59.5), asphalt_mat, 0.0, 0.0, 0.0, false)
+	_add_box(st, Vector3(182.0, 0.05, 0.24), Vector3(0.0, 6.43, -59.5), yellow_line, 0.0, 0.0, 0.0, false)
+	# 2F Drop-off safety parapet & sidewalk curb
+	_add_box(st, Vector3(188.0, 1.05, 0.45), Vector3(0.0, 6.82, -66.8), steel_white)
+	_add_box(st, Vector3(160.0, 0.26, 3.2), Vector3(0.0, 6.42, -52.6), granite)
+	# Sculpted viaduct piers supporting 2F drop-off deck (clear of 1F arrival exit gateways!)
+	for px_v: float in [-86.0, -64.0, -14.0, 14.0, 64.0, 86.0]:
+		_add_cyl(st, 0.62, 0.72, 5.6, Vector3(px_v, 2.8, -64.5), concrete, 10)
+		_add_cyl(st, 0.62, 0.72, 5.6, Vector3(px_v, 2.8, -54.0), concrete, 10)
+	# Twin Sweeping Vehicle Approach & Exit Ramps (东上西下高架落客匝道, y = 0.0m <-> 6.2m, clear of z=-109 tram!)
+	for r_side: float in [-1.0, 1.0]:
+		var ramp_len := 64.0
+		var ramp_cx := r_side * (94.0 + ramp_len * 0.5)
+		var ramp_tilt := -r_side * atan2(6.0, ramp_len)
+		_add_box(st, Vector3(ramp_len, 0.75, 11.2), Vector3(ramp_cx, 3.05, -59.0), concrete, 0.0, ramp_tilt)
+		_add_box(st, Vector3(ramp_len, 0.10, 9.6), Vector3(ramp_cx, 3.48, -59.0), asphalt_mat, 0.0, ramp_tilt, 0.0, false)
+		_add_box(st, Vector3(ramp_len, 0.85, 0.32), Vector3(ramp_cx, 3.85, -64.4), steel_white, 0.0, ramp_tilt)
+		_add_box(st, Vector3(ramp_len, 0.85, 0.32), Vector3(ramp_cx, 3.85, -53.6), steel_white, 0.0, ramp_tilt)
+		# Intermediate ramp piers
+		for rp_k in range(1, 3):
+			var frac := float(rp_k) / 3.0
+			var rpx := r_side * (94.0 + frac * ramp_len)
+			var rph := 5.8 * (1.0 - frac)
+			_add_cyl(st, 0.52, 0.60, rph, Vector3(rpx, rph * 0.5, -59.0), concrete, 10)
+
+	# Grand Central Pedestrian Stairway & Covered Escalator Bridge (1F北广场 -> 2F进站平台)
+	for si in range(10):
+		var sh := 0.62 * float(si + 1)
+		_add_box(st, Vector3(24.0, 0.62, 1.5), Vector3(0.0, sh - 0.31, -67.5 - float(9 - si) * 1.45), granite)
+	# Twin flanked glass-sided escalators rising cleanly beside the central stair flight
+	for esc_x: float in [-14.2, 14.2]:
+		_add_box(st, Vector3(3.2, 0.55, 16.5), Vector3(esc_x, 3.1, -74.5), dark_stone, 0.0, 0.0, -0.38)
+		_add_box(st, Vector3(3.4, 1.05, 16.5), Vector3(esc_x, 3.9, -74.5), glass_curtain, 0.0, 0.0, -0.38)
+	_add_sign_label(st, "↑ 2F 进站乘车  DEPARTURES", Vector3(0.0, 7.6, -67.2), PI, 52, 0.024, Color(0.55, 0.88, 1.0))
+
+	# 2F Main Departure Hall Core (y = 6.2m .. 21.5m, 二楼进站候车大厅)
+	_add_box(st, Vector3(148.0, 14.2, 29.0), Vector3(0.0, 13.4, -34.0), warm_hall, 0.0, 0.0, 0.0, false)
+	# Blue-tinted glass curtain walls enclosing 2F Departure Hall on all four sides
+	_add_box(st, Vector3(154.0, 15.2, 0.5), Vector3(0.0, 14.0, -49.5), glass_curtain)
+	_add_box(st, Vector3(154.0, 15.2, 0.5), Vector3(0.0, 14.0, -18.5), glass_curtain)
+	_add_box(st, Vector3(0.5, 15.2, 31.0), Vector3(-77.0, 14.0, -34.0), glass_curtain)
+	_add_box(st, Vector3(0.5, 15.2, 31.0), Vector3(77.0, 14.0, -34.0), glass_curtain)
+	# Projecting 2F Main Entrance Security Vestibule + Glowing "进站口 · 2F DEPARTURES" Portal
+	_add_box(st, Vector3(44.0, 5.4, 4.4), Vector3(0.0, 9.1, -51.6), glass_curtain)
+	_add_box(st, Vector3(46.0, 0.65, 5.2), Vector3(0.0, 12.0, -51.8), dark_stone)
+	_add_box(st, Vector3(42.0, 0.25, 0.25), Vector3(0.0, 12.0, -54.5), depart_blue, 0.0, 0.0, 0.0, false)
+	_add_sign_label(st, "进站口 · 2F DEPARTURES", Vector3(0.0, 12.85, -54.6), PI, 64, 0.026, Color(0.75, 0.94, 1.0))
+	_add_sign_label(st, "售票处 / TICKETS", Vector3(54.0, 10.8, -50.6), PI, 40, 0.022, Color(0.98, 0.92, 0.72))
 
 	# Exterior slender steel colonnade & vertical curtain-wall mullions
 	for ci in range(-9, 10):
 		var cx := float(ci) * 8.4
-		_add_box(st, Vector3(0.65, 17.5, 0.85), Vector3(cx, 12.6, -50.2), steel_white)
-		_add_box(st, Vector3(0.55, 16.2, 0.70), Vector3(cx, 12.1, -18.2), steel_white)
+		_add_box(st, Vector3(0.65, 16.0, 0.85), Vector3(cx, 14.4, -50.2), steel_white)
+		_add_box(st, Vector3(0.55, 15.4, 0.70), Vector3(cx, 14.0, -18.2), steel_white)
 	# Horizontal transom beams
-	for ty in [8.4, 13.4, 18.2]:
+	for ty in [10.4, 15.0, 19.6]:
 		_add_box(st, Vector3(156.0, 0.42, 0.75), Vector3(0.0, ty, -49.9), steel_white)
 
-	# --- B. Iconic Sweeping Wave-Arch Silver Canopy Roof (18 arched segments spanning 186m) ---
+	# --- B. Iconic Sweeping Wave-Arch Silver Canopy Roof (18 arched segments spanning 192m, covering 2F deck!) ---
 	var n_seg := 18
-	var span_x := 186.0
+	var span_x := 192.0
 	for k in range(n_seg):
 		var u0 := -0.5 + float(k) / float(n_seg)
 		var u1 := -0.5 + float(k + 1) / float(n_seg)
 		var um := (u0 + u1) * 0.5
 		# Graceful double-crest Jiangnan wave silhouette (peaks at center, sweeps gently up at wingtips)
-		var y0 := 21.0 + cos(u0 * PI) * 4.8 + pow(absf(u0 * 2.0), 3.0) * 1.8
-		var y1 := 21.0 + cos(u1 * PI) * 4.8 + pow(absf(u1 * 2.0), 3.0) * 1.8
+		var y0 := 22.0 + cos(u0 * PI) * 4.8 + pow(absf(u0 * 2.0), 3.0) * 1.8
+		var y1 := 22.0 + cos(u1 * PI) * 4.8 + pow(absf(u1 * 2.0), 3.0) * 1.8
 		var ym := (y0 + y1) * 0.5
 		var dx := (u1 - u0) * span_x
 		var dy := y1 - y0
 		var seg_w := sqrt(dx * dx + dy * dy) + 0.35
 		var tilt := atan2(dy, dx)
-		# Deep cantilevered roof deck (covers hall + north drop-off canopy)
-		_add_box(st, Vector3(seg_w, 1.05, 52.0), Vector3(um * span_x, ym, -36.0), roof_silver, 0.0, tilt)
-		# Underside architectural rib
-		_add_box(st, Vector3(0.65, 0.75, 50.0), Vector3(u0 * span_x, y0 - 0.65, -36.0), roof_rib)
+		# Deep cantilevered roof deck covering 2F Departure Hall + 2F Drop-off Viaduct!
+		_add_box(st, Vector3(seg_w, 1.05, 58.0), Vector3(um * span_x, ym, -39.0), roof_silver, 0.0, tilt)
+		_add_box(st, Vector3(0.65, 0.75, 56.0), Vector3(u0 * span_x, y0 - 0.65, -39.0), roof_rib)
 
 	# Skylight clerestory band along roof spine
-	_add_box(st, Vector3(110.0, 1.2, 7.5), Vector3(0.0, 26.2, -34.0), glass_curtain)
+	_add_box(st, Vector3(114.0, 1.2, 7.5), Vector3(0.0, 27.2, -35.0), glass_curtain)
 
 	# --- C. Iconic Red Roof Signage: "嘉兴南站" (North & South facing!) ---
-	_add_box(st, Vector3(42.0, 0.45, 0.55), Vector3(0.0, 26.4, -61.8), steel_white)
-	_add_sign_label(st, "嘉 兴 南 站", Vector3(0.0, 29.0, -61.9), PI, 130, 0.042, sign_red)
-	_add_sign_label(st, "JIAXING SOUTH RAILWAY STATION", Vector3(0.0, 26.7, -61.9), PI, 40, 0.028, Color(0.95, 0.96, 0.98))
-	_add_sign_label(st, "嘉 兴 南 站", Vector3(0.0, 29.0, -10.0), 0.0, 120, 0.038, sign_red)
+	_add_box(st, Vector3(44.0, 0.45, 0.55), Vector3(0.0, 27.4, -67.8), steel_white)
+	_add_sign_label(st, "嘉 兴 南 站", Vector3(0.0, 30.0, -67.9), PI, 134, 0.042, sign_red)
+	_add_sign_label(st, "JIAXING SOUTH RAILWAY STATION", Vector3(0.0, 27.7, -67.9), PI, 40, 0.028, Color(0.95, 0.96, 0.98))
+	_add_sign_label(st, "嘉 兴 南 站", Vector3(0.0, 30.0, -10.0), 0.0, 120, 0.038, sign_red)
 
 	# --- D. High-Speed Rail Trackbed, 4 Covered Island Platforms, 8 Tracks & Overhead Catenary ---
 	# Elevated HSR track viaduct deck extending along X (-240m .. +240m)
@@ -278,22 +334,140 @@ static func _jiaxing_south_station(parent: Node3D, center: Vector3, angle: float
 	_add_hsr_train(st, Vector3(-18.0, 3.1, track_zs[1]), 1.0)
 	_add_hsr_train(st, Vector3(26.0, 3.1, track_zs[4]), -1.0)
 
-	# --- F. North Plaza Tram T1 Hub Canopy & Plaza Lights ---
-	_add_box(st, Vector3(44.0, 0.35, 11.0), Vector3(0.0, 5.4, -84.0), roof_silver)
-	for tx in [-18.0, -6.0, 6.0, 18.0]:
-		_add_box(st, Vector3(0.42, 5.2, 0.42), Vector3(tx, 2.7, -84.0), steel_white)
-	_add_sign_label(st, "有轨电车 T1 线 · 嘉兴南站枢纽", Vector3(0.0, 6.1, -89.6), PI, 48, 0.025, Color(0.98, 0.85, 0.32))
+	# --- F. Station Front Welcome Forecourt, Grand North Civic Plaza & Bus Transit Hub (站前广场 + 公交枢纽站) ---
+	# F1. South Forecourt Lawn Islands, Trees & Covered T1 Transfer Walkway (z = -96..-70, clear of z=-109 T1 tracks!)
+	for side_f: float in [-1.0, 1.0]:
+		var fx_l := side_f * 58.0
+		_add_box(st, Vector3(54.0, 0.42, 16.0), Vector3(fx_l, 0.21, -83.0), granite_dark)
+		_add_box(st, Vector3(51.5, 0.48, 13.8), Vector3(fx_l, 0.26, -83.0), lawn_mat)
+		for ti_f in range(4):
+			var tx_f := fx_l - 18.0 + float(ti_f) * 12.0
+			_add_cyl(st, 0.18, 0.24, 3.2, Vector3(tx_f, 1.9, -83.0), trunk_mat, 6)
+			_add_cyl(st, 1.5, 2.7, 3.2, Vector3(tx_f, 4.3, -83.0), foliage_mat if (ti_f % 2 == 0) else foliage_lt, 8)
+	# Sheltered pedestrian transfer walkway leading directly to T1 Tram Terminal (嘉兴南站)
+	_add_box(st, Vector3(48.0, 0.32, 8.5), Vector3(0.0, 4.8, -92.5), roof_silver)
+	for tx in [-20.0, -7.0, 7.0, 20.0]:
+		_add_box(st, Vector3(0.38, 4.7, 0.38), Vector3(tx, 2.35, -92.5), steel_white)
+	_add_sign_label(st, "有轨电车 T1 线 · 嘉兴南站换乘通道", Vector3(0.0, 5.45, -96.8), PI, 44, 0.022, Color(0.98, 0.86, 0.34))
 
-	# Warm plaza architectural night spotlights
-	for lx in [-56.0, 0.0, 56.0]:
+	# F2. Grand North Civic Square (嘉兴南站北广场, z = -242..-126, strictly NORTH of T1 tramway at z=-109!)
+	var plaza_n := Node3D.new()
+	plaza_n.name = "JiaxingSouthNorthPlaza"
+	st.add_child(plaza_n)
+	_add_box(plaza_n, Vector3(316.0, 0.05, 114.0), Vector3(46.0, -0.015, -184.0), granite, 0.0, 0.0, 0.0, false)
+	# Architectural dark-granite geometric paving bands across the civic square
+	for gz_band: float in [-234.0, -206.0, -172.0, -138.0]:
+		_add_box(plaza_n, Vector3(308.0, 0.06, 2.6), Vector3(46.0, -0.005, gz_band), granite_dark, 0.0, 0.0, 0.0, false)
+	# Central Civic Welcome Sculpture & Circular Reflection Fountain ("红船起航 · 嘉兴欢迎您", local x=-12, z=-172)
+	_add_cyl(plaza_n, 16.5, 17.2, 0.55, Vector3(-12.0, 0.27, -172.0), granite_dark, 24)
+	_add_cyl(plaza_n, 15.2, 15.2, 0.36, Vector3(-12.0, 0.32, -172.0), water_pool, 24)
+	_add_box(plaza_n, Vector3(14.0, 1.4, 4.2), Vector3(-12.0, 0.9, -172.0), granite)
+	var red_sail := _mat(Color(0.84, 0.12, 0.14), 0.32, 0.25)
+	_add_box(plaza_n, Vector3(11.5, 6.2, 0.55), Vector3(-12.0, 4.6, -172.0), red_sail, 0.0, 0.14)
+	_add_box(plaza_n, Vector3(7.5, 4.6, 0.50), Vector3(-11.0, 3.9, -170.6), _mat(Color(0.95, 0.78, 0.24), 0.28, 0.45), 0.0, -0.18)
+	_add_sign_label(plaza_n, "嘉 兴 欢 迎 您 · 红 船 起 航", Vector3(-12.0, 8.6, -172.4), PI, 48, 0.024, Color(0.94, 0.22, 0.18))
+	# Landscaped green plaza lawns & lush Jiangnan shade trees framing the civic square
+	for lx_p: float in [-42.0, 18.0]:
+		_add_box(plaza_n, Vector3(22.0, 0.35, 34.0), Vector3(lx_p, 0.18, -172.0), lawn_mat)
+		for ti_p in range(3):
+			var tz_p := -184.0 + float(ti_p) * 12.0
+			_add_cyl(plaza_n, 0.18, 0.24, 3.2, Vector3(lx_p, 1.8, tz_p), trunk_mat, 6)
+			_add_cyl(plaza_n, 1.6, 2.8, 3.4, Vector3(lx_p, 4.4, tz_p), foliage_mat if (ti_p % 2 == 0) else foliage_lt, 8)
+	# Perimeter avenue tree row along south edge of North Plaza (z = -132, facing T1 tramway!)
+	for tx_row in range(-95, 195, 22):
+		if absf(float(tx_row) + 12.0) < 18.0:
+			continue
+		_add_cyl(plaza_n, 0.18, 0.24, 3.1, Vector3(float(tx_row), 1.55, -132.0), trunk_mat, 6)
+		_add_cyl(plaza_n, 1.5, 2.6, 3.2, Vector3(float(tx_row), 4.1, -132.0), foliage_lt if (tx_row % 44 == 0) else foliage_mat, 8)
+
+	# F3. Jiaxing South Station Bus Transit Hub (嘉兴南站公交枢纽站 — East Plaza, x = +52..+200, z = -234..-136)
+	var bus_hub := Node3D.new()
+	bus_hub.name = "JiaxingSouthBusHub"
+	st.add_child(bus_hub)
+	# Asphalt bus terminal staging yard & lane markings
+	_add_box(bus_hub, Vector3(144.0, 0.06, 94.0), Vector3(126.0, 0.015, -184.0), asphalt_mat, 0.0, 0.0, 0.0, false)
+	for by_l: float in [-206.0, -193.0, -180.0, -167.0, -154.0, -141.0]:
+		_add_box(bus_hub, Vector3(132.0, 0.04, 0.25), Vector3(126.0, 0.055, by_l), yellow_line, 0.0, 0.0, 0.0, false)
+	# 2-Story Bus Hub Dispatch & Passenger Waiting Pavilion (公交枢纽综合服务楼, z = -224)
+	_add_box(bus_hub, Vector3(64.0, 8.6, 13.5), Vector3(126.0, 4.3, -224.0), steel_white)
+	_add_box(bus_hub, Vector3(58.0, 6.2, 10.0), Vector3(126.0, 3.9, -224.0), warm_hall, 0.0, 0.0, 0.0, false)
+	_add_box(bus_hub, Vector3(60.0, 6.8, 13.9), Vector3(126.0, 4.2, -224.0), glass_curtain)
+	_add_box(bus_hub, Vector3(70.0, 0.65, 18.0), Vector3(126.0, 8.9, -223.5), roof_silver)
+	_add_sign_label(bus_hub, "嘉兴南站公交枢纽站", Vector3(126.0, 10.6, -214.4), 0.0, 74, 0.028, Color(0.18, 0.72, 0.98))
+	_add_sign_label(bus_hub, "JIAXING SOUTH BUS TRANSIT HUB", Vector3(126.0, 9.5, -214.4), 0.0, 30, 0.020, Color(0.95, 0.96, 0.98))
+	_add_sign_label(bus_hub, "嘉兴南站公交枢纽站", Vector3(126.0, 10.6, -232.6), PI, 74, 0.028, Color(0.18, 0.72, 0.98))
+
+	# 5 Parallel Covered Bus Boarding Islands with cantilevered steel-glass canopies & route sign totems!
+	var bay_labels: Array[String] = ["1号站台 · K93 / K95", "2号站台 · K96 / K98", "3号站台 · 游1 / 快1", "4号站台 · 城乡公交", "5号站台 · 客运快线"]
+	var bay_zs: Array[float] = [-200.0, -187.0, -174.0, -161.0, -148.0]
+	for bi in range(bay_zs.size()):
+		var bz: float = bay_zs[bi]
+		_add_box(bus_hub, Vector3(76.0, 0.28, 3.4), Vector3(126.0, 0.16, bz), granite)
+		_add_box(bus_hub, Vector3(74.0, 0.05, 0.22), Vector3(126.0, 0.31, bz + 1.45), yellow_line, 0.0, 0.0, 0.0, false)
+		_add_box(bus_hub, Vector3(74.0, 0.26, 4.6), Vector3(126.0, 4.15, bz), roof_silver)
+		_add_box(bus_hub, Vector3(72.0, 0.10, 1.2), Vector3(126.0, 3.98, bz), warm_hall, 0.0, 0.0, 0.0, false)
+		for bcol in range(-3, 4):
+			_add_cyl(bus_hub, 0.16, 0.20, 3.9, Vector3(126.0 + float(bcol) * 11.0, 2.15, bz), steel_white, 8)
+		_add_box(bus_hub, Vector3(0.35, 2.6, 1.3), Vector3(88.5, 1.55, bz), dark_stone)
+		_add_sign_label(bus_hub, bay_labels[bi], Vector3(88.2, 2.95, bz), -PI * 0.5, 34, 0.018, Color(0.45, 0.92, 1.0))
+
+	# 6 Parked Modern Chinese Electric City Buses (嘉兴新能源纯电动公交车) docked cleanly at the boarding bays!
+	_add_electric_city_bus(bus_hub, Vector3(106.0, 0.04, -195.8), Color(0.14, 0.56, 0.88), 0.0)
+	_add_electric_city_bus(bus_hub, Vector3(144.0, 0.04, -195.8), Color(0.16, 0.64, 0.42), 0.0)
+	_add_electric_city_bus(bus_hub, Vector3(114.0, 0.04, -182.8), Color(0.16, 0.64, 0.42), 0.0)
+	_add_electric_city_bus(bus_hub, Vector3(148.0, 0.04, -169.8), Color(0.14, 0.56, 0.88), 0.0)
+	_add_electric_city_bus(bus_hub, Vector3(108.0, 0.04, -156.8), Color(0.84, 0.18, 0.18), 0.0)
+	_add_electric_city_bus(bus_hub, Vector3(142.0, 0.04, -143.8), Color(0.14, 0.56, 0.88), 0.0)
+
+	# F4. West Plaza Taxi & Ride-Hailing Waiting Canopy (出租车 / 网约车候客区, x = -104..-56, z = -216..-146)
+	_add_box(plaza_n, Vector3(48.0, 0.06, 68.0), Vector3(-82.0, 0.01, -182.0), asphalt_mat, 0.0, 0.0, 0.0, false)
+	_add_box(plaza_n, Vector3(10.0, 0.34, 56.0), Vector3(-62.0, 4.4, -182.0), roof_silver)
+	for tcz in range(-206, -154, 12):
+		_add_cyl(plaza_n, 0.18, 0.22, 4.3, Vector3(-62.0, 2.15, float(tcz)), steel_white, 8)
+	_add_sign_label(plaza_n, "出租车 · 网约车上客区  TAXI", Vector3(-56.8, 5.0, -182.0), PI * 0.5, 40, 0.022, Color(1.0, 0.84, 0.26))
+
+	# Warm plaza architectural night spotlights (HSR station + North Plaza + Bus Hub)
+	for lx in [-56.0, 0.0, 56.0, 126.0]:
 		var pl := OmniLight3D.new()
-		pl.position = Vector3(lx, 12.0, -66.0)
+		pl.position = Vector3(lx, 12.0, -172.0 if lx > 80.0 else -66.0)
 		pl.light_color = Color(1.0, 0.88, 0.68)
-		pl.omni_range = 62.0
+		pl.omni_range = 68.0
 		pl.light_energy = 0.0
 		pl.visible = false
 		st.add_child(pl)
 		lights.append(pl)
+
+
+static func _add_electric_city_bus(parent: Node3D, pos: Vector3, accent_col: Color, yaw: float) -> void:
+	var b := Node3D.new()
+	b.position = pos
+	b.rotation.y = yaw
+	parent.add_child(b)
+	var body_white := _mat(Color(0.94, 0.95, 0.96), 0.28, 0.12)
+	var accent := _mat(accent_col, 0.30, 0.16)
+	var glass_dark := _mat(Color(0.08, 0.12, 0.17), 0.10, 0.55)
+	var wheel_dark := _mat(Color(0.11, 0.11, 0.12), 0.85, 0.05)
+	var roof_pod := _mat(Color(0.84, 0.86, 0.88), 0.38, 0.18)
+	var led_amber := _emissive(Color(1.0, 0.72, 0.18), 1.8)
+	var head_glow := _emissive(Color(1.0, 0.96, 0.84), 2.0)
+	var tail_glow := _emissive(Color(0.95, 0.12, 0.12), 1.5)
+	# 11.8m x 2.55m x 2.85m low-floor electric transit bus body (along local X)
+	_add_box(b, Vector3(11.6, 2.55, 2.52), Vector3(0.0, 1.58, 0.0), body_white)
+	_add_box(b, Vector3(11.66, 0.76, 2.56), Vector3(0.0, 0.82, 0.0), accent)
+	# Panoramic side & front tinted windows
+	_add_box(b, Vector3(10.8, 1.12, 2.58), Vector3(0.0, 1.88, 0.0), glass_dark)
+	_add_box(b, Vector3(0.16, 1.45, 2.28), Vector3(-5.78, 1.75, 0.0), glass_dark)
+	# Glowing amber LED destination matrix & front headlights / rear taillights
+	_add_box(b, Vector3(0.12, 0.26, 1.45), Vector3(-5.82, 2.62, 0.0), led_amber, 0.0, 0.0, 0.0, false)
+	for wz: float in [-0.95, 0.95]:
+		_add_box(b, Vector3(0.10, 0.22, 0.34), Vector3(-5.82, 0.72, wz), head_glow, 0.0, 0.0, 0.0, false)
+		_add_box(b, Vector3(0.10, 0.26, 0.30), Vector3(5.82, 0.95, wz), tail_glow, 0.0, 0.0, 0.0, false)
+	# Rooftop electric battery & HVAC aerodynamic pod
+	_add_box(b, Vector3(6.8, 0.42, 1.75), Vector3(0.4, 3.04, 0.0), roof_pod)
+	# 4 rubber tires
+	for wx: float in [-3.4, 3.3]:
+		for wz: float in [-1.18, 1.18]:
+			_add_cyl(b, 0.48, 0.48, 0.32, Vector3(wx, 0.48, wz), wheel_dark, 10, Vector3(PI * 0.5, 0.0, 0.0))
 
 
 static func _add_hsr_train(parent: Node3D, pos: Vector3, heading: float) -> void:

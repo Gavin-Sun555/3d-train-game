@@ -1566,6 +1566,14 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
         for lpos, lrad, _ in lm_zones:
             if math.hypot(cen[0] - lpos[0], cen[1] - lpos[1]) < lrad:
                 return False
+        # Keep the full Jiaxing South HSR Station + North Forecourt Plaza + Bus Transit Hub precinct clear of random blocks!
+        dx_s = cen[0] - SOUTH_STA_POS[0]
+        dy_s = cen[1] - SOUTH_STA_POS[1]
+        ca_s, sa_s = math.cos(0.4925), math.sin(0.4925)
+        lx_s = dx_s * ca_s - dy_s * sa_s
+        lz_s = dx_s * sa_s + dy_s * ca_s
+        if -160.0 <= lx_s <= 260.0 and -265.0 <= lz_s <= 80.0:
+            return False
         # Keep Jiaxing T1 open-cut U-trough tunnel ramps 100% free of surface buildings!
         for (rax, ray, rbx, rby) in (
             (997.81, -1170.11, 885.0, -1178.5),
@@ -2382,7 +2390,7 @@ def build_t1_starter_network(nodes_list, edges_list):
     waypoints_south = [
         ("嘉兴南站", 4080.68, 6817.27, ""),
         ("__south_plaza_m__", 4221.50, 6742.88, ""),
-        ("__south_plaza_e__", 4409.11, 6627.79, ""),
+        ("__south_plaza_e__", 4392.0, 6644.0, ""),
         ("__qingfeng_s__", 4317.21, 6448.94, "庆丰路"),
         ("有轨电车庆丰路基地站", 4252.0, 4297.0, "庆丰路"),
         ("庆丰路长水路站", 4242.0, 3527.0, "庆丰路"),
@@ -2413,9 +2421,37 @@ def build_t1_starter_network(nodes_list, edges_list):
     p_portal_e = node_pos_by_id[nid_portal_e]
     p_portal_w = node_pos_by_id[nid_portal_w]
 
-    # Ensure the dry-land north bank approach edge (1321 -> 1328) is wide enough for clean tramway pavement
+    # Smooth the South Station SE plaza corner (node 2265): OSM's raw service ramp had a 175-deg hairpin hook
+    # at [4409.11, 6627.79]. Reshaping it to [4392.0, 6644.0] yields a clean 71-deg sweeping turn from the
+    # HSR station front plaza (eid=3141->3198->3223) straight north along the east plaza edge onto 庆丰路 (eid=3245)!
+    nid_se_turn = nearest_node_xy(4409.11, 6627.79, "")
+    nid_s_mid = nearest_node_xy(4264.97, 6721.03, "")
+    nid_qf_ne = nearest_node_xy(4317.21, 6448.94, "庆丰路")
+    p_se_clean = [4392.0, 6644.0]
+    for nd_c in nodes_list:
+        if nd_c["id"] == nid_se_turn:
+            nd_c["pos"] = p_se_clean
+            node_pos_by_id[nid_se_turn] = p_se_clean
+            break
     for ed_chk in edges_list:
-        if (ed_chk["a"] == nid_pinghu_n and ed_chk["b"] == nid_portal_e) or (ed_chk["b"] == nid_pinghu_n and ed_chk["a"] == nid_portal_e):
+        a_id, b_id = ed_chk["a"], ed_chk["b"]
+        if (a_id == nid_s_mid and b_id == nid_se_turn) or (b_id == nid_s_mid and a_id == nid_se_turn):
+            p_f = node_pos_by_id[nid_s_mid]
+            pts_new = [p_f, [4355.0, 6674.0], p_se_clean] if a_id == nid_s_mid else [p_se_clean, [4355.0, 6674.0], p_f]
+            ed_chk["pts"] = pts_new
+            ed_chk["length"] = round(sum(math.hypot(pts_new[k + 1][0] - pts_new[k][0], pts_new[k + 1][1] - pts_new[k][1]) for k in range(len(pts_new) - 1)), 2)
+            ed_chk["name"] = "嘉兴南站站前路"
+        elif (a_id == nid_qf_ne and b_id == nid_se_turn) or (b_id == nid_qf_ne and a_id == nid_se_turn):
+            p_n = node_pos_by_id[nid_qf_ne]
+            pts_new = [p_n, [4356.0, 6548.0], p_se_clean] if a_id == nid_qf_ne else [p_se_clean, [4356.0, 6548.0], p_n]
+            ed_chk["pts"] = pts_new
+            ed_chk["length"] = round(sum(math.hypot(pts_new[k + 1][0] - pts_new[k][0], pts_new[k + 1][1] - pts_new[k][1]) for k in range(len(pts_new) - 1)), 2)
+            ed_chk["name"] = "庆丰路"
+        elif a_id == nid_se_turn:
+            ed_chk["pts"][0] = p_se_clean
+        elif b_id == nid_se_turn:
+            ed_chk["pts"][-1] = p_se_clean
+        if (a_id == nid_pinghu_n and b_id == nid_portal_e) or (b_id == nid_pinghu_n and a_id == nid_portal_e):
             ed_chk["width"] = max(float(ed_chk.get("width", 5.5)), 9.2)
             ed_chk["name"] = "纺工路"
 
@@ -2572,7 +2608,8 @@ def build_t1_starter_network(nodes_list, edges_list):
                 margin_t = min(0.36, 40.0 / elen)
                 t_clamped = max(margin_t, min(1.0 - margin_t, t_raw))
                 if st_i == 0:
-                    t_clamped = max(margin_t, min(0.35, t_clamped))
+                    # Center 嘉兴南站 tram stop right in front of the HSR Station North Entrance (local x ~ 0)!
+                    t_clamped = max(margin_t, min(0.45, 0.42))
                 elif st_i == len(station_targets) - 1:
                     t_clamped = min(1.0 - margin_t, max(0.65, t_clamped))
                 if all(abs(t_clamped - prev_t) * elen >= 95.0 for prev_t in used_slots[eid]):
