@@ -3,6 +3,7 @@ render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 
 uniform float night_factor : hint_range(0.0, 1.0) = 0.0;
 uniform vec3 env_sky_tint = vec3(0.62, 0.72, 0.82);
+uniform float chinese_style : hint_range(0.0, 1.0) = 0.0;
 
 varying float v_up;
 varying vec2 v_wall_uv;
@@ -168,7 +169,234 @@ void fragment() {
 		float metal = 0.02;
 		float spec = 0.25;
 
-		if (style == 0) {
+		if (chinese_style > 0.5) {
+			// =========================================================================
+			// AUTHENTIC CONTEMPORARY CHINESE & JIANGNAN URBAN ARCHITECTURE (嘉兴城市建筑)
+			// Unified 1F granite commercial podium (y=0..4.6m) so ground-floor storefronts
+			// (连排底商) integrate seamlessly into every residential, mixed-use & office block!
+			// =========================================================================
+			bool podium_cornice = (h >= 4.38 && h <= 4.68);
+			if (podium_cornice && style != 0) {
+				// Crisp overhanging architectural granite belt cornice separating 1F shops from upper tower
+				col = mix(vec3(0.76, 0.74, 0.70), base_col * 0.92, 0.35) * ground_ao;
+				rough = 0.68;
+				metal = 0.05;
+			} else if (h < 4.38 && style != 0) {
+				// Unified Chinese dry-hung granite commercial podium base (干挂花岗岩底商裙楼)
+				float sx = fract(u / 1.10);
+				float sy = fract(h / 0.62);
+				float sjoint = smoothstep(0.0, 0.018, sx) * smoothstep(1.0, 0.982, sx) * smoothstep(0.0, 0.028, sy);
+				float sblock = hash21(vec2(floor(u / 1.10), floor(h / 0.62) + b_seed));
+				vec3 granite = mix(vec3(0.66, 0.64, 0.60), base_col * 0.88, 0.35) * (0.94 + 0.08 * sblock);
+				float bay_u = fract(u / 3.8);
+				bool shop_win = (bay_u > 0.10 && bay_u < 0.90 && h > 0.42 && h < 3.45);
+				bool shop_frame = (bay_u > 0.08 && bay_u < 0.92 && h > 0.38 && h < 3.52 && !shop_win);
+				if (h < 0.42) {
+					col = vec3(0.32, 0.33, 0.35) * ground_ao; // Dark grey granite plinth kickplate
+					rough = 0.76;
+				} else if (shop_frame || (shop_win && (abs(bay_u - 0.50) < 0.015 || abs(h - 2.65) < 0.035))) {
+					col = vec3(0.18, 0.20, 0.22); // Dark broken-bridge aluminum storefront frame
+					rough = 0.38;
+					metal = 0.58;
+				} else if (shop_win) {
+					float r_shop = 0.70 + 0.26 * hash21(vec2(floor(u / 3.8), b_seed));
+					vec2 suv = vec2((bay_u - 0.10) / 0.80, (h - 0.42) / 3.03);
+					vec3 r_alb; vec3 r_em;
+					trace_interior_room(suv, ray_local, r_shop, false, max(night_factor, 0.30), cam_dist, r_alb, r_em);
+					col = mix(r_alb, env_sky_tint * 0.68, clamp(0.18 + fresnel * 0.48, 0.0, 0.72) * (1.0 - night_factor * 0.6));
+					emit = r_em * 0.82;
+					rough = 0.10;
+					spec = 0.78;
+				} else {
+					col = mix(granite * 0.78, granite, sjoint) * ground_ao;
+					rough = 0.74;
+				}
+			} else if (style == 0) {
+				// Chinese Style 0: Contemporary CBD Low-E Glass Curtain Wall Tower (现代玻璃幕墙写字楼)
+				float fh = 3.85;
+				float bw = 1.95;
+				float floor_idx = floor(h / fh);
+				float bay_idx = floor(u / bw);
+				float fy = fract(h / fh);
+				float fx = fract(u / bw);
+				bool mullion = (fx < 0.042 || fx > 0.958 || fy < 0.036 || fy > 0.964);
+				bool fin = (fy < 0.095) && (h >= 5.2);
+				bool spandrel = (fy < 0.24) && (h >= 5.2);
+				if (fin) {
+					col = vec3(0.68, 0.72, 0.76) * ground_ao; // Silver aluminum sun-shade fin
+					rough = 0.30; metal = 0.78; spec = 0.72;
+				} else if (mullion) {
+					col = vec3(0.28, 0.32, 0.36) * ground_ao;
+					rough = 0.34; metal = 0.72; spec = 0.65;
+				} else if (spandrel) {
+					col = mix(base_col * 0.56, vec3(0.22, 0.30, 0.38), 0.55) * ground_ao;
+					rough = 0.20; metal = 0.35; spec = 0.60;
+				} else {
+					float r_seed = hash21(vec2(floor(bay_idx * 0.5) + b_seed * 11.3, floor_idx + b_seed * 5.7));
+					vec2 room_uv = (h < 5.2)
+						? vec2(fract(u / 3.9), clamp(h / 5.0, 0.01, 0.99))
+						: vec2(fract(u / (bw * 2.0)), clamp((fy - 0.24) / 0.73, 0.01, 0.99));
+					if (h < 5.2) r_seed = 0.86;
+					vec3 r_alb; vec3 r_em;
+					trace_interior_room(room_uv, ray_local, r_seed, true, night_factor, cam_dist, r_alb, r_em);
+					vec3 ext_glass = mix(base_col * 0.78, env_sky_tint, 0.56);
+					float refl_amt = clamp(0.26 + fresnel * 0.62, 0.0, 0.88) * (1.0 - night_factor * 0.65);
+					col = mix(r_alb, ext_glass, refl_amt) * ground_ao;
+					emit = r_em * (1.0 - refl_amt * 0.45);
+					rough = 0.08; metal = 0.38; spec = 0.84;
+				}
+			} else if (style == 1) {
+				// Chinese Style 1: Urban Commercial / Mixed-Use Dry-Hung Stone & Aluminum Complex (商住综合楼)
+				float fh = 3.50;
+				float bw = 3.60;
+				float floor_idx = floor(h / fh);
+				float bay_idx = floor(u / bw);
+				float fy = fract(h / fh);
+				float fx = fract(u / bw);
+				float sjoint = smoothstep(0.0, 0.015, fract(u / 1.2)) * smoothstep(0.0, 0.022, fract(h / 0.70));
+				vec3 stone_c = mix(base_col, vec3(0.82, 0.79, 0.73), 0.38) * (0.94 + 0.07 * hash21(vec2(floor(u / 1.2), floor(h / 0.70))));
+				bool ac_slot = (fx > 0.05 && fx < 0.18 && fy > 0.16 && fy < 0.74);
+				bool win_box = (fx > 0.22 && fx < 0.92 && fy > 0.16 && fy < 0.84);
+				if (fy < 0.07) {
+					col = stone_c * 0.84 * ground_ao; // Crisp horizontal floor-slab belt line
+					rough = 0.72;
+				} else if (ac_slot) {
+					// Recessed dark-grey horizontal aluminum AC outdoor unit louvers (空调外机百叶)
+					float slats = 0.68 + 0.32 * step(0.45, fract(h * 11.0));
+					col = vec3(0.28, 0.30, 0.33) * slats * ground_ao;
+					rough = 0.55; metal = 0.42;
+				} else if (win_box) {
+					bool mull = (abs(fx - 0.57) < 0.015 || abs(fy - 0.56) < 0.016 || fx < 0.24 || fx > 0.90 || fy < 0.18 || fy > 0.82);
+					if (mull) {
+						col = vec3(0.20, 0.22, 0.25); // Charcoal broken-bridge aluminum frame
+						rough = 0.38; metal = 0.62;
+					} else {
+						float r_seed = hash21(vec2(bay_idx + b_seed * 8.3, floor_idx + b_seed * 4.9));
+						vec2 wuv = vec2((fx - 0.24) / 0.66, (fy - 0.18) / 0.64);
+						vec3 r_alb; vec3 r_em;
+						trace_interior_room(wuv, ray_local, r_seed, true, night_factor, cam_dist, r_alb, r_em);
+						col = mix(r_alb, env_sky_tint * 0.74, clamp(0.22 + fresnel * 0.55, 0.0, 0.78) * (1.0 - night_factor * 0.65));
+						emit = r_em;
+						rough = 0.11; spec = 0.76;
+					}
+				} else {
+					col = mix(stone_c * 0.80, stone_c, sjoint) * ground_ao;
+					rough = 0.78;
+				}
+			} else if (style == 2) {
+				// Chinese Style 2: Authentic Modern Chinese Residential Slab Tower (现代小区高层板楼: 真石漆 + 封闭落地阳台 + 空调百叶)
+				float fh = 3.05;
+				float bw = 4.20;
+				float floor_idx = floor(h / fh);
+				float bay_idx = floor(u / bw);
+				float fy = fract(h / fh);
+				float fx = fract(u / bw);
+				bool is_balcony_bay = (mod(bay_idx + floor(b_seed * 0.5), 2.0) < 0.5);
+				vec3 wall_main = mix(base_col, vec3(0.84, 0.80, 0.73), 0.32);
+				vec3 accent_trim = mix(wall_main * 0.78, vec3(0.46, 0.44, 0.42), 0.42);
+				float grain = hash21(floor(vec2(u, h) * 10.0));
+				bool slab_line = (fy < 0.085);
+				bool pilaster = (fx < 0.045 || fx > 0.955);
+				bool ac_louver = (!is_balcony_bay && fx > 0.06 && fx < 0.20 && fy > 0.14 && fy < 0.72);
+				bool win_open = is_balcony_bay
+					? (fx > 0.08 && fx < 0.92 && fy > 0.10 && fy < 0.88)
+					: (fx > 0.25 && fx < 0.88 && fy > 0.24 && fy < 0.82);
+
+				if (slab_line) {
+					col = accent_trim * ground_ao; // Characteristic Chinese residential horizontal floor bands
+					rough = 0.80;
+				} else if (pilaster) {
+					col = mix(wall_main * 1.04, accent_trim, 0.35) * ground_ao;
+					rough = 0.82;
+				} else if (ac_louver) {
+					// Recessed AC outdoor-unit louver bay (every Chinese apartment unit!)
+					float slats = 0.62 + 0.38 * step(0.46, fract(h * 12.0));
+					col = vec3(0.30, 0.32, 0.34) * slats * ground_ao;
+					rough = 0.58; metal = 0.35;
+				} else if (win_open) {
+					if (is_balcony_bay) {
+						// Wide Enclosed Glazed Chinese Balcony (封闭式落地玻璃阳台 + 护栏横杆!)
+						bool rail_bar = (abs(fy - 0.36) < 0.022 || abs(fx - 0.36) < 0.012 || abs(fx - 0.64) < 0.012 || fx < 0.10 || fx > 0.90 || fy > 0.86);
+						bool lower_balustrade = (fy < 0.35);
+						if (rail_bar) {
+							col = vec3(0.24, 0.26, 0.29);
+							rough = 0.40; metal = 0.58;
+						} else {
+							float r_seed = hash21(vec2(bay_idx + b_seed * 6.7, floor_idx + b_seed * 5.3));
+							vec2 wuv = vec2((fx - 0.08) / 0.84, (fy - 0.10) / 0.78);
+							vec3 r_alb; vec3 r_em;
+							trace_interior_room(wuv, ray_local, r_seed, false, night_factor, cam_dist, r_alb, r_em);
+							// Frosted/tinted lower balcony glass vs clear upper sliding glass
+							vec3 balc_tint = lower_balustrade ? mix(vec3(0.42, 0.50, 0.56), env_sky_tint, 0.45) : env_sky_tint * 0.74;
+							float balc_refl = lower_balustrade ? 0.58 : clamp(0.20 + fresnel * 0.55, 0.0, 0.76);
+							col = mix(r_alb, balc_tint, balc_refl * (1.0 - night_factor * 0.55));
+							emit = r_em * (lower_balustrade ? 0.45 : 0.92);
+							rough = lower_balustrade ? 0.22 : 0.11;
+							spec = 0.74;
+						}
+					} else {
+						bool mull = (abs(fx - 0.56) < 0.015 || abs(fy - 0.62) < 0.015 || fx < 0.27 || fx > 0.86 || fy < 0.26 || fy > 0.80);
+						if (mull) {
+							col = vec3(0.24, 0.26, 0.28);
+							rough = 0.42; metal = 0.55;
+						} else {
+							float r_seed = hash21(vec2(bay_idx + b_seed * 7.7, floor_idx + b_seed * 6.1));
+							vec2 wuv = vec2((fx - 0.27) / 0.59, (fy - 0.26) / 0.54);
+							vec3 r_alb; vec3 r_em;
+							trace_interior_room(wuv, ray_local, r_seed, false, night_factor, cam_dist, r_alb, r_em);
+							col = mix(r_alb, env_sky_tint * 0.72, clamp(0.18 + fresnel * 0.54, 0.0, 0.75) * (1.0 - night_factor * 0.65));
+							emit = r_em;
+							rough = 0.12; spec = 0.74;
+						}
+					}
+				} else {
+					// Textured warm Chinese Zhenshiqi stone paint (真石漆外墙)
+					col = wall_main * (0.94 + 0.07 * grain) * ground_ao;
+					rough = 0.86;
+				}
+			} else {
+				// Chinese Style 3: Jiangnan Old-Community Multi-Story Slab / White-Wall Watertown Townhouse (老小区板楼 / 江南粉墙民居)
+				float fh = 2.95;
+				float bw = 3.50;
+				float floor_idx = floor(h / fh);
+				float bay_idx = floor(u / bw);
+				float fy = fract(h / fh);
+				float fx = fract(u / bw);
+				// Authentic white Jiangnan lime plaster or classic ceramic facade mosaic tiles (外墙面砖)
+				bool is_white_plaster = (b_seed < 24.0);
+				float tx_j = smoothstep(0.0, 0.04, fract(u / 0.24)) * smoothstep(0.0, 0.06, fract(h / 0.12));
+				float t_var = hash21(vec2(floor(u / 0.24), floor(h / 0.12)));
+				vec3 plaster_c = mix(vec3(0.88, 0.87, 0.84), base_col, 0.30) * (0.96 + 0.05 * hash21(floor(vec2(u, h) * 3.0)));
+				vec3 tile_c = mix(base_col * 0.84, base_col * (0.95 + 0.07 * t_var), tx_j);
+				vec3 wall_c = is_white_plaster ? plaster_c : tile_c;
+				bool is_balc = (mod(bay_idx, 2.0) < 0.5);
+				bool win_open = is_balc
+					? (fx > 0.12 && fx < 0.88 && fy > 0.14 && fy < 0.84)
+					: (fx > 0.22 && fx < 0.78 && fy > 0.24 && fy < 0.78);
+				if (fy < 0.06) {
+					col = vec3(0.56, 0.56, 0.55) * ground_ao;
+					rough = 0.85;
+				} else if (win_open) {
+					bool rail = (is_balc && abs(fy - 0.38) < 0.025) || abs(fx - 0.50) < 0.018 || (is_balc && fy < 0.36 && abs(fract(fx * 9.0) - 0.5) < 0.09);
+					bool frame_b = (is_balc && (fx < 0.14 || fx > 0.86 || fy > 0.82)) || (!is_balc && (fx < 0.24 || fx > 0.76 || fy < 0.26 || fy > 0.76));
+					if (rail || frame_b) {
+						col = vec3(0.24, 0.26, 0.28); // Dark aluminum sliding window & balcony security rail
+						rough = 0.48; metal = 0.45;
+					} else {
+						float r_seed = hash21(vec2(bay_idx + b_seed * 7.3, floor_idx + b_seed * 2.9));
+						vec2 wuv = vec2(fract(fx * 1.4), clamp((fy - 0.14) / 0.70, 0.01, 0.99));
+						vec3 r_alb; vec3 r_em;
+						trace_interior_room(wuv, ray_local, r_seed, false, night_factor, cam_dist, r_alb, r_em);
+						col = mix(r_alb, env_sky_tint * 0.68, clamp(0.18 + fresnel * 0.48, 0.0, 0.70) * (1.0 - night_factor * 0.65));
+						emit = r_em * 0.85;
+						rough = 0.14; spec = 0.68;
+					}
+				} else {
+					col = wall_c * ground_ao;
+					rough = is_white_plaster ? 0.88 : 0.74;
+				}
+			}
+		} else if (style == 0) {
 			// === STYLE 0: Realistic Curtain-Wall Office Tower ===
 			float fh = 3.9;
 			float bw = 1.85;

@@ -289,56 +289,77 @@ static func _build_one(fst: SurfaceTool, gst: SurfaceTool, labels: Node3D, sf: D
 	var N := Vector3(float(na[0]), 0.0, float(na[1])).normalized()
 	var st := _style_for(sf)
 	var gh := 4.4 if bh >= 7.0 else clampf(bh - 0.8, 3.2, 4.0)
+	var tier_s := str(sf.get("tier", ""))
+	var is_zh_shop := tier_s == "chain" or tier_s == "local"
 	var frame_c: Color = st["frame"]
-	var bulk_c: Color = Color(0.20, 0.20, 0.21) if (absi(hash(str(sf["name"]))) % 2 == 0) else frame_c.darkened(0.25)
+	var name_txt := str(sf.get("name", ""))
+	var nh := absi(hash(name_txt))
+	var bulk_c: Color = Color(0.28, 0.29, 0.31) if is_zh_shop else (Color(0.20, 0.20, 0.21) if (nh % 2 == 0) else frame_c.darkened(0.25))
 	var is_local_zh := bool(st.get("is_local_zh", false))
-	var sign_y0 := (gh - 1.22) if is_local_zh else (gh - 1.05)
-	var sign_y1 := (gh - 0.14) if is_local_zh else (gh - 0.18)
+	var sign_y0 := (gh - 1.20) if is_local_zh else (gh - 1.04)
+	var sign_y1 := (gh - 0.14) if is_local_zh else (gh - 0.16)
 	var sign_d := 0.42 if is_local_zh else 0.34
 	var glass_top := sign_y0 - 0.06
 	var has_awning := bool(st["has_awning"])
 	if has_awning:
-		glass_top = sign_y0 - 0.1
-	var pil := 0.32
+		glass_top = sign_y0 - 0.10
+	var pil := 0.24 if is_zh_shop else 0.32
 	var ctx := {"o": o, "u": U, "n": N, "st": fst}
 
-	# Pilasters + bulkhead + fascia board
-	_box(ctx, 0.0, pil, 0.0, sign_y0, 0.0, 0.30, frame_c)
-	_box(ctx, w - pil, w, 0.0, sign_y0, 0.0, 0.30, frame_c)
+	# Pilasters + Unified Granite Podium Cornice (locks flush wall-to-wall rows into the building base!)
+	var pil_c := Color(0.68, 0.66, 0.62) if is_zh_shop else frame_c
+	_box(ctx, 0.0, pil, 0.0, sign_y0, 0.0, 0.32, pil_c)
+	_box(ctx, w - pil, w, 0.0, sign_y0, 0.0, 0.32, pil_c)
+	if is_zh_shop:
+		# Continuous architectural granite podium coping & dark plinth kickplate connecting adjacent shops!
+		_box(ctx, 0.0, w, gh - 0.12, gh + 0.06, 0.0, 0.44, Color(0.74, 0.72, 0.68))
+		_box(ctx, 0.0, pil, 0.0, 0.44, 0.0, 0.35, Color(0.32, 0.33, 0.35))
+		_box(ctx, w - pil, w, 0.0, 0.44, 0.0, 0.35, Color(0.32, 0.33, 0.35))
 	if bool(st["letters"]):
 		# Stone fascia band with raised individual letters
 		_box(ctx, 0.0, w, sign_y0, sign_y1, 0.0, 0.22, Color(0.80, 0.77, 0.72))
 	else:
-		_box(ctx, 0.08, w - 0.08, sign_y0, sign_y1, 0.0, sign_d, st["bg"])
+		_box(ctx, 0.05, w - 0.05, sign_y0, sign_y1, 0.0, sign_d, st["bg"])
 		var trim_c := Color(0.88, 0.88, 0.86) if is_local_zh else frame_c.darkened(0.3)
-		_box(ctx, 0.05, w - 0.05, sign_y1, sign_y1 + 0.05, 0.0, sign_d + 0.04, trim_c)
-		_box(ctx, 0.05, w - 0.05, sign_y0 - 0.04, sign_y0, 0.0, sign_d + 0.04, trim_c)
+		_box(ctx, 0.03, w - 0.03, sign_y1, sign_y1 + 0.045, 0.0, sign_d + 0.035, trim_c)
+		_box(ctx, 0.03, w - 0.03, sign_y0 - 0.04, sign_y0, 0.0, sign_d + 0.035, trim_c)
+		if is_zh_shop:
+			# Subtle under-fascia warm LED diffuser bar (门头底部暖白灯带)
+			_box(ctx, 0.14, w - 0.14, sign_y0 - 0.065, sign_y0 - 0.035, 0.12, sign_d - 0.04, Color(0.98, 0.94, 0.82))
 
 	# Entrance door position (recessed double door for wide shops, single otherwise)
-	var door_w := 1.9 if w >= 8.0 else 1.05
-	var door_c := w * 0.5 if w < 7.0 else (w * 0.3 if absi(hash(str(sf["name"]))) % 2 == 0 else w * 0.7)
+	var door_w := 1.95 if w >= 6.4 else 1.15
+	var door_c := w * 0.5 if w < 6.2 else (w * 0.34 if nh % 2 == 0 else w * 0.66)
 	var d0 := door_c - door_w * 0.5
 	var d1 := door_c + door_w * 0.5
-	var sill := 0.48
+	var sill := 0.44 if is_zh_shop else 0.48
 	# Bulkhead (skip under the door)
-	_box(ctx, pil, d0, 0.0, sill, 0.0, 0.20, bulk_c)
-	_box(ctx, d1, w - pil, 0.0, sill, 0.0, 0.20, bulk_c)
-	_box(ctx, pil, d0, sill, sill + 0.05, 0.0, 0.24, frame_c.lightened(0.1))
-	_box(ctx, d1, w - pil, sill, sill + 0.05, 0.0, 0.24, frame_c.lightened(0.1))
+	_box(ctx, pil, d0, 0.0, sill, 0.0, 0.22, bulk_c)
+	_box(ctx, d1, w - pil, 0.0, sill, 0.0, 0.22, bulk_c)
+	_box(ctx, pil, d0, sill, sill + 0.05, 0.0, 0.26, frame_c.lightened(0.1))
+	_box(ctx, d1, w - pil, sill, sill + 0.05, 0.0, 0.26, frame_c.lightened(0.1))
 	# Glazing (shop windows + door glass), interior shader
 	var col := Color((st["accent"] as Color).r, (st["accent"] as Color).g, (st["accent"] as Color).b, float(int(st["interior"])) / 255.0)
 	_glass(gst, o, U, N, pil, d0, sill, glass_top, 0.10, col)
 	_glass(gst, o, U, N, d1, w - pil, sill, glass_top, 0.10, col)
-	_glass(gst, o, U, N, d0, d1, 0.02, glass_top, -0.25, col) # door set back into a shallow vestibule
-	# Door vestibule: reveals, threshold, door frames, push bars, transom
-	_box(ctx, d0 - 0.06, d0, 0.0, glass_top, -0.30, 0.30, frame_c)
-	_box(ctx, d1, d1 + 0.06, 0.0, glass_top, -0.30, 0.30, frame_c)
-	_box(ctx, d0, d1, 0.0, 0.03, -0.3, 0.2, Color(0.55, 0.53, 0.50))
-	_box(ctx, d0, d1, 2.3, 2.38, -0.28, -0.20, frame_c)
+	_glass(gst, o, U, N, d0, d1, 0.02, glass_top, -0.22, col) # door set back into a shallow vestibule
+	# Door vestibule: reveals, granite step threshold, welcome mat, aluminum door stiles, frosted stripe & stainless handles!
+	_box(ctx, d0 - 0.06, d0, 0.0, glass_top, -0.26, 0.28, frame_c)
+	_box(ctx, d1, d1 + 0.06, 0.0, glass_top, -0.26, 0.28, frame_c)
+	_box(ctx, d0 - 0.08, d1 + 0.08, 0.0, 0.06, -0.26, 0.34, Color(0.60, 0.59, 0.56))
+	if is_zh_shop:
+		_box(ctx, d0 + 0.12, d1 - 0.12, 0.06, 0.085, 0.02, 0.32, Color(0.58, 0.14, 0.14) if is_local_zh else Color(0.22, 0.24, 0.26))
+		# Frosted anti-collision safety strip across Chinese glass entrance door (玻璃门防撞腰线)
+		_box(ctx, d0 + 0.04, d1 - 0.04, 1.06, 1.13, -0.21, -0.19, Color(0.88, 0.90, 0.92))
+	_box(ctx, d0, d1, 2.28, 2.36, -0.26, -0.18, frame_c)
 	if door_w > 1.5:
-		_box(ctx, door_c - 0.04, door_c + 0.04, 0.02, 2.3, -0.28, -0.19, frame_c)
+		_box(ctx, door_c - 0.04, door_c + 0.04, 0.02, 2.28, -0.26, -0.17, frame_c)
 	for hx: float in ([door_c - 0.22, door_c + 0.22] if door_w > 1.5 else [d1 - 0.18]):
-		_box(ctx, hx - 0.02, hx + 0.02, 0.85, 1.25, -0.20, -0.14, Color(0.78, 0.78, 0.76))
+		_box(ctx, hx - 0.022, hx + 0.022, 0.78, 1.42, -0.18, -0.11, Color(0.84, 0.85, 0.86))
+	# Rolled-up galvanized metal security shutter hood box (卷帘门盒 — authentic Chinese street shop detail!)
+	if is_local_zh or (is_zh_shop and str(sf.get("kind", "")) in ["convenience", "hardware", "greengrocer", "pharmacy"]):
+		_box(ctx, pil, w - pil, glass_top - 0.24, glass_top, 0.0, 0.32, Color(0.70, 0.72, 0.74))
+		_box(ctx, pil, w - pil, glass_top - 0.26, glass_top - 0.24, 0.26, 0.33, Color(0.45, 0.47, 0.50))
 	# Window mullions and transom bar
 	var spans: Array = [[pil, d0], [d1, w - pil]]
 	for sp: Array in spans:
@@ -346,15 +367,35 @@ static func _build_one(fst: SurfaceTool, gst: SurfaceTool, labels: Node3D, sf: D
 		var b := float(sp[1])
 		if b - a < 0.4:
 			continue
-		var n_m := maxi(1, int(round((b - a) / 2.2)))
+		var n_m := maxi(1, int(round((b - a) / 2.0)))
 		for k in range(1, n_m):
 			var mu := lerpf(a, b, float(k) / float(n_m))
-			_box(ctx, mu - 0.035, mu + 0.035, sill, glass_top, 0.0, 0.16, frame_c)
-		_box(ctx, a, b, glass_top - 0.75, glass_top - 0.70, 0.0, 0.15, frame_c)
+			_box(ctx, mu - 0.032, mu + 0.032, sill, glass_top, 0.0, 0.16, frame_c)
+		_box(ctx, a, b, glass_top - 0.72, glass_top - 0.67, 0.0, 0.15, frame_c)
 	_box(ctx, pil, w - pil, glass_top - 0.02, sign_y0, 0.0, 0.18, frame_c.darkened(0.15))
 
+	# Authentic Chinese Shopfront Street Props:
+	# 1) Air-Conditioner Outdoor Unit (空调外机) mounted beside fascia on ~40% of local shops
+	if is_local_zh and nh % 5 < 2 and w >= 4.2:
+		var acu := w - 0.58 if door_c < w * 0.5 else 0.58
+		_box(ctx, acu - 0.34, acu + 0.34, glass_top - 0.56, glass_top - 0.04, 0.18, 0.50, Color(0.84, 0.85, 0.83))
+		_box(ctx, acu - 0.24, acu + 0.08, glass_top - 0.48, glass_top - 0.12, 0.50, 0.52, Color(0.22, 0.24, 0.26))
+	# 2) Hanging Chinese Red Lanterns (传统红灯笼) on traditional food/noodle/zongzi/tea shops!
+	if is_zh_shop and (name_txt.contains("粽") or name_txt.contains("面") or name_txt.contains("茶") or name_txt.contains("火锅") or name_txt.contains("烧烤") or name_txt.contains("小炒") or name_txt.contains("酱鸭") or name_txt.contains("老字号")):
+		for lu: float in [maxf(0.45, d0 - 0.38), minf(w - 0.45, d1 + 0.38)]:
+			_box(ctx, lu - 0.16, lu + 0.16, 2.58, 2.98, 0.38, 0.70, Color(0.86, 0.10, 0.10))
+			_box(ctx, lu - 0.11, lu + 0.11, 2.98, 3.04, 0.43, 0.65, Color(0.94, 0.78, 0.22))
+			_box(ctx, lu - 0.11, lu + 0.11, 2.52, 2.58, 0.43, 0.65, Color(0.94, 0.78, 0.22))
+	# 3) Neat Sidewalk Produce / Fruit Display Crates (生鲜水果展示筐) on greengrocers & fruit shops!
+	if str(sf.get("kind", "")) == "greengrocer" and w >= 4.2:
+		var r_u0 := d1 + 0.25 if (w - d1) >= 1.5 else pil + 0.18
+		var r_u1 := (w - pil - 0.18) if (w - d1) >= 1.5 else (d0 - 0.25)
+		if r_u1 - r_u0 >= 1.0:
+			_box(ctx, r_u0, r_u1, WALK_Y, WALK_Y + 0.58, 0.26, 0.88, Color(0.24, 0.46, 0.22))
+			_box(ctx, r_u0 + 0.08, (r_u0 + r_u1) * 0.5 - 0.04, WALK_Y + 0.58, WALK_Y + 0.74, 0.30, 0.84, Color(0.92, 0.52, 0.12))
+			_box(ctx, (r_u0 + r_u1) * 0.5 + 0.04, r_u1 - 0.08, WALK_Y + 0.58, WALK_Y + 0.74, 0.30, 0.84, Color(0.84, 0.20, 0.16))
+
 	# Sign lettering
-	var name_txt := str(sf.get("name", ""))
 	var letters := bool(st["letters"])
 	var txt := name_txt.to_upper() if (letters or name_txt.length() <= 12) else name_txt
 	var depth := 0.235 if letters else (sign_d + 0.018)
@@ -386,15 +427,16 @@ static func _build_one(fst: SurfaceTool, gst: SurfaceTool, labels: Node3D, sf: D
 		var by1 := gh + 1.35
 		_box(ctx, bu - 0.04, bu + 0.04, by0, by1, 0.25, 1.15, st["bg"])
 		_box(ctx, bu - 0.025, bu + 0.025, by1, by1 + 0.05, 0.0, 1.2, Color(0.1, 0.1, 0.1))
-		var short := name_txt.split(" ")[0] if name_txt.length() > 10 else name_txt
-		for sd: float in [-1.0, 1.0]:
-			var lp := o + U * (bu + sd * 0.045) + N * 0.70 + Vector3.UP * ((by0 + by1) * 0.5)
-			if Terrain.active:
-				lp.y += Terrain.surface(lp.x, lp.z)
-			var lbl := _make_label(short, st["fg"], false)
-			lbl.transform = Transform3D(_face_basis(U * sd), lp)
-			_fit_label(lbl, short, 0.80, 0.5)
-			labels.add_child(lbl)
+		if not is_zh_shop or nh % 6 == 0:
+			var short := name_txt.split(" ")[0] if name_txt.length() > 10 else name_txt
+			for sd: float in [-1.0, 1.0]:
+				var lp := o + U * (bu + sd * 0.045) + N * 0.70 + Vector3.UP * ((by0 + by1) * 0.5)
+				if Terrain.active:
+					lp.y += Terrain.surface(lp.x, lp.z)
+				var lbl := _make_label(short, st["fg"], false)
+				lbl.transform = Transform3D(_face_basis(U * sd), lp)
+				_fit_label(lbl, short, 0.80, 0.5)
+				labels.add_child(lbl)
 
 	# Street furniture: planters / cafe tables / A-frame menu board
 	if bool(st["planters"]):
@@ -429,7 +471,7 @@ static func _make_label(txt: String, col: Color, letters: bool) -> Label3D:
 	l.modulate = col
 	l.double_sided = false
 	l.shaded = letters
-	l.visibility_range_end = 185.0
+	l.visibility_range_end = 155.0
 	l.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	l.render_priority = 1
 	return l

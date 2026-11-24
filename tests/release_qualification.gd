@@ -575,19 +575,25 @@ func _run() -> void:
 		"3D trains traverse elevated/ramps/tunnels smoothly with zero incidents (LR y=[%.1f..%.1f]m, Mono y=[%.1f..%.1f]m)" % [lr_min_y, lr_max_y, mr_min_y, mr_max_y]
 	)
 
-	# Verify all 5 Jiaxing Realism Upgrades:
-	# 1) Real T1 Phase 1 (21 stations) & 5-module CRRC "南湖号" rolling stock
+	# Verify all Jiaxing Realism Upgrades:
+	# 1) Real T1 Phase 1 (21 stations) with B1 Underground 嘉兴火车站 tunneling under railway to 人民公园 + 5-module 南湖号
 	var t1_ln: Dictionary = jx_graph.lines.get(1, {})
 	var t1_tr_secs := 0
 	for tr_chk: Dictionary in jx_tsim.trams:
 		if int(tr_chk.get("line_id", -1)) == 1:
 			t1_tr_secs = (tr_chk["tram_info"]["sections"] as Array).size()
 			break
+	var jx_sta_b1_y := 0.0
+	for sid_v in jx_graph.stations.keys():
+		var sd: Dictionary = jx_graph.stations[sid_v]
+		if str(sd.get("name", "")) == "嘉兴火车站":
+			jx_sta_b1_y = (sd["pos"] as Vector3).y
+			break
 	_check(
-		str(t1_ln.get("model_key", "")) == "crrc-jiaxing-nanhu" and (t1_ln.get("station_ids", []) as Array).size() == 21 and t1_tr_secs == 5,
-		"Jiaxing T1 runs 5-module CRRC 南湖号 across all 21 authentic Phase 1 stations (stops=%d, secs=%d)" % [(t1_ln.get("station_ids", []) as Array).size(), t1_tr_secs]
+		str(t1_ln.get("model_key", "")) == "crrc-jiaxing-nanhu" and (t1_ln.get("station_ids", []) as Array).size() == 21 and t1_tr_secs == 5 and jx_sta_b1_y < -8.0,
+		"Jiaxing T1 runs 5-module CRRC 南湖号 across 21 real stations with B1 Underground 嘉兴火车站 (y=%.1fm)" % jx_sta_b1_y
 	)
-	# 2) Dense Chain + Local Chinese Storefronts & 3) Chinese Gated Residential Compounds
+	# 2) Chinese Architecture Shader + Flush Dense Storefronts (>=20k) + 400+ Gated Residential Compounds
 	var sfs_arr: Array = m._map_data.get("storefronts", [])
 	var n_chain := 0; var n_local := 0
 	for sf_d in sfs_arr:
@@ -597,13 +603,23 @@ func _run() -> void:
 			elif str(sf_d.get("tier", "")) == "local":
 				n_local += 1
 	var gcomp_n := m._city_root.get_node_or_null("JiaxingLandmarks/ChineseGatedCompounds/CompoundWallsAndGates") as MeshInstance3D
+	var gcomp_cnt := ((m._map_data.get("landmarks", {}) as Dictionary).get("gated_compounds", []) as Array).size()
+	var zh_shader_on := float((m._building_mat as ShaderMaterial).get_shader_parameter("chinese_style")) > 0.5
 	_check(
-		sfs_arr.size() >= 10000 and n_chain >= 3000 and n_local >= 5000 and gcomp_n != null,
-		"Jiaxing builds dense storefronts (%d chain + %d local) & Chinese Gated Residential Compounds" % [n_chain, n_local]
+		zh_shader_on and sfs_arr.size() >= 20000 and n_chain >= 6000 and n_local >= 11000 and gcomp_n != null and gcomp_cnt >= 400,
+		"Chinese building shader ON, %d flush storefronts (%d chain + %d local) & %d Gated Residential Compounds" % [sfs_arr.size(), n_chain, n_local, gcomp_cnt]
 	)
-	# 4) Bike Lanes + Guardrails + Chinese E-Bikes & 5) Chinese EV Fleet + Jam-Free AI Traffic!
+	# 3) >=80% Bike-Lane Coverage + 200-Unit MultiMesh E-Bike Fleet (>3x cars!) + Chinese EV Fleet & Jam-Free AI Cars!
+	var surf_rds := 0; var bl_rds := 0
+	for rd_v in m._map_data.get("roads", []):
+		if rd_v is Dictionary and not bool(rd_v.get("underground", false)):
+			surf_rds += 1
+			if bool(rd_v.get("bike_lane", false)):
+				bl_rds += 1
+	var bl_pct := 100.0 * float(bl_rds) / float(maxi(1, surf_rds))
 	var ts_jx: TrafficSim = m._traffic_sim as TrafficSim
 	var ebike_cnt := ts_jx.ebike_sim.ebikes.size() if (ts_jx != null and ts_jx.ebike_sim != null) else 0
+	var car_cnt := ts_jx.cars.size() if ts_jx != null else 1
 	var zh_ev_cnt := ts_jx._zh_car_meshes.size() if ts_jx != null else 0
 	var focus_jx := Vector3(1191.0, 0.0, 224.0) # 纺工路南溪西路 busy T1 avenue
 	var moving_samples := 0
@@ -622,8 +638,8 @@ func _run() -> void:
 						eb_moving += 1
 	var move_ratio := float(moving_samples) / float(maxi(1, total_samples))
 	_check(
-		zh_ev_cnt == 16 and ebike_cnt >= 24 and eb_moving > 0 and move_ratio >= 0.40,
-		"Chinese EV fleet (%d models), %d active e-bikes, and jam-free AI cars (%.0f%% freely cruising)" % [zh_ev_cnt, ebike_cnt, move_ratio * 100.0]
+		bl_pct >= 80.0 and zh_ev_cnt == 16 and ebike_cnt >= 150 and ebike_cnt >= car_cnt * 3 and eb_moving > 0 and move_ratio >= 0.40,
+		"Bike lanes on %.1f%% roads, %d e-bikes vs %d cars (%.1fx!), %d Chinese EV models, %.0f%% cars freely cruising" % [bl_pct, ebike_cnt, car_cnt, float(ebike_cnt) / float(maxi(1, car_cnt)), zh_ev_cnt, move_ratio * 100.0]
 	)
 
 	# Save/Load round-trip check for 3D elevations, stacked edges, ramps & underground stations

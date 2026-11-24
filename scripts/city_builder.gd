@@ -57,6 +57,10 @@ static func build_city(
 	FreewayBuilder.build(parent, map_data.get("freeways", []), road_mat, map_data.get("roads", []))
 	FreewayBuilder.build_street_bridges(parent, map_data.get("roads", []))
 
+	var is_zh := str(map_data.get("key", "")) == "jiaxing" or str(map_data.get("name", "")).contains("嘉兴")
+	if building_mat != null:
+		building_mat.set_shader_parameter("chinese_style", 1.0 if is_zh else 0.0)
+
 	# 4. 3D architectural buildings (podium setbacks + 3D piers/cornices + interior parallax walls)
 	_build_buildings(parent, map_data.get("buildings", []), building_mat)
 
@@ -534,17 +538,18 @@ static func _build_roads_and_curbs(
 							Vector3(d1.x + dn.x, ym2, d1.y + dn.y), Vector3(d1.x - dn.x, ym2, d1.y - dn.y), Vector3.UP)
 						has_mark = true
 						sd += 9.2
-				# Authentic Chinese Non-Motorized Bike Lane (非机动车道: green outer strip + solid white line)
-				if bool(r.get("bike_lane", false)) and hw >= 5.75 and layer == 0 and seg_len > 22.0:
-					var bl_s0 := minf(9.5, seg_len * 0.25)
+				# Authentic Chinese Non-Motorized Bike Lane (非机动车道: green outer strip + solid white line on ~86% of roads!)
+				if bool(r.get("bike_lane", false)) and hw >= 4.0 and layer == 0 and seg_len > 15.0:
+					var bl_s0 := minf(8.5 if hw >= 5.75 else 6.5, seg_len * 0.24)
 					var bl_s1 := seg_len - bl_s0
 					var ba := a + dir * bl_s0
 					var bb := a + dir * bl_s1
 					var yb := y + 0.011
+					var bl_w := 2.05 if hw >= 5.75 else (1.55 if hw >= 4.8 else 1.25)
 					for bside: float in [-1.0, 1.0]:
-						# Subtle muted emerald/teal-green bike-lane asphalt strip along outer 1.85m
-						var inner_o := bside * (hw - 2.10)
-						var outer_o := bside * (hw - 0.16)
+						# Subtle muted emerald/teal-green bike-lane asphalt strip along outer lane
+						var inner_o := bside * (hw - bl_w)
+						var outer_o := bside * (hw - 0.14)
 						var o_lo := minf(inner_o, outer_o)
 						var o_hi := maxf(inner_o, outer_o)
 						var p0b := ba + nrm1 * o_lo
@@ -555,10 +560,10 @@ static func _build_roads_and_curbs(
 							Vector3(p2b.x, yb, p2b.y), Vector3(p3b.x, yb, p3b.y), Vector3.UP)
 						has_bike = true
 						# Solid white bike-lane divider stripe (机非分界实线)
-						var loff := bside * (hw - 2.18)
+						var loff := bside * (hw - bl_w - 0.08)
 						var l0 := ba + nrm1 * loff
 						var l1 := bb + nrm1 * loff
-						var ln := nrm1 * 0.085
+						var ln := nrm1 * 0.08
 						_add_flat_quad(mark_st, Vector3(l0.x - ln.x, ym2, l0.y - ln.y), Vector3(l0.x + ln.x, ym2, l0.y + ln.y),
 							Vector3(l1.x + ln.x, ym2, l1.y + ln.y), Vector3(l1.x - ln.x, ym2, l1.y - ln.y), Vector3.UP)
 						has_mark = true
@@ -809,12 +814,18 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 		var trim_c: Color
 		if style == 0:
 			base_c = glass_pal[b_idx % glass_pal.size()]
+			if str(b.get("colour", "")) != "":
+				base_c = Color.from_string(str(b["colour"]), base_c)
 			trim_c = Color(0.48, 0.51, 0.54) # Brushed aluminum / dark steel mullions & columns
 		elif style == 1:
 			base_c = brick_pal[b_idx % brick_pal.size()]
-			trim_c = base_c.lerp(Color(0.80, 0.77, 0.71), 0.55) # Carved limestone piers & cornices
+			if str(b.get("colour", "")) != "":
+				base_c = Color.from_string(str(b["colour"]), base_c)
+			trim_c = base_c.lerp(Color(0.82, 0.80, 0.75), 0.52) # Carved limestone / Chinese dry-hung granite piers & cornices
 		else:
 			base_c = mod_pal[b_idx % mod_pal.size()]
+			if str(b.get("colour", "")) != "":
+				base_c = Color.from_string(str(b["colour"]), base_c)
 			trim_c = base_c.lightened(0.06)
 
 		if not lm_o.is_empty():
@@ -2496,12 +2507,12 @@ static func _build_bike_guardrails(
 		if not bool(r.get("bike_lane", false)) or bool(r.get("underground", false)) or int(r.get("layer", 0)) != 0:
 			continue
 		var hw := clampf(float(r.get("width", 12.0)) * 0.5, 3.2, 13.5)
-		if hw < 6.4:
+		if hw < 5.75:
 			continue
 		var pts: Array = r.get("pts", [])
 		if pts.size() < 2:
 			continue
-		var g_off := hw - 2.18
+		var g_off := hw - 2.12
 		for i in range(pts.size() - 1):
 			var a := Vector2(float(pts[i][0]), float(pts[i][1]))
 			var b := Vector2(float(pts[i + 1][0]), float(pts[i + 1][1]))

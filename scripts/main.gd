@@ -1454,6 +1454,7 @@ func _rebuild_tracks_and_operations(seed_pax: bool = false, defer_ops: bool = fa
 		if mono_lid > 0:
 			_show_toast(L10n.t("🚝 西雅图中心单轨已作为一条线路加入，可在线路列表中选择并驾驶", "🚝 Seattle Center Monorail added — select it from the line list to drive!"))
 	for c in _track_root.get_children():
+		_track_root.remove_child(c)
 		c.queue_free()
 
 	var built := TrackBuilder.build_network_tracks_and_stations(
@@ -3461,6 +3462,7 @@ func _mark_modified_and_quick_save() -> void:
 func _rebuild_tracks_only_visual() -> void:
 	_ops_dirty = true
 	for c in _track_root.get_children():
+		_track_root.remove_child(c)
 		c.queue_free()
 	var built := TrackBuilder.build_network_tracks_and_stations(
 		_track_root,

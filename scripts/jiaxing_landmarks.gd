@@ -651,6 +651,7 @@ static func _jiaxing_station(parent: Node3D, center: Vector3, angle: float, ligh
 	# + Commercial Arcade + B1 Drop-off Taxi Lanes + South Rail/Metro Interchange Hall (visible cleanly at B1 elevation!)
 	var b1 := Node3D.new()
 	b1.name = "JiaxingStationB1Hall"
+	b1.position.y = -0.35 # Sit cleanly below B1 (-10.0m) T1 underground rail top with zero Z-fighting!
 	jx.add_child(b1)
 	var b1_slate := _mat(Color(0.22, 0.25, 0.29), 0.72, 0.08)
 	var b1_terrazzo := _mat(Color(0.54, 0.56, 0.58), 0.62, 0.06)

@@ -1587,7 +1587,7 @@ func _move_candidates(graph: NetworkGraph, prev_eid: int, at_node: int) -> Array
 		var cand_eid := int(nb["edge_id"])
 		if cand_eid == prev_eid or float(nb["length"]) < 18.0:
 			continue
-		if _is_transit_mall_double_track(graph, cand_eid) or _edge_rides_rails(graph, cand_eid):
+		if _is_transit_mall_double_track(graph, cand_eid) or _edge_rides_rails(graph, cand_eid) or bool(graph.edges[cand_eid].get("underground", false)):
 			continue
 		var cand_dir := 1.0 if int(graph.edges[cand_eid]["a"]) == at_node else -1.0
 		if not car_dir_allowed(graph, cand_eid, cand_dir):
@@ -1932,7 +1932,7 @@ func _pick_spawn_edge(graph: NetworkGraph, edge_ids: Array, focus_pos: Vector3, 
 	for _attempt in range(28):
 		var eid := int(edge_ids[_rng.randi() % edge_ids.size()])
 		var ed: Dictionary = graph.edges[eid]
-		if float(ed["length"]) < 26.0:
+		if float(ed["length"]) < 26.0 or bool(ed.get("underground", false)):
 			continue
 		if near_focus:
 			var p2: Vector2 = (ed["pts"] as Array)[0]
@@ -1945,7 +1945,7 @@ func _pick_spawn_edge(graph: NetworkGraph, edge_ids: Array, focus_pos: Vector3, 
 	# Fallback anywhere on the map, still strictly respecting tram-only & rail-riding exclusions!
 	for _fb in range(40):
 		var eid2 := int(edge_ids[_rng.randi() % edge_ids.size()])
-		if float(graph.edges[eid2]["length"]) < 26.0:
+		if float(graph.edges[eid2]["length"]) < 26.0 or bool(graph.edges[eid2].get("underground", false)):
 			continue
 		if _is_transit_mall_double_track(graph, eid2) or _edge_rides_rails(graph, eid2):
 			continue
