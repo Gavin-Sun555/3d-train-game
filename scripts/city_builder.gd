@@ -396,6 +396,8 @@ static func _build_roads_and_curbs(
 		var r: Dictionary = roads[road_i]
 		if road_i >= emit_n:
 			break
+		if bool(r.get("underground", false)):
+			continue
 		if r.has("lv"):
 			road_level[road_i] = int(r["lv"]) # level fixed map-wide, so streets meeting across tiles differ
 		var raw_pts: Array = r.get("pts", [])
@@ -2262,7 +2264,7 @@ static func _build_kerbs(parent: Node3D, roads: Array, bays: Array, road_mat: Ma
 	var deg := {}
 	for r in roads:
 		var rp: Array = r.get("pts", [])
-		if rp.size() < 2 or int(r.get("layer", 0)) != 0:
+		if rp.size() < 2 or int(r.get("layer", 0)) != 0 or bool(r.get("underground", false)):
 			continue
 		for e_pt in [rp[0], rp[rp.size() - 1]]:
 			var key := Vector2i(int(round(float(e_pt[0]) * 2.0)), int(round(float(e_pt[1]) * 2.0)))
@@ -2272,7 +2274,7 @@ static func _build_kerbs(parent: Node3D, roads: Array, bays: Array, road_mat: Ma
 	for ri in range(roads.size()):
 		var rr: Dictionary = roads[ri]
 		var rp2: Array = rr.get("pts", [])
-		if rp2.size() < 2 or int(rr.get("layer", 0)) != 0:
+		if rp2.size() < 2 or int(rr.get("layer", 0)) != 0 or bool(rr.get("underground", false)):
 			continue
 		var rhw: float = clampf(float(rr.get("width", 12.0)) * 0.5, 3.2, 13.5)
 		for si in range(rp2.size() - 1):
@@ -2296,7 +2298,7 @@ static func _build_kerbs(parent: Node3D, roads: Array, bays: Array, road_mat: Ma
 	for road_i in range(mini(emit_n, roads.size())):
 		var r: Dictionary = roads[road_i]
 		var raw_pts: Array = r.get("pts", [])
-		if raw_pts.size() < 2 or int(r.get("layer", 0)) != 0:
+		if raw_pts.size() < 2 or int(r.get("layer", 0)) != 0 or bool(r.get("underground", false)):
 			continue
 		var hw: float = clampf(float(r.get("width", 12.0)) * 0.5, 3.2, 13.5)
 		var n_seg := raw_pts.size() - 1

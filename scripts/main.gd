@@ -774,6 +774,7 @@ func _build_city_world() -> void:
 		b1_hall.get_parent().remove_child(b1_hall)
 		_underground_landmarks_root.add_child(b1_hall)
 		b1_hall.global_transform = gtf
+		_update_underground_landmarks_visibility()
 	_monorail_curve = lm_info.get("monorail_curve")
 	_monorail_cars = lm_info.get("monorail_cars", [])
 	_spheres_mat = lm_info.get("spheres_mat")
@@ -1027,7 +1028,27 @@ func _active_elev_filter() -> int:
 	return -1 if _underground_view else 1
 
 
+func _active_build_tier() -> String:
+	if _game_mode == GameMode.BUILD:
+		return NetworkGraph.elev_tier_key(_get_build_elev())
+	return ""
+
+
+func _update_underground_landmarks_visibility() -> void:
+	var tier := _active_build_tier()
+	if _underground_landmarks_root != null and is_instance_valid(_underground_landmarks_root):
+		if _game_mode == GameMode.BUILD:
+			_underground_landmarks_root.visible = (tier == "B1")
+		else:
+			_underground_landmarks_root.visible = true
+	if _blueprint_root != null and is_instance_valid(_blueprint_root):
+		var ug_roads := _blueprint_root.get_node_or_null("BlueprintUndergroundRoads") as Node3D
+		if ug_roads != null:
+			ug_roads.visible = (_game_mode != GameMode.BUILD) or (tier == "B1")
+
+
 func _set_build_elev_idx(idx: int, auto_view: bool = true) -> void:
+	var prev_idx := _build_elev_idx
 	var clamped := clampi(idx, 0, NetworkGraph.ELEV_PRESETS.size() - 1)
 	if TrackBuilder.is_monorail_style(_build_bed_style) and clamped == 2:
 		# Monorail runs on elevated beams (L1/L2) or underground tunnels (B1/B2), never at ground grade
@@ -1036,6 +1057,9 @@ func _set_build_elev_idx(idx: int, auto_view: bool = true) -> void:
 	_build_elev_idx = clamped
 	if auto_view:
 		_set_underground_view(_get_build_elev() < -1.5)
+	_update_underground_landmarks_visibility()
+	if clamped != prev_idx and _game_mode == GameMode.BUILD and _track_root != null and not _graph.built_tracks.is_empty():
+		_rebuild_tracks_only_visual()
 	_refresh_build_buttons()
 
 
@@ -1055,6 +1079,7 @@ func _set_underground_view(enabled: bool) -> void:
 		_ensure_blueprint_overlay()
 	if _blueprint_root != null and is_instance_valid(_blueprint_root):
 		_blueprint_root.visible = enabled
+	_update_underground_landmarks_visibility()
 	_apply_underground_track_roof_visibility()
 	if _btn_underground != null and is_instance_valid(_btn_underground):
 		_highlight_active_btn(_btn_underground, enabled)
@@ -1103,16 +1128,21 @@ func _ensure_blueprint_overlay() -> void:
 	bg_mi.material_override = bg_mat
 	bg_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_blueprint_root.add_child(bg_mi)
-	# Translucent street-grid reference ribbons at y = +0.05m for clear spatial orientation underground
+	# Translucent street-grid reference ribbons at y = +0.05m for clear spatial orientation underground,
+	# plus warm-amber B1 underground road tunnels (e.g. Jiaxing Station North Plaza underground drop-off loops).
 	var st_road := SurfaceTool.new()
 	st_road.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var has_r := false
+	var st_ug_road := SurfaceTool.new()
+	st_ug_road.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var has_ug_r := false
 	for eid: int in _graph.edges.keys():
 		var ed: Dictionary = _graph.edges[eid]
 		if bool(ed.get("rail_3d", false)):
 			continue
+		var is_ug_rd := bool(ed.get("underground", false))
 		var pts: Array = ed["pts"]
-		var hw := 0.85
+		var hw := 2.4 if is_ug_rd else 0.85
 		for i in range(pts.size() - 1):
 			var a: Vector2 = pts[i]
 			var b: Vector2 = pts[i + 1]
@@ -1120,14 +1150,23 @@ func _ensure_blueprint_overlay() -> void:
 			if d.length_squared() < 0.04:
 				continue
 			var nrm := Vector2(-d.y, d.x).normalized() * hw
-			var y0 := 0.08 + Terrain.surface(a.x, a.y)
-			var y1 := 0.08 + Terrain.surface(b.x, b.y)
-			for v: Vector3 in [
-				Vector3(a.x - nrm.x, y0, a.y - nrm.y), Vector3(b.x + nrm.x, y1, b.y + nrm.y), Vector3(a.x + nrm.x, y0, a.y + nrm.y),
-				Vector3(a.x - nrm.x, y0, a.y - nrm.y), Vector3(b.x - nrm.x, y1, b.y - nrm.y), Vector3(b.x + nrm.x, y1, b.y + nrm.y),
-			]:
-				st_road.add_vertex(v)
-			has_r = true
+			if is_ug_rd:
+				var yu := -5.8
+				for v: Vector3 in [
+					Vector3(a.x - nrm.x, yu, a.y - nrm.y), Vector3(b.x + nrm.x, yu, b.y + nrm.y), Vector3(a.x + nrm.x, yu, a.y + nrm.y),
+					Vector3(a.x - nrm.x, yu, a.y - nrm.y), Vector3(b.x - nrm.x, yu, b.y - nrm.y), Vector3(b.x + nrm.x, yu, b.y + nrm.y),
+				]:
+					st_ug_road.add_vertex(v)
+				has_ug_r = true
+			else:
+				var y0 := 0.08 + Terrain.surface(a.x, a.y)
+				var y1 := 0.08 + Terrain.surface(b.x, b.y)
+				for v: Vector3 in [
+					Vector3(a.x - nrm.x, y0, a.y - nrm.y), Vector3(b.x + nrm.x, y1, b.y + nrm.y), Vector3(a.x + nrm.x, y0, a.y + nrm.y),
+					Vector3(a.x - nrm.x, y0, a.y - nrm.y), Vector3(b.x - nrm.x, y1, b.y - nrm.y), Vector3(b.x + nrm.x, y1, b.y + nrm.y),
+				]:
+					st_road.add_vertex(v)
+				has_r = true
 	if has_r:
 		var r_mi := MeshInstance3D.new()
 		r_mi.name = "BlueprintStreets"
@@ -1140,6 +1179,18 @@ func _ensure_blueprint_overlay() -> void:
 		r_mi.material_override = r_mat
 		r_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		_blueprint_root.add_child(r_mi)
+	if has_ug_r:
+		var ugr_mi := MeshInstance3D.new()
+		ugr_mi.name = "BlueprintUndergroundRoads"
+		ugr_mi.mesh = st_ug_road.commit()
+		var ugr_mat := StandardMaterial3D.new()
+		ugr_mat.albedo_color = Color(0.86, 0.64, 0.30, 0.52)
+		ugr_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		ugr_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		ugr_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		ugr_mi.material_override = ugr_mat
+		ugr_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_blueprint_root.add_child(ugr_mi)
 	# Translucent water / lake blueprint outlines so Nanhu Lake & canals stay recognizable underground!
 	var st_wat := SurfaceTool.new()
 	st_wat.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -1409,7 +1460,8 @@ func _rebuild_tracks_and_operations(seed_pax: bool = false, defer_ops: bool = fa
 		_track_root,
 		_graph,
 		_cjk_font,
-		_grass_track_mat
+		_grass_track_mat,
+		_active_build_tier()
 	)
 	_station_views = built["stations"]
 	if _pax_sim != null:
@@ -2173,6 +2225,15 @@ func _set_game_mode(mode: int) -> void:
 	if _btn_quick_save_run != null:
 		_btn_quick_save_run.visible = (_game_mode == GameMode.RUN)
 	_sound.set_menu_silenced(_startup_loading or _in_home_menu or _game_mode != GameMode.RUN)
+
+	# In Build Track mode, only show tracks at the selected Build Elevation (and ramps connecting to it);
+	# in Plan / Run modes, show ALL elevation tiers together in full 3D!
+	if (prev_mode == GameMode.BUILD) != (_game_mode == GameMode.BUILD) and _track_root != null and not _graph.built_tracks.is_empty():
+		var was_ops_dirty := _ops_dirty
+		_rebuild_tracks_only_visual()
+		if not was_ops_dirty:
+			_ops_dirty = false
+	_update_underground_landmarks_visibility()
 
 	if _game_mode == GameMode.RUN:
 		_transit_sim.visible = true
@@ -3002,7 +3063,7 @@ func _update_build_hover_preview(screen_pos: Vector2) -> void:
 			_lbl_build_hint.text = L10n.t("路口：%s · 单击选为连线铺轨起点 [%s]", "Junction: %s · Click to set pathfind start [%s]") % [L10n.street_display_name(str(_graph.nodes[nid]["name"])), NetworkGraph.elev_label(elev_p)]
 
 	elif _build_tool == BuildTool.CROSSOVER:
-		var hit := _graph.find_closest_edge(xz, 22.0, true, _active_elev_filter())
+		var hit := _graph.find_closest_edge(xz, 22.0, true, _active_elev_filter(), _active_build_tier())
 		var xo_name := L10n.t("交叉渡线 (剪刀)", "Scissors Crossover") if _build_crossover_type == NetworkGraph.CrossoverType.DOUBLE else L10n.t("单渡线", "Single Crossover")
 		if hit.is_empty():
 			_preview_mi.mesh = null
@@ -3029,7 +3090,7 @@ func _update_build_hover_preview(screen_pos: Vector2) -> void:
 		_lbl_build_hint.text = L10n.t("单击在 %s 光标处修建【%s】（可紧贴出站并线后修建，按 R 切换单/交叉渡线）", "Click to build [%s] on %s (Press R to toggle)") % ([L10n.street_display_name(str(_graph.edges[eid]["name"])), xo_name] if not L10n.is_en() else [xo_name, L10n.street_display_name(str(_graph.edges[eid]["name"]))])
 
 	elif _build_tool == BuildTool.STATION:
-		var near_sid := _graph.find_closest_station(xz, 8.5, _active_elev_filter())
+		var near_sid := _graph.find_closest_station(xz, 8.5, _active_elev_filter(), _active_build_tier())
 		if near_sid >= 0:
 			var sp_ex := _graph.get_station_platform_world_pos(near_sid)
 			var st_fwd_ex: Vector3 = _graph.stations[near_sid]["fwd"]
@@ -3037,7 +3098,7 @@ func _update_build_hover_preview(screen_pos: Vector2) -> void:
 			_set_oriented_box_preview(_preview_mi, sp_ex + Vector3(0.0, 1.5, 0.0), st_fwd_ex, Vector3(3.6, 3.0, st_len_ex + 0.6), Color(0.28, 0.78, 0.98, 0.75))
 			_lbl_build_hint.text = L10n.t("已对准车站【%s】（%.0fm 站台）· 单击可选中并在左侧修改站名", "Station [%s] (%.0fm) · Click to select & rename on the left") % [L10n.station_display_name(str(_graph.stations[near_sid]["name"])), st_len_ex]
 			return
-		var hit := _graph.find_closest_edge(xz, 22.0, true, _active_elev_filter())
+		var hit := _graph.find_closest_edge(xz, 22.0, true, _active_elev_filter(), _active_build_tier())
 		if hit.is_empty():
 			_preview_mi.mesh = null
 			_lbl_build_hint.text = L10n.t("请将光标移至【已铺设轨道】的街道上建造车站（按 R 切换左右侧站台）", "Hover a [Tracked] street to place a station (Press R to flip side)")
@@ -3165,7 +3226,7 @@ func _update_build_hover_preview(screen_pos: Vector2) -> void:
 		_lbl_build_hint.text = (L10n.t("单击拆除这栋建筑（高 %.0fm），腾出空地可铺设专用轨道或新建道路", "Click to demolish building (height %.0fm) to clear space") % h) if not lm else L10n.t("地标建筑不可拆除", "Landmarks cannot be demolished")
 
 	elif _build_tool == BuildTool.DEMOLISH:
-		var sid := _graph.find_closest_station(xz, 18.0, _active_elev_filter())
+		var sid := _graph.find_closest_station(xz, 18.0, _active_elev_filter(), _active_build_tier())
 		if sid >= 0:
 			var sp := _graph.get_station_platform_world_pos(sid)
 			var st_fwd: Vector3 = _graph.stations[sid]["fwd"]
@@ -3173,7 +3234,7 @@ func _update_build_hover_preview(screen_pos: Vector2) -> void:
 			_set_oriented_box_preview(_preview_mi, sp + Vector3(0.0, 1.5, 0.0), st_fwd, Vector3(3.6, 3.0, st_len + 0.6), Color(0.96, 0.26, 0.22, 0.75))
 			_lbl_build_hint.text = L10n.t("单击拆除车站：%s", "Click to demolish station: %s") % L10n.station_display_name(str(_graph.stations[sid]["name"]))
 			return
-		var hit := _graph.find_closest_edge(xz, 18.0, true, _active_elev_filter())
+		var hit := _graph.find_closest_edge(xz, 18.0, true, _active_elev_filter(), _active_build_tier())
 		if not hit.is_empty():
 			var d_eid := int(hit["edge_id"])
 			var d_ep := _graph.get_edge_elev_pair(d_eid)
@@ -3235,7 +3296,7 @@ func _handle_map_left_click(screen_pos: Vector2) -> void:
 				_show_toast(L10n.t("已沿最短路径铺设 %d 段【%s · %s · %s】轨道！%s", "Laid %d [%s · %s · %s] track segments!%s") % [eids.size(), mode_tag, _bed_style_name(_build_bed_style), NetworkGraph.elev_label(elev_p), narrow_note])
 
 		elif _build_tool == BuildTool.CROSSOVER:
-			var hit := _graph.find_closest_edge(xz, 22.0, true, _active_elev_filter())
+			var hit := _graph.find_closest_edge(xz, 22.0, true, _active_elev_filter(), _active_build_tier())
 			if hit.is_empty():
 				_show_toast(L10n.t("请先铺设【双线轨道】，再点击该双线路段修建渡线！", "Lay [Double Track] first, then click it to place a crossover!"))
 				return
@@ -3257,14 +3318,14 @@ func _handle_map_left_click(screen_pos: Vector2) -> void:
 				_show_toast(L10n.t("已在 %s 修建【%s】！", "Built [%s] on %s!") % ([L10n.street_display_name(str(_graph.edges[eid]["name"])), xo_name] if not L10n.is_en() else [xo_name, L10n.street_display_name(str(_graph.edges[eid]["name"]))]))
 
 		elif _build_tool == BuildTool.STATION:
-			var near_sid := _graph.find_closest_station(xz, 8.5, _active_elev_filter())
+			var near_sid := _graph.find_closest_station(xz, 8.5, _active_elev_filter(), _active_build_tier())
 			if near_sid >= 0:
 				_editing_station_id = near_sid
 				if _edit_station_name != null:
 					_edit_station_name.text = str(_graph.stations[near_sid]["name"])
 				_show_toast(L10n.t("已选中车站【%s】，可在左侧「站名编辑」栏修改名称！", "Selected [%s] — edit its name in the left panel!") % L10n.station_display_name(str(_graph.stations[near_sid]["name"])))
 				return
-			var hit := _graph.find_closest_edge(xz, 22.0, true, _active_elev_filter())
+			var hit := _graph.find_closest_edge(xz, 22.0, true, _active_elev_filter(), _active_build_tier())
 			if hit.is_empty():
 				_show_toast(L10n.t("请先在街道上铺设轨道，再在轨道旁建造车站！", "Lay tracks on a street first before placing a station!"))
 				return
@@ -3357,7 +3418,7 @@ func _handle_map_left_click(screen_pos: Vector2) -> void:
 			_show_toast(L10n.t("已拆除建筑，腾出空地", "Building demolished"))
 
 		elif _build_tool == BuildTool.DEMOLISH:
-			var sid := _graph.find_closest_station(xz, 18.0, _active_elev_filter())
+			var sid := _graph.find_closest_station(xz, 18.0, _active_elev_filter(), _active_build_tier())
 			if sid >= 0:
 				var sname := L10n.station_display_name(str(_graph.stations[sid]["name"]))
 				_graph.remove_station(sid)
@@ -3365,7 +3426,7 @@ func _handle_map_left_click(screen_pos: Vector2) -> void:
 				_mark_modified_and_quick_save()
 				_show_toast(L10n.t("已拆除车站：%s", "Demolished station: %s") % sname)
 				return
-			var hit := _graph.find_closest_edge(xz, 18.0, true, _active_elev_filter())
+			var hit := _graph.find_closest_edge(xz, 18.0, true, _active_elev_filter(), _active_build_tier())
 			if not hit.is_empty():
 				var deid := int(hit["edge_id"])
 				if _graph.crossovers.has(deid):
@@ -3405,7 +3466,8 @@ func _rebuild_tracks_only_visual() -> void:
 		_track_root,
 		_graph,
 		_cjk_font,
-		_grass_track_mat
+		_grass_track_mat,
+		_active_build_tier()
 	)
 	_station_views = built["stations"]
 	if _pax_sim != null:

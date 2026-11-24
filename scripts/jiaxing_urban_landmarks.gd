@@ -423,7 +423,7 @@ static func _sams_club(parent: Node3D, center: Vector3, angle: float, lights: Ar
 
 
 # =============================================================================================
-# 9. 湘家荡湿地公园 (Xiangjiadang Wetland Park — Birding Tower, 100m Boardwalk & Moon Bay Beach)
+# 9. 湘家荡湿地公园 (Xiangjiadang Wetland Park — Dry-Shore Archway, Birding Tower, 160m Boardwalk & Moon Bay)
 # =============================================================================================
 static func _xiangjiadang_park(parent: Node3D, center: Vector3, angle: float, lights: Array) -> void:
 	var xj := Node3D.new()
@@ -436,45 +436,59 @@ static func _xiangjiadang_park(parent: Node3D, center: Vector3, angle: float, li
 	var wood_dark := _mat(Color(0.36, 0.22, 0.14), 0.72)
 	var tile := _mat(Color(0.20, 0.23, 0.28), 0.58)
 	var wall := _mat(Color(0.92, 0.90, 0.85), 0.80)
+	var stone := _mat(Color(0.80, 0.78, 0.73), 0.78)
 	var sand := _mat(Color(0.86, 0.79, 0.60), 0.90)
 	var reed := _mat(Color(0.38, 0.50, 0.24), 0.88)
 	var foliage := _mat(Color(0.20, 0.46, 0.22), 0.84)
+	var foliage_lt := _mat(Color(0.28, 0.55, 0.25), 0.82)
 	var glow := _emissive(Color(1.0, 0.86, 0.54), 1.4)
 
-	# --- A. Wetland Park Grand Ecological Entrance Archway & Visitor Center (湘家荡湿地公园大门) ---
-	for ax: float in [-11.0, -4.5, 4.5, 11.0]:
-		_cyl(xj, 0.42, 0.48, 8.8, Vector3(ax, 4.4, -42.0), wood_dark, 10)
-	_box(xj, Vector3(25.0, 1.2, 3.6), Vector3(0.0, 9.2, -42.0), tile)
-	_sign(xj, "湘 家 荡 湿 地 公 园", Vector3(0.0, 7.6, -40.8), 0.0, 88, 0.030, Color(0.98, 0.88, 0.42))
-	_sign(xj, "湘 家 荡 湿 地 公 园", Vector3(0.0, 7.6, -43.2), PI, 88, 0.030, Color(0.98, 0.88, 0.42))
+	# --- A. Wetland Park Grand Ecological Entrance Archway & Visitor Hall on Dry West Lawn (x = -75..-20) ---
+	_box(xj, Vector3(48.0, 0.08, 42.0), Vector3(-42.0, 0.05, 0.0), stone, 0.0, 0.0, 0.0, false)
+	for az: float in [-11.0, -4.5, 4.5, 11.0]:
+		_cyl(xj, 0.42, 0.48, 8.8, Vector3(-62.0, 4.4, az), wood_dark, 10)
+	_box(xj, Vector3(3.6, 1.2, 25.0), Vector3(-62.0, 9.2, 0.0), tile)
+	_sign(xj, "湘 家 荡 湿 地 公 园", Vector3(-63.2, 7.6, 0.0), -PI * 0.5, 88, 0.030, Color(0.98, 0.88, 0.42))
+	_sign(xj, "湘 家 荡 湿 地 公 园", Vector3(-60.8, 7.6, 0.0), PI * 0.5, 88, 0.030, Color(0.98, 0.88, 0.42))
+	# Visitor Ecological Exhibition Hall & Tea House on dry shore
+	_box(xj, Vector3(24.0, 5.2, 16.0), Vector3(-34.0, 2.6, -26.0), wall)
+	_box(xj, Vector3(27.0, 1.3, 18.5), Vector3(-34.0, 5.8, -26.0), tile)
 
-	# --- B. 32m Timber Ecological Bird-Watching Observation Tower (湿地观鸟塔) ---
+	# --- B. 32m Timber Ecological Bird-Watching Observation Tower (湿地观鸟塔 — strictly on dry west shore!) ---
 	var ty := 0.0
 	for lv in range(5):
-		var r := lerpf(7.5, 4.0, float(lv) / 4.0)
-		_cyl(xj, r * 0.92, r, 5.4, Vector3(-28.0, ty + 2.7, 0.0), wood_dark, 8)
-		_cyl(xj, r + 1.8, r + 2.4, 0.85, Vector3(-28.0, ty + 5.6, 0.0), tile, 8)
+		var r := lerpf(7.2, 3.8, float(lv) / 4.0)
+		_cyl(xj, r * 0.92, r, 5.4, Vector3(-28.0, ty + 2.7, 26.0), wood_dark, 8)
+		_cyl(xj, r + 1.8, r + 2.4, 0.85, Vector3(-28.0, ty + 5.6, 26.0), tile, 8)
 		ty += 5.8
-	_cyl(xj, 0.4, 5.6, 4.5, Vector3(-28.0, ty + 2.2, 0.0), tile, 8)
-	_box(xj, Vector3(3.2, 2.2, 3.2), Vector3(-28.0, ty - 2.6, 0.0), glow, 0.0, 0.0, 0.0, false)
+	_cyl(xj, 0.4, 5.4, 4.5, Vector3(-28.0, ty + 2.2, 26.0), tile, 8)
+	_box(xj, Vector3(3.2, 2.2, 3.2), Vector3(-28.0, ty - 2.6, 26.0), glow, 0.0, 0.0, 0.0, false)
+	_sign(xj, "湿 地 观 鸟 塔", Vector3(-28.0, 8.2, 34.0), 0.0, 56, 0.022, Color(0.98, 0.88, 0.42))
 
-	# --- C. 120m Winding Timber Wetland Boardwalk extending into Xiangjiadang Lake + Over-Water Deck ---
-	_box(xj, Vector3(115.0, 0.35, 4.8), Vector3(42.0, 0.48, 12.0), wood, 0.0, 0.0, 0.0, false)
-	_box(xj, Vector3(4.8, 0.35, 66.0), Vector3(96.0, 0.48, -18.0), wood, 0.0, 0.0, 0.0, false)
-	# Over-water octagonal ecological observation pavilion
-	_cyl(xj, 9.5, 10.0, 0.65, Vector3(106.0, 0.55, 12.0), wood, 8)
+	# --- C. Lush Dry-Shore Woodland Groves framing the entrance lawn ---
+	for gi in range(14):
+		var gx := -72.0 + float(gi % 4) * 20.0
+		var gz := -70.0 + float(gi / 4) * 44.0
+		if absf(gz) < 20.0 and gx > -58.0:
+			continue
+		_cyl(xj, 0.24, 0.34, 3.8, Vector3(gx, 1.9, gz), wood_dark, 6)
+		_cyl(xj, 2.2, 4.0, 4.8, Vector3(gx, 5.2, gz), foliage if (gi % 2 == 0) else foliage_lt, 8)
+
+	# --- D. 200m Winding Timber Wetland Boardwalk extending EAST from dry shore into Xiangjiadang Lake ---
+	_box(xj, Vector3(175.0, 0.36, 4.8), Vector3(72.0, 0.48, 0.0), wood, 0.0, 0.0, 0.0, false)
+	_box(xj, Vector3(4.8, 0.36, 92.0), Vector3(145.0, 0.48, -32.0), wood, 0.0, 0.0, 0.0, false)
+	# Over-water octagonal ecological observation pavilion floating out over Xiangjiadang Lake
+	_cyl(xj, 9.5, 10.0, 0.65, Vector3(168.0, 0.55, 0.0), wood, 8)
 	for ka in range(8):
 		var a := float(ka) * TAU / 8.0
-		_cyl(xj, 0.22, 0.24, 4.8, Vector3(106.0 + cos(a) * 7.2, 3.1, 12.0 + sin(a) * 7.2), wood_dark, 8)
-	_cyl(xj, 1.2, 11.4, 3.0, Vector3(106.0, 6.8, 12.0), tile, 8)
+		_cyl(xj, 0.22, 0.24, 4.8, Vector3(168.0 + cos(a) * 7.2, 3.1, sin(a) * 7.2), wood_dark, 8)
+	_cyl(xj, 1.2, 11.4, 3.0, Vector3(168.0, 6.8, 0.0), tile, 8)
 
-	# --- D. Moon Bay Golden Lakefront Beach (月亮湾沙滩) & Reed Marsh Islands ---
-	_cyl(xj, 36.0, 38.0, 0.22, Vector3(26.0, 0.14, 58.0), sand, 20)
-	_box(xj, Vector3(22.0, 4.8, 12.0), Vector3(8.0, 2.4, 48.0), wall)
-	_box(xj, Vector3(25.0, 1.2, 14.5), Vector3(8.0, 5.4, 48.0), tile)
+	# --- E. Moon Bay Golden Lakefront Beach (月亮湾沙滩 along shore) & Over-Water Reed Marsh Islands ---
+	_cyl(xj, 32.0, 35.0, 0.18, Vector3(12.0, 0.12, 72.0), sand, 20)
 	for ri in range(6):
-		var rx := 42.0 + float(ri) * 18.0
-		var rz := -32.0 + float((ri % 3) - 1) * 28.0
-		_cyl(xj, 9.0, 11.0, 0.55, Vector3(rx, 0.30, rz), reed, 10)
+		var rx := 115.0 + float(ri) * 26.0
+		var rz := -48.0 + float((ri % 3) - 1) * 42.0
+		_cyl(xj, 9.0, 11.5, 0.55, Vector3(rx, 0.30, rz), reed, 10)
 		_cyl(xj, 3.2, 4.8, 5.0, Vector3(rx, 3.2, rz), foliage, 8)
-	_add_light(xj, Vector3(0.0, 10.0, -36.0), Color(1.0, 0.88, 0.62), 62.0, lights)
+	_add_light(xj, Vector3(-44.0, 10.0, 0.0), Color(1.0, 0.88, 0.62), 68.0, lights)

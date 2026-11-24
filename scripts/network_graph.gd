@@ -39,6 +39,33 @@ static func elev_label(y: float) -> String:
 	return "L2 (+13.8m)"
 
 
+static func elev_tier_key(y: float) -> String:
+	if y <= -14.0:
+		return "B2"
+	if y <= -4.0:
+		return "B1"
+	if y < 3.0:
+		return "G"
+	if y < 10.5:
+		return "L1"
+	return "L2"
+
+
+static func elev_for_tier_key(tier: String) -> float:
+	match tier:
+		"B2":
+			return ELEV_B2
+		"B1":
+			return ELEV_B1
+		"G":
+			return ELEV_G
+		"L1":
+			return ELEV_L1
+		"L2":
+			return ELEV_L2
+	return ELEV_G
+
+
 static func max_grade_for_style(bed_style: int) -> float:
 	return MAX_GRADE_MONORAIL if TrackBuilder.is_monorail_style(bed_style) else MAX_GRADE_RAIL
 
@@ -147,6 +174,35 @@ func edge_has_underground_part(eid: int) -> bool:
 func is_edge_grade_separated(eid: int) -> bool:
 	var ep := get_edge_elev_pair(eid)
 	return minf(ep.x, ep.y) > 3.5 or maxf(ep.x, ep.y) < -2.0
+
+
+func edge_matches_elev_tier(eid: int, tier: String) -> bool:
+	if tier.is_empty():
+		return true
+	var ep := get_edge_elev_pair(eid)
+	if elev_tier_key(ep.x) == tier or elev_tier_key(ep.y) == tier:
+		return true
+	# Include multi-tier ramps that pass straight through this tier
+	var lo := minf(ep.x, ep.y)
+	var hi := maxf(ep.x, ep.y)
+	if hi - lo > 0.5:
+		var ty := elev_for_tier_key(tier)
+		if lo <= ty + 0.5 and hi >= ty - 0.5:
+			return true
+	return false
+
+
+func station_matches_elev_tier(sid: int, tier: String) -> bool:
+	if tier.is_empty():
+		return true
+	if not stations.has(sid):
+		return false
+	var st: Dictionary = stations[sid]
+	var eid := int(st.get("edge_id", -1))
+	if eid >= 0 and edges.has(eid):
+		var y_st := get_edge_elev_at_t(eid, float(st.get("t", 0.5)))
+		return elev_tier_key(y_st) == tier or edge_matches_elev_tier(eid, tier)
+	return elev_tier_key((st["pos"] as Vector3).y) == tier
 
 
 func edges_connect_at_node(ea: int, eb: int, nid: int) -> bool:
@@ -277,6 +333,8 @@ func load_from_map_data(map_data: Dictionary, use_starter: bool = true) -> void:
 		}
 		if bool(e_raw.get("bridge", false)):
 			edges[eid]["bridge"] = true # carried over the ground (overpass / canal bridge)
+		if bool(e_raw.get("underground", false)):
+			edges[eid]["underground"] = true # subterranean road tunnel (hidden on surface, shown in B1 blueprint)
 		if adj.has(a):
 			adj[a].append({"to": b, "edge_id": eid, "length": elen})
 		if adj.has(b):
@@ -799,7 +857,7 @@ func get_turnout_world_positions() -> Array[Vector3]:
 	return out
 
 
-func find_closest_edge(xz: Vector2, max_dist: float, only_built: bool = false, elev_filter: int = 0) -> Dictionary:
+func find_closest_edge(xz: Vector2, max_dist: float, only_built: bool = false, elev_filter: int = 0, elev_tier: String = "") -> Dictionary:
 	var best_eid := -1
 	var best_score := max_dist
 	var best_d := max_dist
@@ -821,8 +879,12 @@ func find_closest_edge(xz: Vector2, max_dist: float, only_built: bool = false, e
 				checked[eid] = true
 				if only_built and not built_tracks.has(eid):
 					continue
+				if only_built and not elev_tier.is_empty() and not edge_matches_elev_tier(eid, elev_tier):
+					continue
 				if not only_built and bool(edges[eid].get("rail_3d", false)):
 					continue # street queries ignore stacked 3D dedicated rail overlays
+				if not only_built and bool(edges[eid].get("underground", false)):
+					continue # surface street queries ignore underground drop-off tunnel loops
 				# Elevation preference: -1 favors underground tracks (X-ray view), +1 favors surface/elevated
 				var score_bias := 0.0
 				if elev_filter != 0 and built_tracks.has(eid):
@@ -920,10 +982,12 @@ func get_station_platform_world_pos(sid: int) -> Vector3:
 	return pos + right * (side * (sep + 2.8))
 
 
-func find_closest_station(xz: Vector2, max_dist: float, elev_filter: int = 0) -> int:
+func find_closest_station(xz: Vector2, max_dist: float, elev_filter: int = 0, elev_tier: String = "") -> int:
 	var best_id := -1
 	var best_score := max_dist
 	for sid: int in stations.keys():
+		if not elev_tier.is_empty() and not station_matches_elev_tier(sid, elev_tier):
+			continue
 		var sp := get_station_platform_world_pos(sid)
 		var d := xz.distance_to(Vector2(sp.x, sp.z))
 		if d > max_dist:

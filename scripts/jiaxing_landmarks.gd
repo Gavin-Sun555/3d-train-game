@@ -351,12 +351,21 @@ static func _yanyu_tower_and_red_boat(parent: Node3D, center: Vector3, island_pt
 	var trunk_mat := _mat(Color(0.32, 0.24, 0.17), 0.88, 0.0)
 	var willow_mat := _mat(Color(0.28, 0.52, 0.22), 0.82, 0.0)
 	var cypress_mat := _mat(Color(0.16, 0.36, 0.17), 0.84, 0.0)
+	# Compute exact SE outer shoreline anchor from real OSM island polygon so Red Boat ALWAYS floats in open lake water!
+	var se_dir := Vector2(0.76, 0.65).normalized()
+	var se_shore := se_dir * 52.0
+	var local_ring: Array[Vector2] = []
 	if island_pts.size() >= 3:
 		var wall_st := SurfaceTool.new()
 		wall_st.begin(Mesh.PRIMITIVE_TRIANGLES)
-		var local_ring: Array[Vector2] = []
+		var best_se := -1e9
 		for raw_p in island_pts:
-			local_ring.append(Vector2(float(raw_p[0]) - center.x, float(raw_p[1]) - center.z))
+			var lp := Vector2(float(raw_p[0]) - center.x, float(raw_p[1]) - center.z)
+			local_ring.append(lp)
+			var proj := lp.dot(se_dir)
+			if proj > best_se:
+				best_se = proj
+				se_shore = lp
 		var tree_acc := 0.0
 		var tree_idx := 0
 		for i in range(local_ring.size()):
@@ -368,15 +377,15 @@ static func _yanyu_tower_and_red_boat(parent: Node3D, center: Vector3, island_pt
 				continue
 			# Stone embankment coping beam along the island's real OSM shoreline
 			_st_box_along(wall_st, a, b, 1.9, 0.0, 0.54)
-			# Place Jiangnan weeping willows & lakeside cypresses ~6m inside the seawall
+			# Place Jiangnan weeping willows & lakeside cypresses ~6.5m inside the seawall
 			tree_acc += slen
-			if tree_acc >= 14.5:
+			if tree_acc >= 12.0:
 				tree_acc = 0.0
 				var mid := (a + b) * 0.5
 				var to_in := -mid.normalized()
 				var tp := mid + to_in * 6.5
-				# Keep clear of Yanyu Tower terrace and SE Red Boat pier
-				if tp.length() > 19.0 and tp.distance_to(Vector2(34.0, 26.0)) > 16.0:
+				# Keep clear of Yanyu Tower terrace and SE Red Boat pier approach
+				if tp.length() > 19.0 and tp.distance_to(se_shore) > 12.0:
 					var is_willow := (tree_idx % 3 != 0)
 					var th := 5.5 + float(tree_idx % 4) * 1.1
 					_add_cyl(nanhu, 0.24, 0.36, th * 0.55, Vector3(tp.x, th * 0.28, tp.y), trunk_mat, 7)
@@ -391,17 +400,29 @@ static func _yanyu_tower_and_red_boat(parent: Node3D, center: Vector3, island_pt
 		wall_mi.material_override = seawall_stone
 		nanhu.add_child(wall_mi)
 
-	# Paved stone island courtyard pathways & north lakeside viewing pavilion (观湖亭)
-	_add_box(nanhu, Vector3(4.2, 0.16, 48.0), Vector3(0.0, 0.28, 0.0), stone_white, 0.0, 0.0, 0.0, false)
-	_add_box(nanhu, Vector3(44.0, 0.16, 4.2), Vector3(12.0, 0.28, 12.0), stone_white, -0.35, 0.0, 0.0, false)
+	# Paved stone island courtyard pathways, perimeter loop walk & north lakeside viewing pavilion (观湖亭)
+	var shore_out := se_shore.normalized() if se_shore.length() > 1.0 else se_dir
+	var path_len := maxf(se_shore.length() - 2.0, 24.0)
+	var path_ang := atan2(shore_out.x, shore_out.y)
+	_add_box(nanhu, Vector3(3.8, 0.16, 44.0), Vector3(0.0, 0.28, 0.0), stone_white, 0.0, 0.0, 0.0, false)
+	_add_box(nanhu, Vector3(3.6, 0.16, path_len), Vector3(shore_out.x * path_len * 0.5, 0.28, shore_out.y * path_len * 0.5), stone_white, path_ang, 0.0, 0.0, false)
 	# Octagonal riverside pavilion on north point of island
-	var pav_pos := Vector3(-16.0, 0.0, -32.0)
+	var pav_pos := Vector3(-16.0, 0.0, -28.0)
 	_add_cyl(nanhu, 4.6, 5.0, 0.9, pav_pos + Vector3(0.0, 0.45, 0.0), stone_white, 8)
 	for pi in range(6):
 		var pa := float(pi) * TAU / 6.0
 		_add_cyl(nanhu, 0.16, 0.18, 3.6, pav_pos + Vector3(cos(pa) * 3.4, 2.7, sin(pa) * 3.4), wood_vermilion, 8)
 	_add_cyl(nanhu, 0.6, 5.6, 2.5, pav_pos + Vector3(0.0, 5.6, 0.0), tile_dark, 8)
 	_add_cyl(nanhu, 0.12, 0.28, 0.9, pav_pos + Vector3(0.0, 7.1, 0.0), gold_trim, 8)
+	# Traditional Jiangnan West Corridor (假山亭廊) & Stele Pavilion (御碑亭) on island
+	var stele_pos := Vector3(-24.0, 0.0, 10.0)
+	_add_box(nanhu, Vector3(6.2, 0.8, 6.2), stele_pos + Vector3(0.0, 0.4, 0.0), stone_white)
+	for sx_p: float in [-2.4, 2.4]:
+		for sz_p: float in [-2.4, 2.4]:
+			_add_cyl(nanhu, 0.15, 0.17, 3.4, stele_pos + Vector3(sx_p, 2.5, sz_p), wood_vermilion, 8)
+	_add_box(nanhu, Vector3(7.4, 0.5, 7.4), stele_pos + Vector3(0.0, 4.4, 0.0), tile_dark)
+	_add_box(nanhu, Vector3(5.2, 0.8, 5.2), stele_pos + Vector3(0.0, 5.0, 0.0), tile_dark)
+	_add_box(nanhu, Vector3(2.8, 0.7, 2.8), stele_pos + Vector3(0.0, 5.7, 0.0), tile_dark)
 
 	# Raised stone terrace (台基) + carved balustrade
 	_add_box(nanhu, Vector3(28.0, 2.2, 20.0), Vector3(0.0, 1.1, 0.0), stone_white)
@@ -452,27 +473,46 @@ static func _yanyu_tower_and_red_boat(parent: Node3D, center: Vector3, island_pt
 	nanhu.add_child(nl)
 	lights.append(nl)
 
-	# --- 南湖红船 (The Historic Red Boat) moored at SE timber pier of Lake Heart Island ---
-	var boat := Node3D.new()
-	boat.name = "NanhuRedBoat"
-	boat.position = Vector3(34.0, 0.0, 26.0)
-	boat.rotation.y = -0.52
-	nanhu.add_child(boat)
+	# --- 南湖红船 (The Historic Red Boat) floating OFFSHORE in open blue Nanhu Lake water! ---
+	# Place strictly outside the island seawall (14m offshore along SE outward normal), joined by a timber mooring jetty.
+	var jetty_start := se_shore - shore_out * 2.5
+	var jetty_end := se_shore + shore_out * 11.5
+	var boat_pos_2d := se_shore + shore_out * 15.2
+	var boat_tangent := Vector2(-shore_out.y, shore_out.x).normalized()
+	var boat_yaw := atan2(-boat_tangent.y, boat_tangent.x)
 
 	var hull_wood := _mat(Color(0.48, 0.18, 0.11), 0.52, 0.04)
 	var cabin_wood := _mat(Color(0.58, 0.22, 0.14), 0.48, 0.04)
 	var pier_wood := _mat(Color(0.40, 0.30, 0.21), 0.78, 0.0)
-	# Timber mooring jetty
-	_add_box(boat, Vector3(2.8, 0.35, 12.0), Vector3(-6.2, 0.38, -2.5), pier_wood)
-	# Boat hull (16m long Jiangnan huafang)
+
+	# Timber mooring jetty & pilings extending from island seawall out over open lake water
+	var jetty_mid := (jetty_start + jetty_end) * 0.5
+	var jetty_len := jetty_start.distance_to(jetty_end)
+	var jetty_yaw := atan2(shore_out.x, shore_out.y)
+	_add_box(nanhu, Vector3(3.2, 0.36, jetty_len), Vector3(jetty_mid.x, 0.42, jetty_mid.y), pier_wood, jetty_yaw)
+	for jp_i in range(4):
+		var jp := jetty_start.lerp(jetty_end, float(jp_i + 1) / 4.0)
+		for side_j: float in [-1.35, 1.35]:
+			var pp := jp + boat_tangent * side_j
+			_add_cyl(nanhu, 0.14, 0.16, 1.35, Vector3(pp.x, 0.30, pp.y), pier_wood, 6)
+
+	var boat := Node3D.new()
+	boat.name = "NanhuRedBoat"
+	boat.position = Vector3(boat_pos_2d.x, 0.0, boat_pos_2d.y)
+	boat.rotation.y = boat_yaw
+	nanhu.add_child(boat)
+
+	# Boat hull (16m long Jiangnan huafang floating cleanly on Nanhu water)
 	_add_box(boat, Vector3(13.5, 1.05, 3.2), Vector3(0.0, 0.48, 0.0), hull_wood)
 	_add_box(boat, Vector3(3.0, 0.95, 2.1), Vector3(7.6, 0.62, 0.0), hull_wood, 0.0, 0.14)
 	_add_box(boat, Vector3(2.8, 0.95, 2.2), Vector3(-7.4, 0.58, 0.0), hull_wood, 0.0, -0.12)
-	# Ornate central cabin + double-curved roof
+	# Ornate central cabin + double-curved roof + red bow lantern
 	_add_box(boat, Vector3(8.6, 2.1, 2.6), Vector3(-0.3, 1.95, 0.0), cabin_wood)
 	_add_box(boat, Vector3(7.8, 0.9, 2.66), Vector3(-0.3, 2.1, 0.0), lantern_glow, 0.0, 0.0, 0.0, false)
 	_add_box(boat, Vector3(10.2, 0.38, 3.4), Vector3(-0.3, 3.15, 0.0), tile_dark)
 	_add_box(boat, Vector3(9.0, 0.35, 2.2), Vector3(-0.3, 3.48, 0.0), tile_dark)
+	_add_cyl(boat, 0.22, 0.20, 0.55, Vector3(6.8, 2.1, 0.0), lantern_glow, 8)
+	_add_sign_label(boat, "南 湖 红 船", Vector3(0.0, 4.4, 0.0), 0.0, 56, 0.020, Color(1.0, 0.84, 0.30))
 
 
 # =============================================================================================
@@ -606,44 +646,89 @@ static func _jiaxing_station(parent: Node3D, center: Vector3, angle: float, ligh
 	_add_sign_label(jx, "嘉 兴 站", Vector3(0.0, 9.5, -67.2), PI, 108, 0.034, Color(0.92, 0.16, 0.16))
 	_add_sign_label(jx, "JIAXING RAILWAY STATION", Vector3(0.0, 7.8, -67.2), PI, 34, 0.022, Color(0.94, 0.95, 0.98))
 
-	# --- C2. Authentic B1 Underground Station Concourse & Waiting Hall (y = -10.0m .. -2.6m) ---
-	# Visible both through sunken skylights and in full glory when toggling Underground X-Ray View (U)!
+	# --- C2. Authentic B1 Underground Station Concourse, Transfer Hub & Sunken Courts (y = -10.0m .. -2.6m) ---
+	# Rich multi-zone underground transit hub: North Sunken Court + B1 Ticket/Security Hall + Central Timber Waiting Hall
+	# + Commercial Arcade + B1 Drop-off Taxi Lanes + South Rail/Metro Interchange Hall (visible cleanly at B1 elevation!)
 	var b1 := Node3D.new()
 	b1.name = "JiaxingStationB1Hall"
 	jx.add_child(b1)
-	# Main B1 Waiting Hall & Transfer Concourse spanning under North Plaza -> Platforms -> South Plaza
-	_add_box(b1, Vector3(124.0, 0.45, 118.0), Vector3(0.0, -10.0, 0.0), b1_floor, 0.0, 0.0, 0.0, false)
-	# Perimeter concrete/stone lining walls of B1 concourse (height 7.2m: -10.0m -> -2.8m)
-	_add_box(b1, Vector3(0.8, 7.2, 118.0), Vector3(-62.0, -6.4, 0.0), b1_wall, 0.0, 0.0, 0.0, false)
-	_add_box(b1, Vector3(0.8, 7.2, 118.0), Vector3(62.0, -6.4, 0.0), b1_wall, 0.0, 0.0, 0.0, false)
-	_add_box(b1, Vector3(124.0, 7.2, 0.8), Vector3(0.0, -6.4, -59.0), b1_wall, 0.0, 0.0, 0.0, false)
-	_add_box(b1, Vector3(124.0, 7.2, 0.8), Vector3(0.0, -6.4, 59.0), b1_wall, 0.0, 0.0, 0.0, false)
-	# Warm timber coffered B1 ceiling beams & glowing skylight light-wells (separate roof group for X-Ray clarity)
+	var b1_slate := _mat(Color(0.22, 0.25, 0.29), 0.72, 0.08)
+	var b1_terrazzo := _mat(Color(0.54, 0.56, 0.58), 0.62, 0.06)
+	var b1_wood_floor := _mat(Color(0.68, 0.54, 0.38), 0.65, 0.04)
+	var b1_road_dark := _mat(Color(0.16, 0.17, 0.19), 0.84, 0.02)
+	var b1_lane_amber := _emissive(Color(0.95, 0.74, 0.24), 0.9)
+	var b1_metro_cyan := _emissive(Color(0.22, 0.82, 0.96), 1.3)
+	var b1_shop_warm := _emissive(Color(1.0, 0.84, 0.54), 1.1)
+	var b1_seat_blue := _mat(Color(0.24, 0.42, 0.58), 0.58, 0.10)
+	var b1_courtyard_grass := _mat(Color(0.22, 0.48, 0.24), 0.84, 0.0)
+
+	# Structural B1 base deck (176m wide x 192m N-S spanning North Plaza -> Tracks -> South Plaza Interchange)
+	_add_box(b1, Vector3(176.0, 0.45, 192.0), Vector3(0.0, -10.2, 6.0), b1_slate, 0.0, 0.0, 0.0, false)
+	# Central Main Waiting Concourse Floor (terrazzo + warm wood axial promenade)
+	_add_box(b1, Vector3(122.0, 0.16, 128.0), Vector3(0.0, -9.90, 0.0), b1_terrazzo, 0.0, 0.0, 0.0, false)
+	_add_box(b1, Vector3(26.0, 0.18, 178.0), Vector3(0.0, -9.84, 6.0), b1_wood_floor, 0.0, 0.0, 0.0, false)
+	# North & South Sunken Garden Lightwells inside B1 (signature MAD daylight courts with indoor trees!)
+	for sc_z: float in [-58.0, 56.0]:
+		_add_cyl(b1, 13.5, 14.0, 0.32, Vector3(0.0, -9.75, sc_z), b1_courtyard_grass, 18)
+		_add_cyl(b1, 14.4, 14.4, 0.55, Vector3(0.0, -9.62, sc_z), granite, 18)
+		for gt_a in range(5):
+			var ang_g := float(gt_a) * TAU / 5.0
+			var gx_t := cos(ang_g) * 6.5
+			var gz_t := sc_z + sin(ang_g) * 6.5
+			_add_cyl(b1, 0.22, 0.28, 3.2, Vector3(gx_t, -8.1, gz_t), ceiling_wood, 7)
+			_add_cyl(b1, 1.4, 2.8, 2.8, Vector3(gx_t, -6.0, gz_t), b1_courtyard_grass, 8)
+	# East & West B1 Commercial Arcade Pavilions & Retail Bays (地下商业街)
+	for side_b: float in [-1.0, 1.0]:
+		var sx_b := side_b * 72.0
+		_add_box(b1, Vector3(22.0, 6.8, 138.0), Vector3(sx_b, -6.5, 4.0), b1_wall, 0.0, 0.0, 0.0, false)
+		for shop_i in range(-4, 5):
+			var sz_shop := float(shop_i) * 14.5 + 4.0
+			_add_box(b1, Vector3(1.2, 3.6, 10.4), Vector3(sx_b - side_b * 11.2, -7.8, sz_shop), b1_shop_warm, 0.0, 0.0, 0.0, false)
+			_add_box(b1, Vector3(1.6, 0.5, 11.2), Vector3(sx_b - side_b * 11.4, -5.8, sz_shop), dark_frame, 0.0, 0.0, 0.0, false)
+	# North & South B1 Perimeter Lining Walls
+	_add_box(b1, Vector3(176.0, 7.2, 1.0), Vector3(0.0, -6.4, -90.0), b1_wall, 0.0, 0.0, 0.0, false)
+	_add_box(b1, Vector3(176.0, 7.2, 1.0), Vector3(0.0, -6.4, 102.0), b1_wall, 0.0, 0.0, 0.0, false)
+	# North B1 Underground Drop-Off / Taxi / Bus Bay Roadway Loop (z = -84..-72)
+	_add_box(b1, Vector3(148.0, 0.14, 14.0), Vector3(0.0, -9.88, -79.0), b1_road_dark, 0.0, 0.0, 0.0, false)
+	for ln_z: float in [-83.5, -79.0, -74.5]:
+		_add_box(b1, Vector3(140.0, 0.06, 0.35), Vector3(0.0, -9.78, ln_z), b1_lane_amber, 0.0, 0.0, 0.0, false)
+	# South B1 Rail Transit / Tram / Metro Interchange Hall (z = +72..+98, bright cyan transfer zone!)
+	_add_box(b1, Vector3(136.0, 0.22, 26.0), Vector3(0.0, -9.84, 86.0), b1_terrazzo, 0.0, 0.0, 0.0, false)
+	_add_box(b1, Vector3(132.0, 0.12, 1.4), Vector3(0.0, -9.70, 74.0), b1_metro_cyan, 0.0, 0.0, 0.0, false)
+	_add_box(b1, Vector3(132.0, 0.12, 1.4), Vector3(0.0, -9.70, 98.0), b1_metro_cyan, 0.0, 0.0, 0.0, false)
+	# B1 Ticket/Security Gate Arrays & Waiting Hall Seating Islands (rows of blue benches flanking central promenade)
+	for g_idx in range(-5, 6):
+		_add_box(b1, Vector3(1.2, 1.25, 0.6), Vector3(float(g_idx) * 4.4, -9.2, -34.0), b1_metro_cyan, 0.0, 0.0, 0.0, false)
+		_add_box(b1, Vector3(1.2, 1.25, 0.6), Vector3(float(g_idx) * 4.4, -9.2, 34.0), b1_metro_cyan, 0.0, 0.0, 0.0, false)
+	for side_w: float in [-1.0, 1.0]:
+		for row_z: float in [-22.0, -10.0, 10.0, 22.0]:
+			_add_box(b1, Vector3(26.0, 0.85, 3.2), Vector3(side_w * 34.0, -9.35, row_z), b1_seat_blue, 0.0, 0.0, 0.0, false)
+	# Structural colonnade & escalators ascending from B1 (-10m) to the 3 surface rail platforms (0m)
+	for rx: float in [-50.0, -25.0, 0.0, 25.0, 50.0]:
+		for rz: float in [-42.0, -18.0, 18.0, 42.0, 76.0]:
+			_add_cyl(b1, 0.52, 0.58, 7.2, Vector3(rx, -6.4, rz), steel_white, 10)
+	for bx_e: float in [-36.0, 0.0, 36.0]:
+		for pz_e: float in [-18.5, 0.0, 18.5]:
+			_add_box(b1, Vector3(3.2, 0.65, 16.0), Vector3(bx_e, -5.2, pz_e), dark_frame, 0.0, 0.0, 0.52, false)
+			_add_box(b1, Vector3(3.4, 0.18, 16.0), Vector3(bx_e, -4.85, pz_e), b1_metro_cyan, 0.0, 0.0, 0.52, false)
+	# Warm timber coffered B1 ceiling beams & glowing skylight light-wells (separate roof group for X-Ray cutaway!)
 	var b1_roof := Node3D.new()
 	b1_roof.name = "UndergroundStationRoof"
 	b1.add_child(b1_roof)
-	_add_box(b1_roof, Vector3(124.0, 0.45, 118.0), Vector3(0.0, -2.75, 0.0), ceiling_wood, 0.0, 0.0, 0.0, false)
-	for b1_lx: float in [-38.0, 0.0, 38.0]:
-		_add_box(b1_roof, Vector3(18.0, 0.25, 86.0), Vector3(b1_lx, -3.05, 0.0), warm_glow, 0.0, 0.0, 0.0, false)
-	# Structural colonnade, ticket gates, passenger benches & escalators ascending from B1 (-10m) to platforms (0m)
-	for rx: float in [-46.0, -23.0, 0.0, 23.0, 46.0]:
-		for rz: float in [-42.0, -18.0, 18.0, 42.0]:
-			_add_cyl(b1, 0.48, 0.54, 7.2, Vector3(rx, -6.4, rz), steel_white, 10)
-	for g_idx in range(-4, 5):
-		_add_box(b1, Vector3(1.1, 1.15, 0.45), Vector3(float(g_idx) * 4.2, -9.2, -26.0), dark_frame, 0.0, 0.0, 0.0, false)
-		_add_box(b1, Vector3(1.1, 1.15, 0.45), Vector3(float(g_idx) * 4.2, -9.2, 26.0), dark_frame, 0.0, 0.0, 0.0, false)
-	for bx_e: float in [-32.0, 0.0, 32.0]:
-		for pz_e: float in [-18.5, 0.0, 18.5]:
-			_add_box(b1, Vector3(2.8, 0.6, 15.5), Vector3(bx_e, -5.2, pz_e), dark_frame, 0.0, 0.0, 0.52, false)
-	_add_sign_label(b1, "嘉兴站 · B1 地下候车大厅", Vector3(0.0, -4.6, -54.0), 0.0, 88, 0.030, Color(0.55, 0.92, 1.0))
-	_add_sign_label(b1, "嘉兴站 · B1 地下候车大厅", Vector3(0.0, -4.6, 54.0), PI, 88, 0.030, Color(0.55, 0.92, 1.0))
-	var b1_pl := OmniLight3D.new()
-	b1_pl.position = Vector3(0.0, -4.2, 0.0)
-	b1_pl.light_color = Color(1.0, 0.95, 0.84)
-	b1_pl.omni_range = 85.0
-	b1_pl.light_energy = 2.4
-	b1_pl.visible = true
-	b1.add_child(b1_pl)
+	_add_box(b1_roof, Vector3(176.0, 0.45, 192.0), Vector3(0.0, -2.75, 6.0), ceiling_wood, 0.0, 0.0, 0.0, false)
+	for b1_lx: float in [-42.0, 0.0, 42.0]:
+		_add_box(b1_roof, Vector3(18.0, 0.25, 146.0), Vector3(b1_lx, -3.05, 4.0), warm_glow, 0.0, 0.0, 0.0, false)
+	_add_sign_label(b1, "嘉兴站 · B1 地下候车大厅", Vector3(0.0, -4.4, -36.0), 0.0, 96, 0.034, Color(0.55, 0.94, 1.0))
+	_add_sign_label(b1, "B1 北广场地下落客/出租车通道", Vector3(0.0, -4.4, -79.0), 0.0, 68, 0.028, Color(1.0, 0.84, 0.36))
+	_add_sign_label(b1, "B1 轨交/有轨电车换乘大厅", Vector3(0.0, -4.4, 86.0), PI, 82, 0.032, Color(0.32, 0.96, 0.88))
+	for b1_lz: float in [-60.0, 0.0, 70.0]:
+		var b1_pl := OmniLight3D.new()
+		b1_pl.position = Vector3(0.0, -4.2, b1_lz)
+		b1_pl.light_color = Color(1.0, 0.95, 0.84)
+		b1_pl.omni_range = 88.0
+		b1_pl.light_energy = 2.0
+		b1_pl.visible = true
+		b1.add_child(b1_pl)
 
 	# --- D. 1921 Historic Brick Old Jiaxing Station (嘉兴老火车站复建) in North Heritage Plaza ---
 	var old_st := Node3D.new()
@@ -657,35 +742,71 @@ static func _jiaxing_station(parent: Node3D, center: Vector3, angle: float, ligh
 	_add_box(old_st, Vector3(38.0, 0.6, 9.2), Vector3(0.0, 11.4, 3.5), tile_grey, 0.0, 0.0, -0.42)
 	_add_sign_label(old_st, "嘉 兴 老 站 · 1921", Vector3(0.0, 13.4, -7.8), PI, 56, 0.022, Color(0.96, 0.88, 0.62))
 
-	# --- E. Authentic Jiaxing Station South Plaza Complex (南广场下沉绿坡入口 + 东西商业与换乘枢纽建筑群) ---
-	# South plaza sunken forecourt paving (z = +36 .. +128)
-	_add_box(jx, Vector3(156.0, 0.05, 86.0), Vector3(0.0, -0.01, 82.0), granite, 0.0, 0.0, 0.0, false)
-	# Sweeping timber-and-glass South Entrance Pavilion connecting directly down to the B1 underground station hall
-	_add_box(jx, Vector3(92.0, 0.48, 28.0), Vector3(0.0, 6.8, 48.0), solar_dark)
-	_add_box(jx, Vector3(90.0, 0.28, 26.0), Vector3(0.0, 6.45, 48.0), ceiling_wood)
-	_add_box(jx, Vector3(68.0, 5.2, 16.0), Vector3(0.0, 2.6, 48.0), glass_clear)
-	_add_box(jx, Vector3(62.0, 4.0, 13.0), Vector3(0.0, 2.0, 48.0), warm_glow, 0.0, 0.0, 0.0, false)
-	for sci in range(-4, 5):
-		_add_cyl(jx, 0.24, 0.28, 6.4, Vector3(float(sci) * 10.5, 3.2, 60.5), steel_white, 10)
-	_add_sign_label(jx, "嘉 兴 站 · 南 广 场", Vector3(0.0, 8.4, 62.2), 0.0, 96, 0.032, Color(0.92, 0.16, 0.16))
-	# Symmetrical South Plaza Transit & Commercial Terrace Buildings (西/东翼退台石材玻璃商业体 + 换乘中心)
+	# --- E. Authentic Jiaxing Station South Plaza Complex ("森林中的火车站" 南广场完整建筑群与森林公园) ---
+	var tree_trunk := _mat(Color(0.32, 0.24, 0.17), 0.88, 0.0)
+	var tree_green := _mat(Color(0.20, 0.46, 0.20), 0.82, 0.0)
+	var tree_bright := _mat(Color(0.28, 0.54, 0.24), 0.80, 0.0)
+	var facade_cream := _mat(Color(0.86, 0.83, 0.77), 0.68, 0.03)
+
+	# Full-block South Plaza granite & sunken forest lawn promenade (z = +32 .. +146)
+	_add_box(jx, Vector3(236.0, 0.05, 112.0), Vector3(0.0, -0.01, 88.0), granite, 0.0, 0.0, 0.0, false)
+	# Sweeping floating timber-and-glass South Entrance Pavilion connecting directly down to B1
+	_add_box(jx, Vector3(106.0, 0.50, 30.0), Vector3(0.0, 7.2, 48.0), solar_dark)
+	_add_box(jx, Vector3(104.0, 0.28, 28.0), Vector3(0.0, 6.82, 48.0), ceiling_wood)
+	_add_box(jx, Vector3(76.0, 5.4, 17.0), Vector3(0.0, 2.7, 48.0), glass_clear)
+	_add_box(jx, Vector3(70.0, 4.2, 14.0), Vector3(0.0, 2.1, 48.0), warm_glow, 0.0, 0.0, 0.0, false)
+	for sci in range(-5, 6):
+		_add_cyl(jx, 0.24, 0.28, 6.8, Vector3(float(sci) * 10.0, 3.4, 61.5), steel_white, 10)
+	_add_sign_label(jx, "嘉 兴 站 · 南 广 场", Vector3(0.0, 8.8, 63.4), 0.0, 102, 0.034, Color(0.92, 0.16, 0.16))
+
+	# Circular Sunken Daylight Atrium Dome in central South Plaza (南广场下沉绿岛玻璃中庭)
+	_add_cyl(jx, 15.0, 16.5, 1.4, Vector3(0.0, 0.7, 84.0), lawn_slope, 20)
+	_add_cyl(jx, 11.2, 12.6, 2.8, Vector3(0.0, 2.1, 84.0), glass_clear, 20)
+	_add_cyl(jx, 12.8, 12.8, 0.35, Vector3(0.0, 3.6, 84.0), roof_silver, 20)
+
+	# Full Multi-Wing South Plaza Architectural Ensemble (东西两侧真实红砖/石材商业综合体、酒店、办公楼、文化展馆)
 	for side_s: float in [-1.0, 1.0]:
-		var bx_s := side_s * 74.0
-		# Ground-floor commercial podium + sunken courtyard arcade
-		_add_box(jx, Vector3(44.0, 9.6, 52.0), Vector3(bx_s, 4.8, 88.0), stone_warm)
-		_add_box(jx, Vector3(44.6, 4.2, 48.0), Vector3(bx_s, 2.6, 88.0), glass_clear)
-		_add_box(jx, Vector3(45.2, 0.65, 53.0), Vector3(bx_s, 9.9, 88.0), dark_frame)
-		# Upper stepped brick-and-glass cultural/office pavilion mirroring historic brick palette
-		_add_box(jx, Vector3(30.0, 8.4, 34.0), Vector3(bx_s + side_s * 4.0, 13.8, 92.0), brick_red if side_s < 0.0 else stone_warm)
-		_add_box(jx, Vector3(30.5, 5.4, 30.0), Vector3(bx_s + side_s * 4.0, 13.8, 92.0), glass_clear)
-		_add_box(jx, Vector3(32.0, 0.55, 36.0), Vector3(bx_s + side_s * 4.0, 18.2, 92.0), solar_dark)
-		# South Plaza terraced lawn hills flanking the central pedestrian promenade
-		_add_box(jx, Vector3(28.0, 1.4, 30.0), Vector3(side_s * 34.0, 0.7, 96.0), lawn_slope)
-	# South Plaza Bus & Taxi Hub Canopy (南广场公交枢纽雨棚)
-	_add_box(jx, Vector3(52.0, 0.36, 14.0), Vector3(0.0, 4.8, 114.0), roof_silver)
-	for bci in range(-3, 4):
-		_add_cyl(jx, 0.22, 0.26, 4.8, Vector3(float(bci) * 8.0, 2.4, 114.0), dark_frame, 8)
-	_add_sign_label(jx, "嘉兴站南广场公交枢纽", Vector3(0.0, 5.9, 121.2), 0.0, 54, 0.020, Color(0.92, 0.96, 1.0))
+		# 1. Inner Heritage Brick Cultural & Commercial Pavilion flanking central plaza (x = ±62, z = 78)
+		var ix_s := side_s * 62.0
+		_add_box(jx, Vector3(44.0, 10.2, 48.0), Vector3(ix_s, 5.1, 78.0), brick_red if side_s < 0.0 else stone_warm)
+		_add_box(jx, Vector3(44.6, 4.4, 44.0), Vector3(ix_s, 2.6, 78.0), glass_clear)
+		_add_box(jx, Vector3(46.0, 0.65, 50.0), Vector3(ix_s, 10.5, 78.0), solar_dark)
+		_add_box(jx, Vector3(32.0, 7.6, 32.0), Vector3(ix_s + side_s * 3.0, 14.3, 80.0), facade_cream)
+		_add_box(jx, Vector3(32.5, 4.6, 28.0), Vector3(ix_s + side_s * 3.0, 14.3, 80.0), glass_clear)
+		_add_box(jx, Vector3(34.0, 0.55, 34.0), Vector3(ix_s + side_s * 3.0, 18.3, 80.0), dark_frame)
+		# 2. Outer Multi-Story Commercial & Station Hotel Complex (x = ±106, z = 74)
+		var ox_s := side_s * 106.0
+		_add_box(jx, Vector3(36.0, 11.0, 56.0), Vector3(ox_s, 5.5, 74.0), stone_warm)
+		_add_box(jx, Vector3(36.6, 4.6, 52.0), Vector3(ox_s, 2.8, 74.0), glass_clear)
+		_add_box(jx, Vector3(26.0, 22.0, 30.0), Vector3(ox_s, 21.0, 68.0), facade_cream if side_s > 0.0 else brick_red)
+		_add_box(jx, Vector3(26.5, 18.0, 26.0), Vector3(ox_s, 21.0, 68.0), glass_clear)
+		_add_box(jx, Vector3(27.6, 0.8, 31.6), Vector3(ox_s, 32.4, 68.0), dark_frame)
+		# 3. South-Wing Retail Arcade & Pedestrian Gallery (x = ±68, z = 124)
+		_add_box(jx, Vector3(52.0, 12.6, 28.0), Vector3(side_s * 68.0, 6.3, 124.0), brick_red if side_s > 0.0 else facade_cream)
+		_add_box(jx, Vector3(52.6, 4.8, 24.0), Vector3(side_s * 68.0, 3.0, 124.0), glass_clear)
+		_add_box(jx, Vector3(54.0, 0.55, 30.0), Vector3(side_s * 68.0, 12.9, 124.0), solar_dark)
+		# 4. South Plaza terraced forest lawns flanking the central pedestrian promenade
+		_add_box(jx, Vector3(24.0, 1.3, 44.0), Vector3(side_s * 28.0, 0.65, 86.0), lawn_slope)
+		# Lush "Forest Station" tree rows lining both plazas
+		for ti in range(5):
+			var tz_tr := 64.0 + float(ti) * 11.5
+			var tx_tr := side_s * (24.0 + float(ti % 2) * 8.0)
+			_add_cyl(jx, 0.22, 0.30, 3.4, Vector3(tx_tr, 2.2, tz_tr), tree_trunk, 6)
+			_add_cyl(jx, 1.8, 3.2, 3.8, Vector3(tx_tr, 4.8, tz_tr), tree_green if (ti % 2 == 0) else tree_bright, 8)
+		for nti in range(5):
+			var nx_tr := side_s * (46.0 + float(nti) * 11.0)
+			var nz_tr := -62.0 - float(nti % 2) * 10.0
+			_add_cyl(jx, 0.22, 0.30, 3.6, Vector3(nx_tr, 1.8, nz_tr), tree_trunk, 6)
+			_add_cyl(jx, 1.9, 3.4, 4.0, Vector3(nx_tr, 4.6, nz_tr), tree_green if (nti % 2 == 0) else tree_bright, 8)
+
+	# South Plaza Bus & Coach Transit Hub (南广场公交与客运换乘枢纽: 6 sheltered bays + waiting hall)
+	_add_box(jx, Vector3(68.0, 0.42, 18.0), Vector3(0.0, 5.4, 122.0), roof_silver)
+	_add_box(jx, Vector3(66.0, 0.20, 16.0), Vector3(0.0, 5.12, 122.0), ceiling_wood, 0.0, 0.0, 0.0, false)
+	_add_box(jx, Vector3(24.0, 4.6, 10.0), Vector3(0.0, 2.3, 122.0), glass_clear)
+	for bci in range(-4, 5):
+		_add_cyl(jx, 0.22, 0.26, 5.2, Vector3(float(bci) * 8.0, 2.6, 114.0), dark_frame, 8)
+		_add_cyl(jx, 0.22, 0.26, 5.2, Vector3(float(bci) * 8.0, 2.6, 130.0), dark_frame, 8)
+	_add_sign_label(jx, "嘉兴站南广场公交枢纽", Vector3(0.0, 6.5, 131.5), 0.0, 58, 0.022, Color(0.92, 0.96, 1.0))
 
 	var pl := OmniLight3D.new()
 	pl.position = Vector3(0.0, 9.0, -56.0)

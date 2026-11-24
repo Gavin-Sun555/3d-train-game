@@ -1317,7 +1317,8 @@ static func build_network_tracks_and_stations(
 	parent: Node3D,
 	graph: NetworkGraph,
 	cjk_font: Font,
-	grass_mat: ShaderMaterial
+	grass_mat: ShaderMaterial,
+	elev_tier_filter: String = ""
 ) -> Dictionary:
 	var station_lights: Array[OmniLight3D] = []
 	var station_views: Dictionary = {}
@@ -1382,6 +1383,8 @@ static func build_network_tracks_and_stations(
 	# Build smooth curved junction connector arcs wherever >= 2 built track edges meet!
 	var node_built_edges: Dictionary = {}
 	for eid: int in graph.built_tracks.keys():
+		if not elev_tier_filter.is_empty() and not graph.edge_matches_elev_tier(eid, elev_tier_filter):
+			continue
 		if is_monorail_style(int(graph.built_tracks[eid])):
 			continue # monorail guideways are built separately (_build_monorail_guideways)
 		var ed: Dictionary = graph.edges[eid]
@@ -1409,6 +1412,8 @@ static func build_network_tracks_and_stations(
 
 	# Extrude every built street edge with its own permanently saved bed_style & track_mode (single / double)
 	for eid: int in graph.built_tracks.keys():
+		if not elev_tier_filter.is_empty() and not graph.edge_matches_elev_tier(eid, elev_tier_filter):
+			continue
 		var seg_st := int(graph.built_tracks[eid])
 		var is_double := graph.is_multi_track(eid)
 		var sep_base := graph.get_edge_track_half_sep(eid)
@@ -1907,18 +1912,20 @@ static func build_network_tracks_and_stations(
 
 	_commit_mesh(parent, "RailWebFootAndGrooves", dark_rail_st, Color(0.09, 0.085, 0.08), 0.90, 0.05, false)
 
-	var bright_mi := MeshInstance3D.new()
-	bright_mi.name = "PolishedSteelRailHeads"
-	bright_mi.mesh = bright_rail_st.commit()
-	var bright_mat := StandardMaterial3D.new()
-	bright_mat.albedo_color = Color(0.95, 0.96, 0.98)
-	bright_mat.metallic = 0.22
-	bright_mat.roughness = 0.18
-	bright_mat.metallic_specular = 0.95
-	bright_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	bright_mi.material_override = bright_mat
-	bright_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	parent.add_child(bright_mi)
+	var bright_mesh := bright_rail_st.commit()
+	if bright_mesh != null and bright_mesh.get_surface_count() > 0:
+		var bright_mi := MeshInstance3D.new()
+		bright_mi.name = "PolishedSteelRailHeads"
+		bright_mi.mesh = bright_mesh
+		var bright_mat := StandardMaterial3D.new()
+		bright_mat.albedo_color = Color(0.95, 0.96, 0.98)
+		bright_mat.metallic = 0.22
+		bright_mat.roughness = 0.18
+		bright_mat.metallic_specular = 0.95
+		bright_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		bright_mi.material_override = bright_mat
+		bright_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		parent.add_child(bright_mi)
 
 	_commit_mesh(parent, "ContactWire", wire_st, Color(0.16, 0.16, 0.16), 0.55, 0.20, false)
 
@@ -1953,6 +1960,8 @@ static func build_network_tracks_and_stations(
 	# Build detailed 3D stations for every station in graph.stations!
 	var bays: Array = []
 	for sid: int in graph.stations.keys():
+		if not elev_tier_filter.is_empty() and not graph.station_matches_elev_tier(sid, elev_tier_filter):
+			continue
 		var st_d: Dictionary = graph.stations[sid].duplicate()
 		var eid := int(st_d["edge_id"])
 		var bst := int(graph.built_tracks.get(eid, BedStyle.ASPHALT))
@@ -2036,8 +2045,8 @@ static func build_network_tracks_and_stations(
 		if sv_c.has("curve_spec") and not (sv_c["curve_spec"] as Dictionary).is_empty():
 			st_curves[sid_c] = sv_c["curve_spec"]
 	graph.set_meta("station_curve_specs", st_curves)
-	_build_buffer_stops(parent, graph, station_lights)
-	var mono_ug := _build_monorail_guideways(parent, graph, tunnel_wall_st, tunnel_roof_st, tunnel_led_st, portal_cutouts)
+	_build_buffer_stops(parent, graph, station_lights, elev_tier_filter)
+	var mono_ug := _build_monorail_guideways(parent, graph, tunnel_wall_st, tunnel_roof_st, tunnel_led_st, portal_cutouts, elev_tier_filter)
 	if bool(mono_ug.get("tunnel", false)):
 		has_tunnel = true
 	if bool(mono_ug.get("roof", false)):
@@ -2063,7 +2072,7 @@ static func build_network_tracks_and_stations(
 		led_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(led_mi)
 	graph.set_meta("portal_cutouts", portal_cutouts)
-	_build_tram_switches(parent, graph)
+	_build_tram_switches(parent, graph, elev_tier_filter)
 
 	return {
 		"stations": station_views,
@@ -2224,9 +2233,12 @@ static func _commit_mesh(
 	metal: float,
 	cast_sh: bool = true
 ) -> void:
+	var m := st.commit()
+	if m == null or m.get_surface_count() == 0:
+		return
 	var mi := MeshInstance3D.new()
 	mi.name = m_name
-	mi.mesh = st.commit()
+	mi.mesh = m
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = col
 	mat.roughness = rough
@@ -2651,7 +2663,7 @@ static func _extrude_closed_profile(
 # Buffer stops (车挡) at every rail dead end: hydraulic buffer beam with red/white chevrons on a braced
 # steel frame, red tail lamp and a round red "no entry" board. Hitting one above walking pace derails.
 # ---------------------------------------------------------------------------------------------
-static func _build_buffer_stops(parent: Node3D, graph: NetworkGraph, lights: Array[OmniLight3D]) -> void:
+static func _build_buffer_stops(parent: Node3D, graph: NetworkGraph, lights: Array[OmniLight3D], elev_tier_filter: String = "") -> void:
 	var holder := Node3D.new()
 	holder.name = "BufferStops"
 	parent.add_child(holder)
@@ -2666,6 +2678,8 @@ static func _build_buffer_stops(parent: Node3D, graph: NetworkGraph, lights: Arr
 	var has_x_rail := false
 	var has_x_beam := false
 	for eid: int in graph.built_tracks.keys():
+		if not elev_tier_filter.is_empty() and not graph.edge_matches_elev_tier(eid, elev_tier_filter):
+			continue
 		for at_b: bool in [false, true]:
 			var info := graph.buffer_stop_at_edge_end(eid, at_b)
 			if info.is_empty():
@@ -2918,10 +2932,12 @@ const MonorailSwitchScript := preload("res://scripts/monorail_switch.gd")
 
 # Street-tram crossovers get the same interlocking as monorail switches: a points state plus four ground-mast
 # signals (each track, each end) 10 m before the crossover. The rails themselves are built with the track.
-static func _build_tram_switches(parent: Node3D, graph: NetworkGraph) -> void:
+static func _build_tram_switches(parent: Node3D, graph: NetworkGraph, elev_tier_filter: String = "") -> void:
 	var lst: Array = graph.get_meta("monorail_switches", [])
 	for eid: int in graph.crossovers.keys():
 		if int(graph.crossovers[eid]) <= NetworkGraph.CrossoverType.NONE or not graph.built_tracks.has(eid):
+			continue
+		if not elev_tier_filter.is_empty() and not graph.edge_matches_elev_tier(eid, elev_tier_filter):
 			continue
 		if is_monorail_style(int(graph.built_tracks[eid])):
 			continue
@@ -2964,7 +2980,8 @@ static func _build_monorail_guideways(
 	tunnel_wall_st: SurfaceTool = null,
 	tunnel_roof_st: SurfaceTool = null,
 	tunnel_led_st: SurfaceTool = null,
-	portal_cutouts: Array[Dictionary] = []
+	portal_cutouts: Array[Dictionary] = [],
+	elev_tier_filter: String = ""
 ) -> Dictionary:
 	graph.set_meta("monorail_switches", [])
 	var ug_flags := {"tunnel": false, "roof": false, "led": false}
@@ -2986,6 +3003,8 @@ static func _build_monorail_guideways(
 	var placed_piers: Array[Vector2] = []
 	for eid: int in graph.built_tracks.keys():
 		if not is_monorail_style(int(graph.built_tracks[eid])):
+			continue
+		if not elev_tier_filter.is_empty() and not graph.edge_matches_elev_tier(eid, elev_tier_filter):
 			continue
 		var g := edge_track_geom(graph, eid)
 		if g.is_empty():

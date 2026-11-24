@@ -490,6 +490,37 @@ func _run() -> void:
 	var ug_off_ok: bool = (m._city_root as Node3D).visible and (bp_n != null and not bp_n.visible) and (t_roof_n != null and t_roof_n.visible)
 	_check(ug_on_ok and ug_off_ok, "Underground X-Ray View (U) cleanly toggles city/blueprint & tunnel/station cutaway roofs")
 
+	# 8d. Build-mode per-elevation layer filtering:
+	#     At G (0m): underground B1 tracks/stations & B1 Hall are HIDDEN while G tracks + G<->B1 ramps show;
+	#     At B1 (-10m): ground G tracks/stations are HIDDEN while B1 tracks/stations + G<->B1 ramps + B1 Hall show!
+	var t1_ground_sid := int((jx_graph.stations.keys() as Array)[0])
+	m.call("_set_game_mode", 0) # GameMode.BUILD
+	m.call("_set_build_elev_idx", 2, true) # G (0m)
+	await process_frame
+	var sv_g: Dictionary = m._station_views
+	var ug_lm_n: Node3D = m._underground_landmarks_root as Node3D
+	var filt_g_ok: bool = sv_g.has(t1_ground_sid) and (not sv_g.has(st_lr_ug)) and (not sv_g.has(st_lr_elev)) and jx_graph.edge_matches_elev_tier(lr_eids[3], "G") and (not jx_graph.edge_matches_elev_tier(lr_eids[4], "G")) and (ug_lm_n != null and not ug_lm_n.visible)
+	m.call("_set_build_elev_idx", 1, true) # B1 (-10m)
+	await process_frame
+	var sv_b1: Dictionary = m._station_views
+	var filt_b1_ok: bool = (not sv_b1.has(t1_ground_sid)) and sv_b1.has(st_lr_ug) and sv_b1.has(st_mr_ug) and (not sv_b1.has(st_lr_elev)) and jx_graph.edge_matches_elev_tier(lr_eids[3], "B1") and (ug_lm_n != null and ug_lm_n.visible)
+	m.call("_set_build_elev_idx", 2, true)
+	m.call("_set_game_mode", 2) # GameMode.RUN (all elevations visible together!)
+	await process_frame
+	var sv_run: Dictionary = m._station_views
+	var filt_run_ok: bool = sv_run.has(t1_ground_sid) and sv_run.has(st_lr_ug) and sv_run.has(st_lr_elev) and sv_run.has(st_mr_ug)
+	_check(
+		filt_g_ok and filt_b1_ok and filt_run_ok,
+		"Build-mode per-elevation filtering shows ONLY active tier + connecting ramps (G hides B1, B1 hides G, Run shows all)"
+	)
+	var scenic_n := m._city_root.get_node_or_null("JiaxingLandmarks/JiaxingScenicWalkways") as Node3D
+	var red_boat_n := m._city_root.get_node_or_null("JiaxingLandmarks/NanhuYanyuTowerAndRedBoat/NanhuRedBoat") as Node3D
+	var rb_dist := Vector2(red_boat_n.position.x, red_boat_n.position.z).length() if red_boat_n != null else 0.0
+	_check(
+		scenic_n != null and red_boat_n != null and rb_dist > 56.0,
+		"Jiaxing scenic walkways built & Red Boat floats cleanly offshore in Nanhu Lake (r=%.1fm from island center)" % rb_dist
+	)
+
 	# Simulate 3D Light Rail & 3D Monorail trains traversing elevated, ramps & underground tunnels!
 	var lr_min_y := 1e9; var lr_max_y := -1e9
 	var mr_min_y := 1e9; var mr_max_y := -1e9

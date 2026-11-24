@@ -100,14 +100,14 @@ CORE_BOUNDS = [-1250.0, -1250.0, 1250.0, 1250.0]
 # Key real-world landmark coordinates (projected from verified OSM & GPS elements)
 NANHU_ORIGIN = proj(30.7568, 120.7557)
 YANYU_POS = proj(30.75750, 120.75586)
-HAOGU_PAGODA_POS = (-96.0, -89.0)         # 壕股塔 (Nanhu west/north shore)
+HAOGU_PAGODA_POS = (-158.0, -162.0)       # 壕股塔 (verified dry green park land on Nanhu NW peninsula beside 伍相祠!)
 HUIJINGYUAN_POS = (830.0, 56.0)           # 会景园码头 (Nanhu east shore)
 NANHU_GATE_POS = (862.0, 500.0)           # 南湖景区主大门广场
 NANHU_TIANDI_POS = (798.0, -347.0)        # 南湖天地 (Nanhu NE lakeside commercial heritage)
 MEMORIAL_POS = proj(30.74986, 120.75693)  # 南湖革命纪念馆
 GOV_POS = (-95.0, 610.0)                  # 嘉兴市人民政府
 JIAXING_NO1_POS = (1756.0, 1430.0)        # 嘉兴市第一中学
-YUEHE_POS = (-605.0, -2065.0)             # 月河历史街区
+YUEHE_POS = (-620.0, -1930.0)             # 月河历史街区南入口牌坊 (verified dry land!)
 ZICHENG_POS = (-306.0, -816.0)            # 子城遗址公园 · 谯楼
 CATHOLIC_CHURCH_POS = (-522.0, -894.0)    # 嘉兴天主教堂 (圣母显灵堂)
 FIRST_HOSPITAL_POS = (-1362.0, 1765.0)    # 嘉兴市第一医院
@@ -122,7 +122,7 @@ SOUTH_STA_POS = proj(30.69275, 120.79580) # 嘉兴南站 (高铁枢纽)
 HILTON_POS = (3636.0, 1610.0)             # 嘉兴希尔顿酒店 (广益路)
 WANDA_NANHU_POS = (4428.0, 1858.0)        # 南湖万达广场 (广益路/庆丰路)
 SAMS_CLUB_POS = proj(30.709753, 120.785248)  # 嘉兴山姆会员商店 (槜李路/商务大道)
-XIANGJIADANG_PARK_POS = (4960.0, -5180.0) # 湘家荡湿地公园 (湖畔观鸟塔与生态栈道)
+XIANGJIADANG_PARK_POS = (4770.0, -5180.0) # 湘家荡湿地公园 (dry west shore archway/birding tower + boardwalk east into lake!)
 AIRPORT_TERM_POS = (-9442.0, 5316.0)      # 嘉兴南湖机场航站楼 (IATA: JNH / ICAO: ZSJX)
 OLD_CITY_CENTER = proj(30.7655, 120.7460)
 
@@ -308,7 +308,11 @@ def simplify_ring(pts, tol=1.2):
 # ---------------------------------------------------------------------------------------------
 # 1. Streets -> Connected Graph
 # ---------------------------------------------------------------------------------------------
-ROAD_CLASSES = {"primary", "secondary", "tertiary", "residential", "unclassified", "living_street", "trunk"}
+ROAD_CLASSES = {
+    "primary", "secondary", "tertiary", "residential", "unclassified", "living_street", "trunk",
+    "primary_link", "secondary_link", "tertiary_link", "service",
+}
+SKIP_SERVICE_SUBTYPES = {"parking_aisle", "driveway", "drive-through", "emergency_access", "alley"}
 
 
 def lanes_of(tags):
@@ -356,11 +360,13 @@ def normalize_road_name(raw_name, pts, cls):
     return raw_name or "嘉兴支路"
 
 
-def build_street_graph(nodes, ways, water_grid):
+def build_street_graph(nodes, ways, water_grid, park_grid=None, rail_grid=None):
     pieces = []
     for wid, (refs, t) in ways.items():
         cls = t.get("highway", "")
         if cls not in ROAD_CLASSES:
+            continue
+        if cls == "service" and t.get("service", "") in SKIP_SERVICE_SUBTYPES:
             continue
         if t.get("area") == "yes" or t.get("tunnel") == "building_passage":
             continue
@@ -370,13 +376,18 @@ def build_street_graph(nodes, ways, water_grid):
         pts_ids = [r for r in refs if r in nodes]
         if len(pts_ids) < 2:
             continue
+        # Keep service roads ONLY when long enough (> 38m) or in sparse eastern expansion so parking stubs don't clutter
+        if cls == "service":
+            p_first, p_last = nodes[pts_ids[0]], nodes[pts_ids[-1]]
+            if math.hypot(p_last[0] - p_first[0], p_last[1] - p_first[1]) < 36.0:
+                continue
         # Keep surface roads inside Airport Corridor (even trunk surface carriageways) while skipping high viaducts
         in_ap_corr = any(in_airport_corridor(nodes[r], 40.0) for r in pts_ids)
         # Skip elevated Inner Ring Expressway & Airport Expressway viaduct decks from the surface buildable street graph
         if cls == "trunk" and (is_bridge or layer not in ("0", "") or "快速路" in t.get("name", "")):
             continue
-        # Keep real-life railway underpass tunnels (tunnel=yes / layer=-1) and overpass bridges (layer=1/2)
-        if not is_bridge and not is_tunnel and layer not in ("0", "-1", ""):
+        # Keep real-life railway underpass tunnels (tunnel=yes / layer=-1/-2/-3) and overpass bridges (layer=1/2)
+        if not is_bridge and not is_tunnel and layer not in ("0", "-1", "-2", "-3", ""):
             continue
         if is_bridge and layer not in ("0", "1", "2", ""):
             continue
@@ -487,11 +498,22 @@ def build_street_graph(nodes, ways, water_grid):
                         if nm and nm != "嘉兴支路" and prev["name"] == "嘉兴支路":
                             prev["name"] = nm
                     elif prev is None or (nm != "嘉兴支路" and prev["name"] == "嘉兴支路") or w > prev["width"]:
+                        lay_s = str(t.get("layer", "0")).split(";")[0]
+                        is_tun = (bool(t.get("tunnel")) and t.get("tunnel") != "no") or lay_s in ("-1", "-2", "-3")
+                        mid_e = full[len(full) // 2]
+                        # Subterranean drop-off loops / deep car tunnels (e.g. Jiaxing Station North Plaza 出租车/网约车/城东路隧道)
+                        # are hidden from the surface green park and shown in B1 Underground View instead!
+                        is_ug = is_tun and (
+                            lay_s in ("-2", "-3")
+                            or any(k in nm for k in ("出租车", "网约车", "城东路隧道"))
+                            or (math.hypot(mid_e[0] - JIAXING_STA_POS[0], mid_e[1] - JIAXING_STA_POS[1]) < 340.0 and cls in ("unclassified", "service", "tertiary", "primary"))
+                        )
                         raw_edges[key] = {
                             "a": key[0], "b": key[1], "name": nm, "width": w, "lf": lf, "lb": lb,
                             "length": elen, "pts": full, "cls": cls,
                             "bridge": bool(t.get("bridge")) and t.get("bridge") != "no",
-                            "tunnel": (bool(t.get("tunnel")) and t.get("tunnel") != "no") or str(t.get("layer", "0")).split(";")[0] in ("-1", "-2"),
+                            "tunnel": is_tun,
+                            "underground": is_ug,
                         }
                     if nm and nm != "嘉兴支路":
                         jnodes[ja]["streets"].add(nm)
@@ -563,6 +585,167 @@ def build_street_graph(nodes, ways, water_grid):
                     }
                 main_comp.update(comp)
 
+    # Complete sparse Eastern & Northeastern Jiaxing urban road grid (fixes huge barren blocks with missing streets!)
+    # Synthesizes realistic connected municipal branch streets (支路) strictly on dry non-park urban land,
+    # snapped cleanly into existing arterial junctions!
+    if main_comp:
+        existing_seg_grid = Grid(80.0)
+        for ed in raw_edges.values():
+            if ed["a"] not in main_comp or ed["b"] not in main_comp:
+                continue
+            pts_e = ed["pts"]
+            for pa, pb in zip(pts_e, pts_e[1:]):
+                existing_seg_grid.add((pa[0], pa[1], pb[0], pb[1]),
+                                      min(pa[0], pb[0]) - 10, min(pa[1], pb[1]) - 10,
+                                      max(pa[0], pb[0]) + 10, max(pa[1], pb[1]) + 10)
+
+        def pt_in_water(x, y):
+            for wp in water_grid.query(x - 6, y - 6, x + 6, y + 6):
+                if point_in_poly(x, y, wp):
+                    return True
+            return False
+
+        def pt_in_park(x, y):
+            if park_grid is None:
+                return False
+            for pp in park_grid.query(x - 4, y - 4, x + 4, y + 4):
+                if point_in_poly(x, y, pp):
+                    return True
+            return False
+
+        def seg_hits_rail(pa, pb):
+            if rail_grid is None:
+                return False
+            for (ax, ay, bx, by, rw) in rail_grid.query(min(pa[0], pb[0]) - 20, min(pa[1], pb[1]) - 20,
+                                                        max(pa[0], pb[0]) + 20, max(pa[1], pb[1]) + 20):
+                if seg_intersection(pa, pb, (ax, ay), (bx, by)) is not None:
+                    return True
+                if seg_dist(pa[0], pa[1], ax, ay, bx, by)[0] < rw + 6.0 or seg_dist(pb[0], pb[1], ax, ay, bx, by)[0] < rw + 6.0:
+                    return True
+            return False
+
+        def seg_mostly_water(pa, pb):
+            hits = 0
+            for k_s in range(1, 6):
+                t_s = k_s / 6.0
+                if pt_in_water(pa[0] + (pb[0] - pa[0]) * t_s, pa[1] + (pb[1] - pa[1]) * t_s):
+                    hits += 1
+            return hits >= 2
+
+        def nearest_road_dist(x, y):
+            best = 1e9
+            for (ax, ay, bx, by) in existing_seg_grid.query(x - 210, y - 210, x + 210, y + 210):
+                d = seg_dist(x, y, ax, ay, bx, by)[0]
+                if d < best:
+                    best = d
+            return best
+
+        lm_keepout = [
+            (HILTON_POS, 110.0), (WANDA_NANHU_POS, 155.0), (SAMS_CLUB_POS, 130.0),
+            (JIAXING_NO1_POS, 165.0), (CENTRAL_PARK_POS, 150.0), (JIAXING_STA_POS, 190.0),
+        ]
+        # Candidate grid across sparse eastern/NE MAIN_RECT & Sam's/Shuangxi urban blocks
+        grid_step = 240.0
+        new_grid_nodes = {}  # (gx, gy) -> jnode_id
+        for zone in (
+            (1800.0, -3720.0, MAIN_RECT[2] - 90.0, MAIN_RECT[3] - 90.0),
+            (SAMS_SHUANGXI_RECT[0] + 90.0, SAMS_SHUANGXI_RECT[1] + 90.0, SAMS_SHUANGXI_RECT[2] - 90.0, SAMS_SHUANGXI_RECT[3] - 90.0),
+        ):
+            gx_i = 0
+            x = zone[0]
+            while x <= zone[2]:
+                gy_i = 0
+                y = zone[1]
+                while y <= zone[3]:
+                    if (not pt_in_water(x, y) and not pt_in_park(x, y)
+                            and all(math.hypot(x - lp[0], y - lp[1]) > lr for lp, lr in lm_keepout)
+                            and nearest_road_dist(x, y) > 135.0):
+                        # Only spawn if within 620m of existing main road network so it stays urban & connected
+                        nj = len(jnodes)
+                        jnodes.append({"pos": (round(x, 1), round(y, 1)), "streets": {"东区支路"}})
+                        new_grid_nodes[(gx_i, gy_i, zone[0])] = nj
+                    y += grid_step
+                    gy_i += 1
+                x += grid_step
+                gx_i += 1
+
+        # Build spatial index of existing main_comp surface nodes for fast snapping
+        surf_nodes = Grid(160.0)
+        for j in main_comp:
+            p = jnodes[j]["pos"]
+            surf_nodes.add(j, p[0], p[1], p[0], p[1])
+
+        syn_edges = 0
+        syn_adj = defaultdict(set)
+        # 1) Connect adjacent new grid nodes (orthogonal E-W / N-S neighborhood streets)
+        for (gx_i, gy_i, z0), ja in list(new_grid_nodes.items()):
+            pa = jnodes[ja]["pos"]
+            for dgx, dgy, st_nm in ((1, 0, "东城横街"), (0, 1, "东城纵街")):
+                jb = new_grid_nodes.get((gx_i + dgx, gy_i + dgy, z0))
+                if jb is None:
+                    continue
+                pb = jnodes[jb]["pos"]
+                if seg_hits_rail(pa, pb) or seg_mostly_water(pa, pb):
+                    continue
+                key = (min(ja, jb), max(ja, jb))
+                if key not in raw_edges:
+                    elen = math.hypot(pb[0] - pa[0], pb[1] - pa[1])
+                    pts_e = [pa, pb] if ja < jb else [pb, pa]
+                    raw_edges[key] = {
+                        "a": key[0], "b": key[1], "name": st_nm,
+                        "width": 10.5, "lf": 1, "lb": 1, "divided": False,
+                        "length": elen, "pts": pts_e, "cls": "residential",
+                        "bridge": pt_in_water((pa[0] + pb[0]) * 0.5, (pa[1] + pb[1]) * 0.5),
+                        "tunnel": False, "underground": False,
+                    }
+                    syn_adj[ja].add(jb)
+                    syn_adj[jb].add(ja)
+                    syn_edges += 1
+
+        # 2) Snap boundary grid nodes into nearest existing arterial/branch junctions within 330m
+        for key_g, ja in list(new_grid_nodes.items()):
+            pa = jnodes[ja]["pos"]
+            cands = []
+            for jb in surf_nodes.query(pa[0] - 330, pa[1] - 330, pa[0] + 330, pa[1] + 330):
+                pb = jnodes[jb]["pos"]
+                d = math.hypot(pb[0] - pa[0], pb[1] - pa[1])
+                if 28.0 <= d <= 330.0:
+                    cands.append((d, jb))
+            cands.sort()
+            linked = 0
+            for d, jb in cands:
+                if linked >= 2:
+                    break
+                pb = jnodes[jb]["pos"]
+                if seg_hits_rail(pa, pb) or seg_mostly_water(pa, pb):
+                    continue
+                key = (min(ja, jb), max(ja, jb))
+                if key not in raw_edges:
+                    pts_e = [pa, pb] if ja < jb else [pb, pa]
+                    raw_edges[key] = {
+                        "a": key[0], "b": key[1], "name": "东区联络路",
+                        "width": 10.5, "lf": 1, "lb": 1, "divided": False,
+                        "length": d, "pts": pts_e, "cls": "residential",
+                        "bridge": pt_in_water((pa[0] + pb[0]) * 0.5, (pa[1] + pb[1]) * 0.5),
+                        "tunnel": False, "underground": False,
+                    }
+                    syn_adj[ja].add(jb)
+                    syn_adj[jb].add(ja)
+                    syn_edges += 1
+                    linked += 1
+
+        # Add ONLY new grid nodes that reached main_comp via BFS!
+        q_bfs = [j for j in main_comp if j in syn_adj]
+        seen_syn = set(main_comp)
+        while q_bfs:
+            u = q_bfs.pop()
+            for v in syn_adj[u]:
+                if v not in seen_syn:
+                    seen_syn.add(v)
+                    main_comp.add(v)
+                    q_bfs.append(v)
+        print(f"Eastern sparse-grid completion: +{syn_edges} connected branch streets ({len(main_comp)} total junctions)")
+
     j_ids = {}
     out_nodes = []
     for j in sorted(main_comp):
@@ -583,7 +766,7 @@ def build_street_graph(nodes, ways, water_grid):
         pts = ed["pts"]
         # Mark as bridge if OSM tagged OR midpoint sits over a canal/water polygon
         is_br = bool(ed["bridge"])
-        if not is_br:
+        if not is_br and not ed.get("underground"):
             mid = pts[len(pts) // 2]
             for wp in water_grid.query(mid[0] - 4, mid[1] - 4, mid[0] + 4, mid[1] + 4):
                 if point_in_poly(mid[0], mid[1], wp):
@@ -605,10 +788,13 @@ def build_street_graph(nodes, ways, water_grid):
             rec["bridge"] = True
         if ed.get("tunnel"):
             rec["tunnel"] = True
+        if ed.get("underground"):
+            rec["underground"] = True
         out_edges.append(rec)
 
     print(f"Street graph: {len(out_nodes)} junctions, {len(out_edges)} edges "
-          f"({sum(1 for e in out_edges if e.get('bridge'))} bridges, {sum(1 for e in out_edges if e.get('tunnel'))} tunnels)")
+          f"({sum(1 for e in out_edges if e.get('bridge'))} bridges, {sum(1 for e in out_edges if e.get('tunnel'))} tunnels, "
+          f"{sum(1 for e in out_edges if e.get('underground'))} underground-only B1 tunnels)")
     return out_nodes, out_edges
 
 
@@ -756,11 +942,25 @@ def build_areas(nodes, ways, rels):
     for k, ring, nm in raw_other:
         emit_clipped(ring, k, nm)
 
-    # Ensure Jiaxing South Station plaza area is nicely paved & Jiaxing Airport infield is manicured grass
+    # Ensure Jiaxing South Station plaza area is nicely paved, Xiangjiadang Wetland Park surrounding land is
+    # lush green wetland lawn (water renders cleanly on top via shader depth-push!), and Jiaxing Airport infield is grass.
     sx, sy = SOUTH_STA_POS
     sta_plaza = [(sx - 130, sy - 115), (sx + 130, sy - 115), (sx + 130, sy + 70), (sx - 130, sy + 70)]
     areas.append({"kind": "plaza", "pts": [rnd(p) for p in sta_plaza]})
     park_polys.append(sta_plaza)
+    # Full lush wetland meadow lawn covering Xiangjiadang Wetland Park (ZERO bare grey concrete around Xiangjiadang Lake!)
+    xr = XIANGJIADANG_RECT
+    xj_meadow = [(xr[0] + 10, xr[1] + 10), (xr[2] - 10, xr[1] + 10), (xr[2] - 10, xr[3] - 10), (xr[0] + 10, xr[3] - 10)]
+    areas.append({"kind": "park", "pts": [rnd(p) for p in xj_meadow]})
+    park_polys.append(xj_meadow)
+    named_plazas.append({"name": "湘家荡湿地公园", "kind": "park", "pts": [rnd(p) for p in xj_meadow]})
+    # Yuehe historic lotus-pond garden pocket lawn (荷花池公园) & Nanhu Scenic lakeside lawn aprons
+    yuehe_garden = [(-865, -2250), (-755, -2250), (-755, -2140), (-865, -2140)]
+    areas.append({"kind": "park", "pts": [rnd(p) for p in yuehe_garden]})
+    park_polys.append(yuehe_garden)
+    nanhu_se_park = [(520, 260), (880, 260), (880, 560), (520, 560)]
+    areas.append({"kind": "park", "pts": [rnd(p) for p in nanhu_se_park]})
+    park_polys.append(nanhu_se_park)
     ap_grass = [
         (AIRPORT_PRECINCT[0], AIRPORT_PRECINCT[1]),
         (AIRPORT_PRECINCT[2], AIRPORT_PRECINCT[1]),
@@ -1179,7 +1379,7 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
         (MEMORIAL_POS, 105.0, "nanhu_memorial"),
         (GOV_POS, 125.0, "jiaxing_gov"),
         (JIAXING_NO1_POS, 155.0, "jiaxing_no1_school"),
-        (YUEHE_POS, 145.0, "yuehe_quarter"),
+        (YUEHE_POS, 18.0, "yuehe_quarter"),
         (ZICHENG_POS, 92.0, "zicheng_park"),
         (CATHOLIC_CHURCH_POS, 58.0, "catholic_church"),
         (FIRST_HOSPITAL_POS, 128.0, "first_hospital"),
@@ -1187,16 +1387,16 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
         (TCM_HOSPITAL_POS, 102.0, "tcm_hospital"),
         (YAOHAN_POS, 88.0, "yaohan_mall"),
         (CENTRAL_PARK_POS, 92.0, "central_park"),
-        (JIAXING_STA_POS, 165.0, "jiaxing_station"),
+        (JIAXING_STA_POS, 130.0, "jiaxing_station"),
         (BOTANICAL_POS, 36.0, "botanical_conservatory"),
         (HILTON_POS, 96.0, "hilton_hotel"),
         (WANDA_NANHU_POS, 138.0, "wanda_nanhu"),
         (SAMS_CLUB_POS, 115.0, "sams_club"),
-        (XIANGJIADANG_PARK_POS, 120.0, "xiangjiadang_park"),
+        (XIANGJIADANG_PARK_POS, 95.0, "xiangjiadang_park"),
         (AIRPORT_TERM_POS, 260.0, "jiaxing_airport"),
     ]
 
-    def can_place(pts, bb, allow_in_park=False):
+    def can_place(pts, bb, allow_in_park=False, water_margin=0.0):
         cen = centroid(pts)
         if not in_active(cen):
             return False
@@ -1223,12 +1423,21 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
                     return False
             if seg_dist(cen[0], cen[1], ax, ay, bx, by)[0] < lim:
                 return False
-        # Check water clearance
-        for wp in water_grid.query(bb[0] - 4, bb[1] - 4, bb[2] + 4, bb[3] + 4):
-            if point_in_poly(cen[0], cen[1], wp):
-                return False
+        # Check water clearance (including corners, edge midpoints & optional shoreline buffer margin!)
+        w_pad = 4.0 + water_margin
+        check_w_pts = [cen] + list(pts)
+        for pi in range(len(pts)):
+            pa, pb = pts[pi], pts[(pi + 1) % len(pts)]
+            check_w_pts.append(((pa[0] + pb[0]) * 0.5, (pa[1] + pb[1]) * 0.5))
+        if water_margin > 0.1:
             for p in pts:
-                if point_in_poly(p[0], p[1], wp):
+                dxw, dyw = p[0] - cen[0], p[1] - cen[1]
+                lw = math.hypot(dxw, dyw)
+                if lw > 0.1:
+                    check_w_pts.append((p[0] + dxw / lw * water_margin, p[1] + dyw / lw * water_margin))
+        for wp in water_grid.query(bb[0] - w_pad, bb[1] - w_pad, bb[2] + w_pad, bb[3] + w_pad):
+            for cp in check_w_pts:
+                if point_in_poly(cp[0], cp[1], wp):
                     return False
         # Check park/plaza clearance for synthetic buildings
         if not allow_in_park:
@@ -1397,10 +1606,81 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
                     x += step
                 y += step
 
+    # --- B2. Authentic Dry-Land-Conforming Yuehe Historic Quarter (月河历史街区 粉墙黛瓦水乡民居) ---
+    # Places dense Jiangnan 2-story white-wall/dark-gable courtyard townhouses strictly on DRY land
+    # (>= 3.5m clear of ALL real OSM canals!) framing the 14 real OSM stone bridges & pedestrian alleys!
+    yuehe_cnt = 0
+    yh_foot_segs = []
+    for wid, (refs, t) in ways.items():
+        if t.get("highway") in ("footway", "pedestrian", "path") and not t.get("bridge"):
+            fpts = [nodes[r] for r in refs if r in nodes]
+            for fa, fb in zip(fpts, fpts[1:]):
+                mcx, mcy = (fa[0] + fb[0]) * 0.5, (fa[1] + fb[1]) * 0.5
+                if -890.0 <= mcx <= -390.0 and -2260.0 <= mcy <= -1860.0:
+                    yh_foot_segs.append((fa[0], fa[1], fb[0], fb[1]))
+    # First align traditional shop-houses directly along real Yuehe pedestrian alleys (中基路/小猪廊下/花鸟街)
+    for (ax, ay, bx, by) in yh_foot_segs:
+        sl = math.hypot(bx - ax, by - ay)
+        if sl < 8.0:
+            continue
+        ang = math.atan2(by - ay, bx - ax)
+        ux, uy = (bx - ax) / sl, (by - ay) / sl
+        nx, ny = -uy, ux
+        s = 5.0
+        while s < sl - 4.0:
+            for side in (-1.0, 1.0):
+                hl = rng.uniform(5.2, 8.2)
+                hw = rng.uniform(3.6, 5.2)
+                setb = 3.2 + hw
+                cx = ax + ux * s + nx * side * setb
+                cy = ay + uy * s + ny * side * setb
+                poly = make_rect_poly(cx, cy, ang, hl, hw)
+                pxs = [p[0] for p in poly]
+                pys = [p[1] for p in poly]
+                bb = (min(pxs), min(pys), max(pxs), max(pys))
+                if can_place(poly, bb, allow_in_park=False, water_margin=3.5):
+                    h = rng.choice([6.2, 7.2, 8.0, 8.8])
+                    out.append({
+                        "pts": [rnd(p) for p in poly], "h": h, "kind": "house", "style": 3,
+                        "colour": rng.choice(PALETTE_JIANGNAN),
+                        "roof": pitched_roof_dict(cx, cy, ang, hl, hw, "gabled"),
+                        "roof_colour": "#242830",
+                    })
+                    taken.add((bb[0], bb[1], bb[2], bb[3], poly), *bb)
+                    yuehe_cnt += 1
+            s += rng.uniform(13.0, 17.5)
+    # Second, fill remaining dry Yuehe peninsulas & canal banks with tight Jiangnan courtyard rows (strictly off water!)
+    yh_y = -2238.0
+    while yh_y <= -1874.0:
+        yh_x = -868.0
+        while yh_x <= -412.0:
+            # Leave clean stone pedestrian alleys clear
+            near_alley = any(seg_dist(yh_x, yh_y, fa, fb, fc, fd)[0] < 6.5 for (fa, fb, fc, fd) in yh_foot_segs)
+            if not near_alley:
+                hl = rng.uniform(5.6, 8.6)
+                hw = rng.uniform(3.8, 5.2)
+                ang = rng.choice([0.10, 0.14, 0.18, math.pi * 0.5 + 0.14])
+                poly = make_rect_poly(yh_x, yh_y, ang, hl, hw)
+                pxs = [p[0] for p in poly]
+                pys = [p[1] for p in poly]
+                bb = (min(pxs), min(pys), max(pxs), max(pys))
+                if can_place(poly, bb, allow_in_park=False, water_margin=3.6):
+                    h = rng.choice([6.0, 7.0, 7.8, 8.6])
+                    out.append({
+                        "pts": [rnd(p) for p in poly], "h": h, "kind": "house", "style": 3,
+                        "colour": rng.choice(PALETTE_JIANGNAN),
+                        "roof": pitched_roof_dict(yh_x, yh_y, ang, hl, hw, "gabled"),
+                        "roof_colour": "#252932",
+                    })
+                    taken.add((bb[0], bb[1], bb[2], bb[3], poly), *bb)
+                    yuehe_cnt += 1
+            yh_x += 17.5
+        yh_y += 15.5
+
     # --- C. Street-Front Urban Fabric Infill along ALL roads (Old Town Jiangnan + Modern Avenues + HSR Corridor) ---
     street_cnt = 0
     for ed in edges:
-        if ed.get("bridge"):
+        if ed.get("bridge") or ed.get("underground"):
             continue
         pts = ed["pts"]
         hw_road = float(ed["width"]) * 0.5
@@ -1489,7 +1769,45 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
                         street_cnt += 1
                 s += rng.uniform(28.0, 38.0)
 
-    print(f"Buildings: {len(out)} total ({osm_cnt} real OSM + {lu_cnt} landuse compounds + {street_cnt} street-front urban blocks)")
+    # --- D. Sparse Eastern & Northeastern Urban Block Compound Infill (fills interior blocks like SW Jiaxing!) ---
+    east_cnt = 0
+    for ezone in (
+        (1650.0, -3720.0, MAIN_RECT[2] - 70.0, MAIN_RECT[3] - 70.0),
+        (SAMS_SHUANGXI_RECT[0] + 70.0, SAMS_SHUANGXI_RECT[1] + 70.0, SAMS_SHUANGXI_RECT[2] - 70.0, SAMS_SHUANGXI_RECT[3] - 70.0),
+    ):
+        ey = ezone[1] + 24.0
+        while ey < ezone[3] - 24.0:
+            ex = ezone[0] + 24.0
+            while ex < ezone[2] - 24.0:
+                # Only fill blocks that sit within 210m of a real/completed street (keeps urban fabric grounded)
+                near_rd = False
+                for (rax, ray, rbx, rby, rhw) in road_grid.query(ex - 210, ey - 210, ex + 210, ey + 210):
+                    if seg_dist(ex, ey, rax, ray, rbx, rby)[0] < 210.0:
+                        near_rd = True
+                        break
+                if near_rd:
+                    # Leave realistic landscaped compound courtyards (~16% open space)
+                    if rng.random() > 0.16:
+                        hl = rng.uniform(14.5, 20.5)
+                        hw = rng.uniform(6.6, 8.8)
+                        ang = rng.uniform(-0.03, 0.03)  # Authentic south-facing Chinese 小区板楼
+                        poly = make_rect_poly(ex, ey, ang, hl, hw)
+                        pxs = [p[0] for p in poly]
+                        pys = [p[1] for p in poly]
+                        bb = (min(pxs), min(pys), max(pxs), max(pys))
+                        if can_place(poly, bb, allow_in_park=False, water_margin=3.0):
+                            h = rng.choice([24.0, 30.0, 38.0, 46.0, 54.0])
+                            out.append({
+                                "pts": [rnd(p) for p in poly], "h": h, "kind": "apartments",
+                                "style": 0 if h >= 48.0 else 2,
+                                "colour": rng.choice(PALETTE_MODERN if h >= 36.0 else PALETTE_RES),
+                            })
+                            taken.add((bb[0], bb[1], bb[2], bb[3], poly), *bb)
+                            east_cnt += 1
+                ex += 48.0
+            ey += 40.0
+
+    print(f"Buildings: {len(out)} total ({osm_cnt} real OSM + {lu_cnt} landuse compounds + {yuehe_cnt} Yuehe dry-land houses + {street_cnt} street-front + {east_cnt} eastern block compounds)")
     return out
 
 
@@ -1509,6 +1827,10 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
         r = {"name": ed["name"], "width": w, "lanes_f": ed["lanes_f"], "lanes_b": ed["lanes_b"], "layer": 0, "pts": pts}
         if ed.get("bridge"):
             r["bridge"] = True
+        if ed.get("underground"):
+            r["underground"] = True
+            roads.append(r)
+            continue
         roads.append(r)
 
         p0, p1 = pts[0], pts[-1]
@@ -1539,12 +1861,36 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
                     trees.append((tx, ty))
                 st += 24.0 if w >= 12.0 else 32.0
 
-    # Add real OSM trees too
+    # Add real OSM trees + lush scenic groves in Nanhu Scenic Area & Xiangjiadang Wetland Park!
     for nid, t in poi_nodes.items():
         if t.get("natural") == "tree" and nid in osm_nodes:
             p = osm_nodes[nid]
             if in_active(p):
                 trees.append(p)
+    rng_tr = random.Random(20260529)
+    # Nanhu Scenic Area (Lanxiu Garden, Haogu Peninsula, South/East lakeside groves)
+    for gx in range(-440, 920, 28):
+        for gy in range(-480, 620, 28):
+            tx = gx + rng_tr.uniform(-8.0, 8.0)
+            ty = gy + rng_tr.uniform(-8.0, 8.0)
+            if math.hypot(tx - HAOGU_PAGODA_POS[0], ty - HAOGU_PAGODA_POS[1]) < 36.0:
+                continue
+            if math.hypot(tx - NANHU_GATE_POS[0], ty - NANHU_GATE_POS[1]) < 44.0:
+                continue
+            if math.hypot(tx - HUIJINGYUAN_POS[0], ty - HUIJINGYUAN_POS[1]) < 48.0:
+                continue
+            if rng_tr.random() < 0.62:
+                trees.append((tx, ty))
+    # Xiangjiadang Wetland Park lush dry-shore woodland & lakeside willow groves
+    xr = XIANGJIADANG_RECT
+    for gx in range(int(xr[0]) + 40, int(xr[2]) - 40, 42):
+        for gy in range(int(xr[1]) + 40, int(xr[3]) - 40, 42):
+            tx = gx + rng_tr.uniform(-14.0, 14.0)
+            ty = gy + rng_tr.uniform(-14.0, 14.0)
+            if math.hypot(tx - XIANGJIADANG_PARK_POS[0], ty - XIANGJIADANG_PARK_POS[1]) < 85.0:
+                continue
+            if rng_tr.random() < 0.68:
+                trees.append((tx, ty))
 
     # Deduplicate lamps, crosswalks, and clearance-check trees
     seen_l, d_lamps = set(), []
@@ -1736,6 +2082,8 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
 def build_t1_starter_network(nodes_list, edges_list):
     adj = defaultdict(list)
     for e in edges_list:
+        if e.get("underground"):
+            continue
         adj[e["a"]].append((e["b"], e["id"], float(e["length"])))
         adj[e["b"]].append((e["a"], e["id"], float(e["length"])))
 
@@ -1913,11 +2261,13 @@ def main():
         ys = [p[1] for p in pp]
         park_grid.add(pp, min(xs), min(ys), max(xs), max(ys))
 
-    graph_nodes, graph_edges = build_street_graph(nodes, ways, water_grid)
+    graph_nodes, graph_edges = build_street_graph(nodes, ways, water_grid, park_grid, rail_grid)
     rail_crossings = build_rail_crossings(graph_edges, railways)
 
     road_grid = Grid(45.0)
     for e in graph_edges:
+        if e.get("underground"):
+            continue
         pts = e["pts"]
         hw = float(e["width"]) * 0.5
         for k in range(len(pts) - 1):
@@ -2012,6 +2362,108 @@ def main():
         {"name": "华府八佰伴", "sub": "YAOHAN PLAZA", "pos": rnd((-2006.0, 2288.0)), "angle": 0.0, "color": [0.14, 0.22, 0.38]},
     ]
 
+    # Extract real OSM scenic park walkways & historic old-town alleys (南湖景区步道 / 月河青石板老街 / 湘家荡生态绿道)
+    def pt_in_water_m(x, y, margin=0.0):
+        pts_chk = [(x, y)]
+        if margin > 0.1:
+            for ka in range(8):
+                a_rad = ka * math.pi / 4.0
+                pts_chk.append((x + math.cos(a_rad) * margin, y + math.sin(a_rad) * margin))
+        for px, py in pts_chk:
+            for wp in water_grid.query(px - 2, py - 2, px + 2, py + 2):
+                if point_in_poly(px, py, wp):
+                    return True
+        return False
+
+    scenic_paths = []
+    for wid, (refs, t) in ways.items():
+        hw = t.get("highway", "")
+        if hw not in ("footway", "path", "pedestrian", "cycleway", "steps"):
+            continue
+        if t.get("tunnel") in ("yes", "building_passage") or str(t.get("layer", "0")).startswith("-"):
+            continue
+        fpts = [nodes[r] for r in refs if r in nodes]
+        if len(fpts) < 2:
+            continue
+        fc = centroid(fpts)
+        in_nanhu = (-540.0 <= fc[0] <= 1020.0 and -560.0 <= fc[1] <= 980.0)
+        in_yuehe = (-900.0 <= fc[0] <= -380.0 and -2270.0 <= fc[1] <= -1850.0)
+        in_xj = in_rect(fc, XIANGJIADANG_RECT)
+        in_zicheng = math.hypot(fc[0] - ZICHENG_POS[0], fc[1] - ZICHENG_POS[1]) < 160.0
+        in_cp = math.hypot(fc[0] - CENTRAL_PARK_POS[0], fc[1] - CENTRAL_PARK_POS[1]) < 320.0
+        if not (in_nanhu or in_yuehe or in_xj or in_zicheng or in_cp):
+            continue
+        is_br = bool(t.get("bridge")) and t.get("bridge") != "no"
+        kind_p = "timber" if (is_br or in_xj) else ("greenway" if hw == "cycleway" else "stone")
+        w_p = 4.2 if (in_yuehe and hw == "pedestrian") else (3.4 if hw == "cycleway" else 2.8)
+        scenic_paths.append({"kind": kind_p, "w": w_p, "pts": [rnd(p) for p in fpts]})
+
+    # Add curated Nanhu Scenic Area west-peninsula (揽秀园/壕股塔院) walkways & Xiangjiadang Wetland Park lakeside loops!
+    curated_paths = [
+        # Haogu Pagoda & Lanxiu Garden waterfront promenade & cross trails (strictly on dry west peninsula!)
+        ("stone", 3.4, [(-280, -320), (-210, -230), (-158, -162), (-105, -108)]),
+        ("stone", 3.0, [(-340, -180), (-240, -175), (-158, -162), (-75, -180), (-40, -280)]),
+        ("timber", 3.2, [(-290, -110), (-210, -90), (-135, -95), (-65, -115), (-35, -205), (-25, -310)]),
+        ("greenway", 3.6, [(-420, -260), (-330, -120), (-260, -10), (-220, 120), (-180, 240)]),
+        # Nanhu South & East Scenic Park promenade linking Main Gate -> Huijingyuan -> Nanhu Tiandi
+        ("greenway", 3.8, [(862, 500), (848, 320), (835, 160), (830, 56), (822, -140), (798, -347)]),
+        ("stone", 3.2, [(862, 500), (680, 460), (540, 440), (410, 470)]),
+        # Xiangjiadang Wetland Park lush dry-shore circular walking trails & lakefront greenway!
+        ("greenway", 4.0, [(4520, -5620), (4640, -5420), (4710, -5180), (4700, -4920), (4640, -4680), (4820, -4480)]),
+        ("stone", 3.2, [(4710, -5180), (4560, -5180), (4560, -4960), (4700, -4920)]),
+        ("timber", 3.4, [(4820, -4480), (5180, -4380), (5620, -4380), (6100, -4420), (6420, -4720), (6440, -5280), (6360, -5920)]),
+        ("greenway", 3.8, [(4640, -5420), (4760, -5920), (5060, -6340), (5580, -6380), (6120, -6320), (6360, -5920)]),
+    ]
+    for kind_c, w_c, cpts in curated_paths:
+        scenic_paths.append({"kind": kind_c, "w": w_c, "pts": [rnd(p) for p in cpts]})
+
+    # Curated Jiangnan Lakeside Scenic Gazebos (verified strictly on dry land!)
+    gazebo_cands = [
+        (-215.0, -120.0),  # 揽秀园望塔亭
+        (-85.0, -250.0),   # 壕股北岸亭
+        (-265.0, -245.0),  # 伍相祠园亭
+        (680.0, 430.0),    # 南湖东南观湖亭
+        (780.0, 260.0),    # 会景园南亭
+        (4660.0, -5440.0), # 湘家荡西岸亭
+        (4680.0, -4820.0), # 湘家荡北林亭
+        (5320.0, -4360.0), # 湘家荡望湖亭
+        (6410.0, -5120.0), # 湘家荡东湿地亭
+        (5560.0, -6370.0), # 湘家荡南荷风亭
+    ]
+    scenic_pavilions = [{"pos": rnd(p)} for p in gazebo_cands if not pt_in_water_m(p[0], p[1], 5.5)]
+
+    # Programmatically verify Yuehe Entrance Archway (dry), Opera Stage (dry), and Wupeng Boats (strictly ON canal water!)
+    yh_arch_pos = YUEHE_POS
+    if pt_in_water_m(yh_arch_pos[0], yh_arch_pos[1], 6.0):
+        for dx_a in range(-60, 65, 10):
+            for dy_a in range(-40, 45, 10):
+                cand = (YUEHE_POS[0] + dx_a, YUEHE_POS[1] + dy_a)
+                if not pt_in_water_m(cand[0], cand[1], 7.0):
+                    yh_arch_pos = cand
+                    break
+            else:
+                continue
+            break
+    yh_opera_pos = (-680.0, -2060.0)
+    for op_cand in [(-700.0, -2060.0), (-560.0, -2000.0), (-740.0, -2140.0), (-640.0, -2180.0)]:
+        if not pt_in_water_m(op_cand[0], op_cand[1], 7.0):
+            yh_opera_pos = op_cand
+            break
+    yh_boats = []
+    for bx, by, bang in [
+        (-610.0, -2060.0, 0.25),
+        (-520.0, -2135.0, -0.30),
+        (-660.0, -2000.0, 0.65),
+        (-540.0, -1975.0, -0.55),
+        (-730.0, -1955.0, 0.40),
+        (-580.0, -2125.0, 0.12),
+    ]:
+        if pt_in_water_m(bx, by, 1.5):
+            yh_boats.append({"pos": rnd((bx, by)), "angle": bang})
+
+    print(f"Scenic features: {len(scenic_paths)} park walkways, {len(scenic_pavilions)} lakeside pavilions, "
+          f"{len(yh_boats)} Yuehe canal boats, arch={rnd(yh_arch_pos)}, opera={rnd(yh_opera_pos)}")
+
     landmarks = {
         "jiaxing_south_station": {"pos": rnd(SOUTH_STA_POS), "angle": round(hsr_angle, 4)},
         "yanyu_tower": {"pos": rnd(YANYU_POS), "island_pts": island_pts},
@@ -2022,7 +2474,16 @@ def main():
         "nanhu_memorial": {"pos": rnd(MEMORIAL_POS), "angle": 0.08},
         "jiaxing_gov": {"pos": rnd(GOV_POS), "angle": 0.04},
         "jiaxing_no1_school": {"pos": rnd(JIAXING_NO1_POS), "angle": 0.02},
-        "yuehe_quarter": {"pos": rnd(YUEHE_POS), "angle": 0.14, "bridges": yuehe_bridges},
+        "yuehe_quarter": {
+            "pos": rnd(yh_arch_pos),
+            "arch_pos": rnd(yh_arch_pos),
+            "opera_pos": rnd(yh_opera_pos),
+            "angle": 0.14,
+            "bridges": yuehe_bridges,
+            "boats": yh_boats,
+        },
+        "scenic_paths": scenic_paths,
+        "scenic_pavilions": scenic_pavilions,
         "zicheng_park": {"pos": rnd(ZICHENG_POS), "angle": 0.05},
         "catholic_church": {"pos": rnd(CATHOLIC_CHURCH_POS), "angle": 0.06},
         "first_hospital": {"pos": rnd(FIRST_HOSPITAL_POS), "angle": 0.03},
@@ -2035,7 +2496,7 @@ def main():
         "hilton_hotel": {"pos": rnd(HILTON_POS), "angle": 0.08},
         "wanda_nanhu": {"pos": rnd(WANDA_NANHU_POS), "angle": 0.06},
         "sams_club": {"pos": rnd(SAMS_CLUB_POS), "angle": 0.05},
-        "xiangjiadang_park": {"pos": rnd(XIANGJIADANG_PARK_POS), "angle": 0.12},
+        "xiangjiadang_park": {"pos": rnd(XIANGJIADANG_PARK_POS), "angle": 0.0},
         "jiaxing_airport": {
             "pos": rnd(AIRPORT_TERM_POS),
             "angle": round(rwy_angle, 4),

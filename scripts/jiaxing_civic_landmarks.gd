@@ -30,7 +30,7 @@ static func build(root: Node3D, lm: Dictionary, lights: Array) -> void:
 		_jiaxing_no1_school(root, _p(s["pos"]), float(s.get("angle", 0.0)), lights)
 	if lm.has("yuehe_quarter"):
 		var y: Dictionary = lm["yuehe_quarter"]
-		_yuehe_quarter(root, _p(y["pos"]), float(y.get("angle", 0.14)), lights)
+		_yuehe_quarter(root, y, lights)
 	if lm.has("zicheng_park"):
 		var z: Dictionary = lm["zicheng_park"]
 		_zicheng_park(root, _p(z["pos"]), float(z.get("angle", 0.05)), lights)
@@ -40,6 +40,10 @@ static func build(root: Node3D, lm: Dictionary, lights: Array) -> void:
 	if lm.has("jiaxing_airport"):
 		_jiaxing_airport(root, lm["jiaxing_airport"], lights)
 	JiaxingUrbanLandmarks.build(root, lm, lights)
+	var spaths: Array = lm.get("scenic_paths", [])
+	var spavs: Array = lm.get("scenic_pavilions", [])
+	if not spaths.is_empty() or not spavs.is_empty():
+		_build_scenic_paths_and_pavilions(root, spaths, spavs)
 	for cs in lm.get("commercial_signs", []):
 		if cs is Dictionary:
 			_commercial_signboard(root, cs)
@@ -389,81 +393,180 @@ static func _jiaxing_no1_school(parent: Node3D, center: Vector3, angle: float, l
 
 
 # =============================================================================================
-# 6. 月河历史街区 (Yuehe Historic Quarter — Jiangnan Horse-Head Walls, Archway & Lanterns)
+# 6. 月河历史街区 (Yuehe Historic Quarter — Dry-Land Archway, Opera Stage & Canal Wupeng Boats)
+#    All Yuehe Jiangnan heritage houses are generated in build_jiaxing_map.py strictly on dry land
+#    around the real OSM canals & 14 stone arch bridges so ZERO houses ever sit on water!
 # =============================================================================================
-static func _yuehe_quarter(parent: Node3D, center: Vector3, angle: float, lights: Array) -> void:
+static func _yuehe_quarter(parent: Node3D, data: Dictionary, lights: Array) -> void:
 	var yh := Node3D.new()
 	yh.name = "YueheHistoricQuarter"
-	yh.position = center
-	yh.rotation.y = angle
+	yh.position = Vector3.ZERO
 	parent.add_child(yh)
 
-	var plaster := _mat(Color(0.93, 0.91, 0.86), 0.82)
 	var wood_dark := _mat(Color(0.28, 0.17, 0.12), 0.66)
+	var wood_red := _mat(Color(0.56, 0.16, 0.12), 0.56)
 	var tile_dark := _mat(Color(0.19, 0.21, 0.25), 0.60, 0.08)
-	var stone := _mat(Color(0.68, 0.67, 0.64), 0.82)
+	var stone := _mat(Color(0.72, 0.71, 0.67), 0.80)
 	var lantern := _emissive(Color(1.0, 0.32, 0.16), 2.2)
-	var warm_win := _emissive(Color(1.0, 0.82, 0.48), 1.1)
 
-	# --- A. Iconic Jiangnan Timber & Tile Entrance Archway ("月河历史街区" 牌坊) ---
-	var arch_z := 58.0
+	# --- A. Iconic Jiangnan Timber & Tile Entrance Archway ("月河历史街区" 牌坊) on verified dry land ---
+	var arch_pos := _p(data.get("arch_pos", data["pos"]))
+	var arch_ang := float(data.get("angle", 0.14))
+	var arch := Node3D.new()
+	arch.name = "YueheEntranceArchway"
+	arch.position = arch_pos
+	arch.rotation.y = arch_ang
+	yh.add_child(arch)
 	for ax: float in [-8.5, -4.2, 4.2, 8.5]:
-		_box(yh, Vector3(0.65, 8.4, 0.65), Vector3(ax, 4.2, arch_z), wood_dark)
-		_box(yh, Vector3(1.15, 1.2, 1.15), Vector3(ax, 0.6, arch_z), stone)
-	_box(yh, Vector3(19.0, 0.9, 1.1), Vector3(0.0, 7.6, arch_z), wood_dark)
-	_box(yh, Vector3(11.0, 1.5, 3.2), Vector3(0.0, 9.6, arch_z), tile_dark)
+		_box(arch, Vector3(0.65, 8.4, 0.65), Vector3(ax, 4.2, 0.0), wood_dark)
+		_box(arch, Vector3(1.15, 1.2, 1.15), Vector3(ax, 0.6, 0.0), stone)
+	_box(arch, Vector3(19.0, 0.9, 1.1), Vector3(0.0, 7.6, 0.0), wood_dark)
+	_box(arch, Vector3(11.0, 1.5, 3.2), Vector3(0.0, 9.6, 0.0), tile_dark)
 	for ax: float in [-6.4, 6.4]:
-		_box(yh, Vector3(6.8, 1.2, 2.6), Vector3(ax, 8.2, arch_z), tile_dark)
-	_sign(yh, "月 河 历 史 街 区", Vector3(0.0, 8.1, arch_z + 0.7), 0.0, 66, 0.022, Color(0.98, 0.84, 0.34))
+		_box(arch, Vector3(6.8, 1.2, 2.6), Vector3(ax, 8.2, 0.0), tile_dark)
+	for lx: float in [-6.4, -2.0, 2.0, 6.4]:
+		_cyl(arch, 0.30, 0.26, 0.64, Vector3(lx, 6.6, 0.65), lantern, 8)
+	_sign(arch, "月 河 历 史 街 区", Vector3(0.0, 8.1, 0.7), 0.0, 66, 0.022, Color(0.98, 0.84, 0.34))
+	_sign(arch, "月 河 历 史 街 区", Vector3(0.0, 8.1, -0.7), PI, 66, 0.022, Color(0.98, 0.84, 0.34))
+	_add_light(arch, Vector3(0.0, 8.0, 3.0), Color(1.0, 0.72, 0.38), 58.0, lights)
 
-	# --- B. Expanded Cross-Axis Jiangnan Old Town Streets (中基路 + 小猪廊下 + 荷花池花鸟街, 26 Heritage Houses!) ---
-	_box(yh, Vector3(9.2, 0.06, 134.0), Vector3(0.0, 0.03, 0.0), stone, 0.0, 0.0, 0.0, false)
-	_box(yh, Vector3(144.0, 0.06, 8.4), Vector3(0.0, 0.03, -8.0), stone, 0.0, 0.0, 0.0, false)
-	# North-South main pedestrian old street (14 houses with stepped horse-head walls + lanterns)
-	for ri in range(7):
-		var hz := -50.0 + float(ri) * 16.0
-		if absf(hz + 8.0) < 9.0:
-			continue # leave clean cross-alley junction!
-		for side: float in [-1.0, 1.0]:
-			var hx := side * 14.5
-			var hh := 7.2 if (ri % 2 == 0) else 8.4
-			var hw := 14.0
-			var hd := 12.0
-			_box(yh, Vector3(hw, hh, hd), Vector3(hx, hh * 0.5, hz), plaster)
-			_box(yh, Vector3(0.45, 3.4, hd - 1.2), Vector3(hx - side * (hw * 0.5 + 0.15), 1.7, hz), wood_dark)
-			_box(yh, Vector3(0.25, 1.8, hd - 3.0), Vector3(hx - side * (hw * 0.5 + 0.25), 1.9, hz), warm_win, 0.0, 0.0, 0.0, false)
-			_box(yh, Vector3(hw * 0.62, 0.45, hd + 0.8), Vector3(hx - hw * 0.22, hh + 1.35, hz), tile_dark, 0.0, 0.42)
-			_box(yh, Vector3(hw * 0.62, 0.45, hd + 0.8), Vector3(hx + hw * 0.22, hh + 1.35, hz), tile_dark, 0.0, -0.42)
-			for gz: float in [-hd * 0.5 - 0.15, hd * 0.5 + 0.15]:
-				_box(yh, Vector3(hw + 0.4, hh + 1.1, 0.42), Vector3(hx, (hh + 1.1) * 0.5, hz + gz), plaster)
-				_box(yh, Vector3(hw * 0.58, 1.8, 0.46), Vector3(hx, hh + 1.9, hz + gz), plaster)
-				_box(yh, Vector3(hw * 0.64, 0.35, 0.85), Vector3(hx, hh + 2.85, hz + gz), tile_dark)
-			_box(yh, Vector3(2.4, 0.28, hd + 0.4), Vector3(hx - side * (hw * 0.5 + 1.1), 3.7, hz), tile_dark, 0.0, side * 0.26)
-			_cyl(yh, 0.32, 0.28, 0.68, Vector3(hx - side * (hw * 0.5 + 1.8), 3.1, hz), lantern, 8)
-	# East-West canal-side old street (花鸟市场 / 小猪廊下 — 12 waterfront heritage shopfronts + timber veranda!)
-	for ei in range(-3, 4):
-		if ei == 0:
+	# --- B. Waterside Historic Opera Stage Pavilion (月河古戏台) on verified dry bank ---
+	if data.has("opera_pos"):
+		var op_pos := _p(data["opera_pos"])
+		var op := Node3D.new()
+		op.name = "YueheOperaStage"
+		op.position = op_pos
+		op.rotation.y = arch_ang
+		yh.add_child(op)
+		_box(op, Vector3(13.0, 0.9, 10.6), Vector3(0.0, 0.45, 0.0), stone)
+		for cx: float in [-5.2, 5.2]:
+			for cz: float in [-4.0, 4.0]:
+				_cyl(op, 0.20, 0.22, 4.6, Vector3(cx, 3.2, cz), wood_red, 8)
+		_box(op, Vector3(11.6, 4.4, 1.4), Vector3(0.0, 3.1, -4.0), wood_dark)
+		_box(op, Vector3(14.6, 1.5, 12.2), Vector3(0.0, 6.2, 0.0), tile_dark)
+		_box(op, Vector3(10.0, 0.9, 7.6), Vector3(0.0, 7.2, 0.0), tile_dark)
+		_sign(op, "月 河 古 戏 台", Vector3(0.0, 5.3, 4.8), 0.0, 48, 0.018, Color(0.98, 0.84, 0.34))
+		_add_light(op, Vector3(0.0, 6.5, 4.0), Color(1.0, 0.76, 0.42), 48.0, lights)
+
+	# --- C. Classic Jiangnan Wupeng Boats (乌篷船) floating strictly inside verified real OSM canal water! ---
+	var boats: Array = data.get("boats", [])
+	for bd in boats:
+		if not (bd is Dictionary):
 			continue
-		var hx2 := float(ei) * 19.5
-		for side2: float in [-1.0, 1.0]:
-			var hz2 := -8.0 + side2 * 13.5
-			var hh2 := 6.8 if (absi(ei) % 2 == 0) else 7.8
-			_box(yh, Vector3(14.5, hh2, 11.5), Vector3(hx2, hh2 * 0.5, hz2), plaster)
-			_box(yh, Vector3(13.2, 3.2, 0.45), Vector3(hx2, 1.6, hz2 - side2 * 5.85), wood_dark)
-			_box(yh, Vector3(11.4, 1.7, 0.25), Vector3(hx2, 1.8, hz2 - side2 * 5.95), warm_win, 0.0, 0.0, 0.0, false)
-			_box(yh, Vector3(15.2, 0.45, 7.2), Vector3(hx2, hh2 + 1.25, hz2 - 2.6), tile_dark, 0.0, 0.0, 0.42)
-			_box(yh, Vector3(15.2, 0.45, 7.2), Vector3(hx2, hh2 + 1.25, hz2 + 2.6), tile_dark, 0.0, 0.0, -0.42)
-			_cyl(yh, 0.30, 0.26, 0.62, Vector3(hx2, 3.0, hz2 - side2 * 6.8), lantern, 8)
-	# Waterside Opera Stage Pavilion (月河戏台水榭) & Classic Jiangnan Wupeng Canal Boats (乌篷船)
-	_box(yh, Vector3(12.0, 0.9, 10.0), Vector3(-42.0, 0.45, 36.0), stone)
-	_box(yh, Vector3(10.5, 4.8, 8.8), Vector3(-42.0, 3.3, 36.0), wood_dark)
-	_box(yh, Vector3(13.6, 1.5, 11.6), Vector3(-42.0, 6.4, 36.0), tile_dark)
-	_sign(yh, "月 河 古 戏 台", Vector3(-42.0, 5.4, 40.8), 0.0, 48, 0.018, Color(0.98, 0.84, 0.34))
-	for b_off: Vector3 in [Vector3(38.0, 0.35, 34.0), Vector3(54.0, 0.35, 18.0), Vector3(-52.0, 0.35, -36.0)]:
-		_box(yh, Vector3(7.4, 0.7, 2.0), b_off, wood_dark, 0.35)
-		_box(yh, Vector3(4.2, 1.1, 1.7), b_off + Vector3(0.0, 0.8, 0.0), tile_dark, 0.35)
-	_add_light(yh, Vector3(0.0, 8.5, 12.0), Color(1.0, 0.72, 0.38), 64.0, lights)
-	_add_light(yh, Vector3(0.0, 8.5, -28.0), Color(1.0, 0.72, 0.38), 64.0, lights)
+		var bp := _p(bd["pos"])
+		var bang := float(bd.get("angle", 0.3))
+		var b_node := Node3D.new()
+		b_node.position = Vector3(bp.x, 0.22, bp.z)
+		b_node.rotation.y = bang
+		yh.add_child(b_node)
+		_box(b_node, Vector3(7.6, 0.68, 2.0), Vector3.ZERO, wood_dark)
+		_box(b_node, Vector3(4.4, 1.05, 1.75), Vector3(0.0, 0.75, 0.0), tile_dark)
+		_cyl(b_node, 0.16, 0.14, 0.42, Vector3(3.2, 0.85, 0.0), lantern, 6)
+
+
+# =============================================================================================
+# 6B. Batched Scenic Park Walkways & Jiangnan Lakeside Gazebos (南湖/月河/湘家荡 景区步道与景观亭)
+# =============================================================================================
+static func _build_scenic_paths_and_pavilions(parent: Node3D, paths: Array, pavilions: Array) -> void:
+	var holder := Node3D.new()
+	holder.name = "JiaxingScenicWalkways"
+	parent.add_child(holder)
+
+	var st_stone := SurfaceTool.new()
+	st_stone.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var has_stone := false
+	var st_timber := SurfaceTool.new()
+	st_timber.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var has_timber := false
+	var st_red := SurfaceTool.new()
+	st_red.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var has_red := false
+
+	for pd in paths:
+		if not (pd is Dictionary):
+			continue
+		var raw_pts: Array = pd.get("pts", [])
+		if raw_pts.size() < 2:
+			continue
+		var kind := str(pd.get("kind", "stone"))
+		var w := clampf(float(pd.get("w", 3.0)), 1.8, 6.5)
+		var st_use := st_stone
+		var y_top := 0.115
+		if kind == "timber":
+			st_use = st_timber
+			y_top = 0.16
+		elif kind == "greenway":
+			st_use = st_red
+			y_top = 0.125
+		for i in range(raw_pts.size() - 1):
+			var a := Vector2(float(raw_pts[i][0]), float(raw_pts[i][1]))
+			var b := Vector2(float(raw_pts[i + 1][0]), float(raw_pts[i + 1][1]))
+			if a.distance_squared_to(b) < 0.25:
+				continue
+			JiaxingLandmarks._st_box_along(st_use, a, b, w, 0.02, y_top)
+			if kind == "timber":
+				has_timber = true
+			elif kind == "greenway":
+				has_red = true
+			else:
+				has_stone = true
+
+	if has_stone:
+		st_stone.generate_normals()
+		var mi := MeshInstance3D.new()
+		mi.name = "ScenicStoneWalkways"
+		mi.mesh = st_stone.commit()
+		var m := _mat(Color(0.81, 0.78, 0.72), 0.84)
+		m.cull_mode = BaseMaterial3D.CULL_DISABLED
+		mi.material_override = m
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		holder.add_child(mi)
+	if has_timber:
+		st_timber.generate_normals()
+		var mi_t := MeshInstance3D.new()
+		mi_t.name = "ScenicTimberBoardwalks"
+		mi_t.mesh = st_timber.commit()
+		var m_t := _mat(Color(0.58, 0.42, 0.27), 0.78)
+		m_t.cull_mode = BaseMaterial3D.CULL_DISABLED
+		mi_t.material_override = m_t
+		mi_t.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		holder.add_child(mi_t)
+	if has_red:
+		st_red.generate_normals()
+		var mi_r := MeshInstance3D.new()
+		mi_r.name = "ScenicGreenwayTrails"
+		mi_r.mesh = st_red.commit()
+		var m_r := _mat(Color(0.70, 0.34, 0.26), 0.82)
+		m_r.cull_mode = BaseMaterial3D.CULL_DISABLED
+		mi_r.material_override = m_r
+		mi_r.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		holder.add_child(mi_r)
+
+	# Traditional Jiangnan Hexagonal Park Gazebos (景观凉亭) placed at verified dry lakeside viewpoints!
+	if not pavilions.is_empty():
+		var stone_p := _mat(Color(0.82, 0.80, 0.76), 0.78)
+		var wood_red := _mat(Color(0.54, 0.16, 0.12), 0.56)
+		var tile_p := _mat(Color(0.20, 0.22, 0.26), 0.58, 0.08)
+		var gold_p := _mat(Color(0.90, 0.74, 0.24), 0.30, 0.65)
+		var trunk_p := _mat(Color(0.32, 0.24, 0.17), 0.88)
+		var leaf_p := _mat(Color(0.22, 0.48, 0.22), 0.82)
+		for pv in pavilions:
+			if not (pv is Dictionary):
+				continue
+			var pos := _p(pv["pos"])
+			var gn := Node3D.new()
+			gn.position = pos
+			holder.add_child(gn)
+			_cyl(gn, 4.2, 4.6, 0.75, Vector3(0.0, 0.38, 0.0), stone_p, 6)
+			for ka in range(6):
+				var a := float(ka) * TAU / 6.0
+				_cyl(gn, 0.15, 0.17, 3.6, Vector3(cos(a) * 3.1, 2.55, sin(a) * 3.1), wood_red, 6)
+			_cyl(gn, 0.55, 5.4, 2.2, Vector3(0.0, 5.2, 0.0), tile_p, 6)
+			_cyl(gn, 0.10, 0.24, 0.85, Vector3(0.0, 6.6, 0.0), gold_p, 6)
+			# Pair of ornamental lakeside trees framing the gazebo
+			for side_t: float in [-1.0, 1.0]:
+				_cyl(gn, 0.20, 0.28, 3.2, Vector3(side_t * 7.8, 1.6, -4.5), trunk_p, 6)
+				_cyl(gn, 1.8, 3.2, 3.8, Vector3(side_t * 7.8, 4.4, -4.5), leaf_p, 8)
 
 
 # =============================================================================================
