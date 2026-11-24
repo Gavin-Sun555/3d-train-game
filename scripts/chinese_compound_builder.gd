@@ -38,6 +38,11 @@ const PALETTES := [
 ]
 
 
+const CELL := 320.0
+const BASE_RANGE := 1900.0
+const DETAIL_RANGE := 520.0
+
+
 static func build(parent: Node3D, compounds: Array, _lights: Array) -> void:
 	if compounds.is_empty():
 		return
@@ -45,8 +50,19 @@ static func build(parent: Node3D, compounds: Array, _lights: Array) -> void:
 	grp.name = "ChineseGatedCompounds"
 	parent.add_child(grp)
 
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	# Batched per 320 m cell, split into a plinth/coping layer that reads from afar and a fine layer (railings,
+	# pickets, pilasters, hedges, gatehouses) that only draws near the camera: one map-wide mesh of several
+	# million triangles used to be drawn (and frustum-tested) as a whole every frame
+	var cells := {} # Vector2i -> [SurfaceTool base, SurfaceTool detail]
+	var cell_of := func(p: Vector3) -> Array:
+		var ck := Vector2i(floori(p.x / CELL), floori(p.z / CELL))
+		if not cells.has(ck):
+			var sb := SurfaceTool.new()
+			sb.begin(Mesh.PRIMITIVE_TRIANGLES)
+			var sd := SurfaceTool.new()
+			sd.begin(Mesh.PRIMITIVE_TRIANGLES)
+			cells[ck] = [sb, sd]
+		return cells[ck]
 
 	var signs := Node3D.new()
 	signs.name = "CompoundGateSigns"
@@ -78,10 +94,13 @@ static func build(parent: Node3D, compounds: Array, _lights: Array) -> void:
 				continue
 			var U := d / L
 			var N := Vector3(-U.z, 0.0, U.x)
+			var cell: Array = cell_of.call(o + d * 0.5)
+			var st: SurfaceTool = cell[0]
 
 			# Continuous stone plinth & coping cap
 			_lbox(st, o, U, N, 0.0, L, 0.0, 0.88, -0.17, 0.17, plinth_c)
 			_lbox(st, o, U, N, 0.0, L, 0.88, 0.98, -0.21, 0.21, cap_c)
+			st = cell[1]
 			# Upper & lower horizontal wrought-iron fence rails
 			_lbox(st, o, U, N, 0.0, L, 1.08, 1.15, -0.05, 0.05, iron_c)
 			_lbox(st, o, U, N, 0.0, L, 2.08, 2.16, -0.05, 0.05, iron_c)
@@ -111,20 +130,28 @@ static func build(parent: Node3D, compounds: Array, _lights: Array) -> void:
 		# Local frame matching gate_angle: +N faces outward toward street, +U spans along the gate width
 		var gN := Vector3(sin(ang), 0.0, cos(ang)).normalized()
 		var gU := Vector3(gN.z, 0.0, -gN.x).normalized()
-		_build_gatehouse(st, signs, go, gU, gN, str(comp.get("name", "嘉兴花园")), pal, style_i)
+		_build_gatehouse((cell_of.call(go) as Array)[1], signs, go, gU, gN, str(comp.get("name", "嘉兴花园")), pal, style_i)
 		gate_count += 1
 
-	var mi := MeshInstance3D.new()
-	mi.name = "CompoundWallsAndGates"
-	mi.mesh = Terrain.commit_draped(st, mi)
 	var mat := StandardMaterial3D.new()
 	mat.vertex_color_use_as_albedo = true
 	mat.roughness = 0.72
 	mat.metallic = 0.08
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mi.material_override = mat
-	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	grp.add_child(mi)
+	for ck: Vector2i in cells.keys():
+		for li in range(2):
+			var mi := MeshInstance3D.new()
+			mi.name = "CompoundWallsAndGates" if li == 0 else "CompoundWallDetail"
+			mi.mesh = Terrain.commit_draped(cells[ck][li], mi)
+			if mi.mesh == null or mi.mesh.get_surface_count() == 0:
+				mi.free()
+				continue
+			mi.material_override = mat
+			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			mi.visibility_range_end = BASE_RANGE if li == 0 else DETAIL_RANGE
+			mi.visibility_range_end_margin = 40.0
+			mi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+			grp.add_child(mi)
 
 
 static func _build_gatehouse(

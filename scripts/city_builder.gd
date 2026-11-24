@@ -2751,13 +2751,9 @@ static func _build_bike_lane_strips(
 	parent: Node3D, roads: Array, emit_n: int,
 	bays: Array, clear_idx: Dictionary, has_tracks: bool
 ) -> void:
-	var bike_st := SurfaceTool.new()
-	bike_st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var line_st := SurfaceTool.new()
 	line_st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var has_bike := false
 	var has_line := false
-	var yb := ROAD_Y + 0.011
 	var ym := ROAD_Y + 0.016
 
 	for ri in range(mini(emit_n, roads.size())):
@@ -2855,17 +2851,6 @@ static func _build_bike_lane_strips(
 					continue
 				if samp_p[k].distance_to(samp_p[k + 1]) < 0.05:
 					continue
-				var qa_in := samp_p[k] + samp_n[k] * (bside * sm_in[k])
-				var qb_in := samp_p[k + 1] + samp_n[k + 1] * (bside * sm_in[k + 1])
-				var qa_out := samp_p[k] + samp_n[k] * (bside * (hw - 0.14))
-				var qb_out := samp_p[k + 1] + samp_n[k + 1] * (bside * (hw - 0.14))
-				if bside > 0.0:
-					_add_flat_quad(bike_st, Vector3(qa_in.x, yb, qa_in.y), Vector3(qa_out.x, yb, qa_out.y),
-						Vector3(qb_out.x, yb, qb_out.y), Vector3(qb_in.x, yb, qb_in.y), Vector3.UP)
-				else:
-					_add_flat_quad(bike_st, Vector3(qa_out.x, yb, qa_out.y), Vector3(qa_in.x, yb, qa_in.y),
-						Vector3(qb_in.x, yb, qb_in.y), Vector3(qb_out.x, yb, qb_out.y), Vector3.UP)
-				has_bike = true
 				# solid white divider along the (possibly narrowed) inner edge
 				var la := samp_p[k] + samp_n[k] * (bside * (sm_in[k] - 0.08))
 				var lb := samp_p[k + 1] + samp_n[k + 1] * (bside * (sm_in[k + 1] - 0.08))
@@ -2875,17 +2860,7 @@ static func _build_bike_lane_strips(
 					Vector3(lb.x + ln_b.x, ym, lb.y + ln_b.y), Vector3(lb.x - ln_b.x, ym, lb.y - ln_b.y), Vector3.UP)
 				has_line = true
 
-	if has_bike:
-		var b_mi := MeshInstance3D.new()
-		b_mi.name = "BikeLaneStrips"
-		b_mi.mesh = Terrain.commit_draped(bike_st, b_mi)
-		var b_mat := ShaderMaterial.new()
-		b_mat.shader = load("res://shaders/road_marking.gdshader") as Shader
-		b_mat.set_shader_parameter("paint_col", Color(0.18, 0.42, 0.34))
-		b_mat.set_shader_parameter("rough_val", 0.88)
-		b_mi.material_override = b_mat
-		b_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		parent.add_child(b_mi)
+	# The non-motorised lane is plain asphalt like the motor lanes (no coloured surfacing); only its divider line is painted
 	if has_line:
 		var l_mi := MeshInstance3D.new()
 		l_mi.name = "BikeLaneLines"

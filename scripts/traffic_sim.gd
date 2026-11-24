@@ -2091,10 +2091,16 @@ static func lane_base_offset(graph: NetworkGraph, eid: int, dir: float, lane_k: 
 	if other == 0:
 		# One-way street: lanes spread across the carriageway, shifted left as a block if the kerb-side lane
 		# would reach the non-motorised lane
-		var off1 := -float(n) * LANE_W * 0.5 + (float(k) + 0.5) * LANE_W
-		var right_most := -float(n) * LANE_W * 0.5 + (float(n) - 0.5) * LANE_W
+		# Both kerbs of a one-way street carry the non-motorised lane, so the left bound is capped like the right
+		# one and the lanes narrow (never below a car plus a small gap) when they would not otherwise fit
+		var left_lim := minf(maxf(1.4, w * 0.5 - 1.1), bike_cap)
+		var lw := LANE_W
+		if n > 1:
+			lw = clampf((left_lim + max_off) / float(n - 1), 2.4, LANE_W)
+		var off1 := -float(n) * lw * 0.5 + (float(k) + 0.5) * lw
+		var right_most := -float(n) * lw * 0.5 + (float(n) - 0.5) * lw
 		var sh1 := maxf(0.0, right_most - max_off)
-		return clampf(off1 - sh1, -maxf(1.4, w * 0.5 - 1.1), max_off)
+		return clampf(off1 - sh1, -left_lim, max_off)
 	if n == 1 and k == 0:
 		return minf(_safe_motor_lane_offset(graph, eid), maxf(1.4, max_off))
 	var median := 0.8 if n + other >= 4 else 0.0

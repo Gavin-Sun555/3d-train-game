@@ -198,6 +198,10 @@ const GROCERY := ["convenience", "supermarket", "pharmacy", "chemist", "grocery"
 const OFFICE := ["bank", "hotel", "optician", "hairdresser", "beauty", "tattoo", "dry_cleaning", "storage_rental", "telecommunication", "mobile_phone", "ticket"]
 
 
+const CELL := 200.0
+const FRAME_RANGE := 420.0 # mullions, awnings, signs' boxes
+const GLASS_RANGE := 650.0 # lit shop windows read further at night
+
 static var _frame_mat_cache: StandardMaterial3D = null
 static var _glass_mat_cache: ShaderMaterial = null
 
@@ -205,45 +209,62 @@ static var _glass_mat_cache: ShaderMaterial = null
 static func build_storefronts(parent: Node3D, storefronts: Array, buildings: Array) -> ShaderMaterial:
 	if storefronts.is_empty():
 		return null
-	var fst := SurfaceTool.new()
-	fst.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var gst := SurfaceTool.new()
-	gst.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var labels := Node3D.new()
 	labels.name = "StorefrontSigns"
 	if Terrain.active:
 		labels.set_meta("on_terrain", true)
 	parent.add_child(labels)
 
+	# One frame + one glazing mesh per CELL so distant blocks are culled and far ones drop out by range; a single
+	# map-wide mesh (1.7M triangles on the Jiaxing core) was otherwise drawn whole whenever any shop was in view
+	var cells := {} # Vector2i -> [frame SurfaceTool, glass SurfaceTool]
 	for sf: Dictionary in storefronts:
 		var bi := int(sf.get("b", -1))
 		var bh := 12.0
 		if bi >= 0 and bi < buildings.size():
 			bh = float((buildings[bi] as Dictionary).get("h", 12.0))
-		_build_one(fst, gst, labels, sf, bh)
+		var p0a: Array = sf["p0"]
+		var ck := Vector2i(floori(float(p0a[0]) / CELL), floori(float(p0a[1]) / CELL))
+		if not cells.has(ck):
+			var a1 := SurfaceTool.new()
+			a1.begin(Mesh.PRIMITIVE_TRIANGLES)
+			var a2 := SurfaceTool.new()
+			a2.begin(Mesh.PRIMITIVE_TRIANGLES)
+			cells[ck] = [a1, a2]
+		_build_one(cells[ck][0], cells[ck][1], labels, sf, bh)
 
-	var f_mi := MeshInstance3D.new()
-	f_mi.name = "StorefrontFrames"
-	f_mi.mesh = Terrain.commit_draped(fst, f_mi)
 	if _frame_mat_cache == null:
 		_frame_mat_cache = StandardMaterial3D.new()
 		_frame_mat_cache.vertex_color_use_as_albedo = true
 		_frame_mat_cache.roughness = 0.55
 		_frame_mat_cache.metallic = 0.25
 		_frame_mat_cache.cull_mode = BaseMaterial3D.CULL_DISABLED
-	f_mi.material_override = _frame_mat_cache
-	f_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	parent.add_child(f_mi)
-
 	if _glass_mat_cache == null:
 		_glass_mat_cache = ShaderMaterial.new()
 		_glass_mat_cache.shader = load("res://shaders/shopfront_glass.gdshader") as Shader
-	var g_mi := MeshInstance3D.new()
-	g_mi.name = "StorefrontGlazing"
-	g_mi.mesh = Terrain.commit_draped(gst, g_mi)
-	g_mi.material_override = _glass_mat_cache
-	g_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	parent.add_child(g_mi)
+	var f_grp := Node3D.new()
+	f_grp.name = "StorefrontFrames"
+	parent.add_child(f_grp)
+	var g_grp := Node3D.new()
+	g_grp.name = "StorefrontGlazing"
+	parent.add_child(g_grp)
+	for ck: Vector2i in cells.keys():
+		var f_mi := MeshInstance3D.new()
+		f_mi.name = "StorefrontFrames_%d_%d" % [ck.x, ck.y]
+		f_mi.mesh = Terrain.commit_draped(cells[ck][0], f_mi)
+		f_mi.material_override = _frame_mat_cache
+		f_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		f_mi.visibility_range_end = FRAME_RANGE
+		f_mi.visibility_range_end_margin = 30.0
+		f_grp.add_child(f_mi)
+		var g_mi := MeshInstance3D.new()
+		g_mi.name = "StorefrontGlazing_%d_%d" % [ck.x, ck.y]
+		g_mi.mesh = Terrain.commit_draped(cells[ck][1], g_mi)
+		g_mi.material_override = _glass_mat_cache
+		g_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		g_mi.visibility_range_end = GLASS_RANGE
+		g_mi.visibility_range_end_margin = 40.0
+		g_grp.add_child(g_mi)
 	return _glass_mat_cache
 
 

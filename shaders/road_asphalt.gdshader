@@ -67,14 +67,14 @@ void fragment() {
 	float crack_w = abs(vnoise(xz * 0.85 + vec2(vnoise(xz * 2.2) * 1.4)) - 0.5);
 	float tar_snake = (1.0 - smoothstep(0.006, 0.020, crack_w)) * step(0.55, patch_macro);
 
-	// Realistic weathered urban asphalt (~0.21-0.27 reflectance, rich aggregate texture)
-	vec3 base_asphalt = mix(vec3(0.215, 0.213, 0.208), vec3(0.275, 0.270, 0.262), patch_macro);
+	// Dark bituminous asphalt (~0.05-0.08 albedo, slightly lighter older patches) with rich aggregate texture
+	vec3 base_asphalt = mix(vec3(0.052, 0.052, 0.055), vec3(0.076, 0.075, 0.074), patch_macro);
 	base_asphalt *= (0.88 + 0.22 * fine_agg) * (0.92 + 0.15 * med_agg) * (0.94 + 0.12 * coarse_wear);
 
 	// Slightly darker oil streak down lane center, slightly polished lighter aggregate in tire ruts
 	float oil_center = exp(-pow((abs_u - 0.54) * 9.0, 2.0));
 	base_asphalt *= (1.0 - 0.12 * oil_center + 0.06 * rut);
-	base_asphalt = mix(base_asphalt, vec3(0.11, 0.11, 0.115), tar_snake * 0.75);
+	base_asphalt = mix(base_asphalt, vec3(0.035, 0.035, 0.038), tar_snake * 0.75);
 
 	// Gutter moisture/grime AO along street curbs
 	float curb_ao = smoothstep(0.0, 0.11, 1.0 - abs_u);
@@ -90,5 +90,5 @@ void fragment() {
 	ALBEDO = base_asphalt;
 	ROUGHNESS = clamp(0.89 + 0.07 * fine_agg - 0.11 * rut - 0.22 * tar_snake, 0.58, 0.96);
 	METALLIC = 0.0;
-	SPECULAR = 0.26 + 0.12 * rut;
+	SPECULAR = 0.12 + 0.08 * rut;
 }
