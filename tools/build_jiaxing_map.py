@@ -1991,6 +1991,9 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
             r["underground"] = True
             roads.append(r)
             continue
+        # Mark Chinese urban avenues (width >= 11.5m) with dedicated Non-Motorized Bike Lanes (非机动车道 + 机非护栏)
+        if w >= 11.5:
+            r["bike_lane"] = True
         roads.append(r)
 
         p0, p1 = pts[0], pts[-1]
@@ -2104,23 +2107,50 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
             seen_t.add(c)
             d_trees.append(rnd((tx, ty)))
 
-    # Storefronts: real OSM POIs first + rich authentic Jiaxing & Chinese street-front commercial brands!
-    SHOPS_ZH = [
+    # Storefronts: real OSM POIs first + dense authentic Chinese street-front retail!
+    # Realistic two-tier mix:
+    #   1) National / Regional Chain Brands (standardized sleek corporate fascia signboards)
+    #   2) Everyday Local Chinese Street Shops (earthy vibrant red/blue/green/yellow PVC lightboxes, awnings & blade signs!)
+    CHAIN_SHOPS = [
         ("五芳斋粽子", "restaurant"), ("文虎酱鸭", "restaurant"), ("真真老老", "restaurant"),
         ("瑞幸咖啡", "cafe"), ("星巴克咖啡", "cafe"), ("霸王茶姬", "cafe"), ("喜茶", "cafe"),
-        ("蜜雪冰城", "cafe"), ("肯德基", "fast_food"), ("麦当劳", "fast_food"),
-        ("老娘舅", "fast_food"), ("外婆家", "restaurant"), ("海底捞火锅", "restaurant"),
-        ("全家便利店", "convenience"), ("罗森便利店", "convenience"), ("盒马鲜生", "supermarket"),
-        ("新华书店", "books"), ("工商银行", "bank"), ("建设银行", "bank"), ("中国银行", "bank"),
-        ("农业银行", "bank"), ("招商银行", "bank"), ("嘉兴银行", "bank"),
+        ("奈雪的茶", "cafe"), ("古茗奶茶", "cafe"), ("沪上阿姨", "cafe"), ("蜜雪冰城", "cafe"),
+        ("CoCo都可", "cafe"), ("一点点", "cafe"), ("肯德基", "fast_food"), ("麦当劳", "fast_food"),
+        ("塔斯汀汉堡", "fast_food"), ("老娘舅", "fast_food"), ("杨国福麻辣烫", "fast_food"),
+        ("绝味鸭脖", "fast_food"), ("紫燕百味鸡", "fast_food"), ("外婆家", "restaurant"),
+        ("海底捞火锅", "restaurant"), ("小菜园", "restaurant"), ("全家便利店", "convenience"),
+        ("罗森便利店", "convenience"), ("十足便利店", "convenience"), ("盒马鲜生", "supermarket"),
+        ("良品铺子", "convenience"), ("新华书店", "books"), ("名创优品", "retail"),
+        ("屈臣氏", "pharmacy"), ("工商银行", "bank"), ("建设银行", "bank"), ("中国银行", "bank"),
+        ("农业银行", "bank"), ("招商银行", "bank"), ("嘉兴银行", "bank"), ("邮政储蓄", "bank"),
         ("华为授权体验店", "mobile_phone"), ("小米之家", "mobile_phone"),
-        ("中国移动", "mobile_phone"), ("中国电信", "mobile_phone"),
-        ("老百姓大药房", "pharmacy"), ("海王星辰药房", "pharmacy"),
-        ("南湖茶楼", "cafe"), ("月河茶馆", "cafe"), ("禾城老面馆", "restaurant"),
+        ("中国移动", "mobile_phone"), ("中国电信", "mobile_phone"), ("中国联通", "mobile_phone"),
+        ("老百姓大药房", "pharmacy"), ("海王星辰药房", "pharmacy"), ("益丰大药房", "pharmacy"),
+        ("顺丰速运", "service"), ("菜鸟驿站", "service"), ("链家房产", "office"),
+        ("汉庭酒店", "hotel"), ("全季酒店", "hotel"), ("亚朵酒店", "hotel"),
+    ]
+    LOCAL_SHOPS = [
+        # Authentic earthy non-chain Chinese street shops (红底白/黄字、蓝底白字、绿底白字、黄底红字等接地气招牌!)
+        ("沙县小吃", "fast_food"), ("兰州正宗牛肉拉面", "restaurant"), ("黄焖鸡米饭", "fast_food"),
+        ("重庆小面", "fast_food"), ("东北手工水饺", "restaurant"), ("老字号肉夹馍", "fast_food"),
+        ("正新鸡排", "fast_food"), ("嘉兴阿婆粽子", "restaurant"), ("禾城早点·豆浆油条", "fast_food"),
+        ("好再来面馆", "restaurant"), ("川湘小炒家常菜", "restaurant"), ("阿强烧烤大排档", "restaurant"),
+        ("老北京炸酱面", "restaurant"), ("千里香馄饨王", "fast_food"), ("三元路臭豆腐", "fast_food"),
+        ("老王五金水电", "hardware"), ("鑫源电动车维修", "hardware"), ("雅迪电动车专卖", "hardware"),
+        ("爱玛电动车行", "hardware"), ("顺心干洗改衣", "dry_cleaning"), ("便民打印复印", "office"),
+        ("手机快修贴膜", "mobile_phone"), ("专业配钥匙开锁", "hardware"), ("兴旺烟酒副食", "convenience"),
+        ("天天鲜果超市", "greengrocer"), ("社区生鲜菜店", "greengrocer"), ("惠民粮油副食", "convenience"),
+        ("康乐大药房", "pharmacy"), ("红太阳美发造型", "hairdresser"), ("时尚剪艺理发", "hairdresser"),
+        ("光明眼镜店", "optician"), ("快捷商务宾馆", "hotel"), ("足浴养生会馆", "beauty"),
+        ("便宜实惠百货", "convenience"), ("禾兴房产中介", "office"), ("晨光文具百货", "books"),
+        ("宠物美容洗护", "service"), ("江南茶叶茶庄", "cafe"), ("老字号糕点铺", "bakery"),
     ]
     YUEHE_SHOPS = [
-        ("五芳斋粽子", "restaurant"), ("月河茶馆", "cafe"), ("文虎酱鸭", "restaurant"),
-        ("真真老老", "restaurant"), ("南湖茶楼", "cafe"), ("禾城老面馆", "restaurant"),
+        ("五芳斋粽子", "restaurant", "chain"), ("月河茶馆", "cafe", "local"),
+        ("文虎酱鸭", "restaurant", "chain"), ("真真老老", "restaurant", "chain"),
+        ("南湖茶楼", "cafe", "local"), ("禾城老面馆", "restaurant", "local"),
+        ("嘉兴阿婆粽子", "restaurant", "local"), ("三元路臭豆腐", "fast_food", "local"),
+        ("江南丝绸老铺", "clothes", "local"), ("江南茶叶茶庄", "cafe", "local"),
     ]
     rng = random.Random(20260522)
     storefronts = []
@@ -2134,16 +2164,16 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
         if not nm or len(nm) > 16:
             continue
         skind = t.get("shop") or t.get("amenity") or ""
-        if skind not in ("restaurant", "cafe", "fast_food", "bakery", "convenience", "supermarket", "bank", "pharmacy", "books", "clothes", "mall", "mobile_phone", "yes"):
+        if skind not in ("restaurant", "cafe", "fast_food", "bakery", "convenience", "supermarket", "bank", "pharmacy", "books", "clothes", "mall", "mobile_phone", "hairdresser", "hardware", "yes"):
             continue
         px, py = osm_nodes[nid]
         if not in_active((px, py)):
             continue
         best_bi = -1
-        best_d = 38.0
+        best_d = 42.0
         for bi_cand in range(len(blds)):
             b = blds[bi_cand]
-            if b["h"] < 6.0 or len(b["pts"]) < 3:
+            if b["h"] < 5.5 or len(b["pts"]) < 3:
                 continue
             bc = centroid(b["pts"])
             dd = math.hypot(bc[0] - px, bc[1] - py)
@@ -2159,16 +2189,16 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
                 continue
             a, c = poly[ei], poly[(ei + 1) % len(poly)]
             el = math.hypot(c[0] - a[0], c[1] - a[1])
-            if el < 5.5:
+            if el < 5.2:
                 continue
             nx, ny = ((c[1] - a[1]) / el, -(c[0] - a[0]) / el) if ccw else (-(c[1] - a[1]) / el, (c[0] - a[0]) / el)
             mx, my = (a[0] + c[0]) * 0.5, (a[1] + c[1]) * 0.5
             rd_min = 1e9
-            for (rax, ray, rbx, rby, hw) in road_grid.query(mx - 22, my - 22, mx + 22, my + 22):
+            for (rax, ray, rbx, rby, hw) in road_grid.query(mx - 24, my - 24, mx + 24, my + 24):
                 rd_min = min(rd_min, seg_dist(mx, my, rax, ray, rbx, rby)[0] - hw)
-            if rd_min <= 14.0:
+            if rd_min <= 16.5:
                 ux, uy = (c[0] - a[0]) / el, (c[1] - a[1]) / el
-                sw = min(7.8, el - 1.0)
+                sw = min(7.8, el - 0.8)
                 lo = (el - sw) * 0.5
                 hi = lo + sw
                 storefronts.append({
@@ -2179,90 +2209,126 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
                     "name": nm,
                     "kind": skind if skind != "yes" else "restaurant",
                     "brand": nm,
+                    "tier": "chain" if any(nm in cs[0] or cs[0] in nm for cs in CHAIN_SHOPS) else "local",
                 })
                 used_b_edges.add((best_bi, ei))
                 break
 
-    # Pass 2: High-density lively street-front retail along downtown avenues, malls, Old City & transit corridors
+    # Pass 2: High-density street-facing ground-floor retail across ALL Jiaxing avenues & neighborhoods!
+    # Prioritize street-facing buildings closest to roads (especially main avenues & T1 corridor) so NO avenue is bare!
+    b_candidates = []
     for bi, b in enumerate(blds):
-        if b["h"] < 6.0 or len(b["pts"]) < 3:
+        if b["h"] < 5.5 or len(b["pts"]) < 3:
             continue
-        if len(storefronts) >= 4400:
-            break
-        cen = centroid(b["pts"])
-        dist_center = math.hypot(cen[0] - OLD_CITY_CENTER[0], cen[1] - OLD_CITY_CENTER[1])
-        dist_nanhu = math.hypot(cen[0] - NANHU_ORIGIN[0], cen[1] - NANHU_ORIGIN[1])
-        dist_hsr = math.hypot(cen[0] - SOUTH_STA_POS[0], cen[1] - SOUTH_STA_POS[1])
-        dist_yuehe = math.hypot(cen[0] - YUEHE_POS[0], cen[1] - YUEHE_POS[1])
-        in_core_comm = min(dist_center, dist_nanhu) < 1900.0 or dist_hsr < 750.0
-        prob = 0.62 if in_core_comm else 0.36
-        if rng.random() > prob:
+        if b.get("kind") == "industrial":
             continue
         poly = b["pts"]
         ccw = poly_area(poly) > 0.0
+        best_e = None
         for ei in range(len(poly)):
             if (bi, ei) in used_b_edges:
                 continue
             a, c = poly[ei], poly[(ei + 1) % len(poly)]
             el = math.hypot(c[0] - a[0], c[1] - a[1])
-            if el < 6.0:
+            if el < 5.2:
                 continue
-            nx, ny = ((c[1] - a[1]) / el, -(c[0] - a[0]) / el) if ccw else (-(c[1] - a[1]) / el, (c[0] - a[0]) / el)
             mx, my = (a[0] + c[0]) * 0.5, (a[1] + c[1]) * 0.5
             best_d = 1e9
-            for (rax, ray, rbx, rby, hw) in road_grid.query(mx - 22, my - 22, mx + 22, my + 22):
-                best_d = min(best_d, seg_dist(mx, my, rax, ray, rbx, rby)[0] - hw)
-            if best_d <= 12.5:
-                ux, uy = (c[0] - a[0]) / el, (c[1] - a[1]) / el
-                # Wide street-facing facades get 2 adjacent shops side by side just like real Chinese commercial streets!
-                n_shops = 2 if (el >= 16.5 and in_core_comm) else 1
-                for si in range(n_shops):
-                    seg_a = (el / n_shops) * si + 0.5
-                    seg_b = (el / n_shops) * (si + 1) - 0.5
-                    sw = min(7.6, seg_b - seg_a)
-                    if sw < 4.2:
-                        continue
-                    lo = (seg_a + seg_b - sw) * 0.5
-                    hi = lo + sw
-                    sname, skind = rng.choice(YUEHE_SHOPS if dist_yuehe < 480.0 else SHOPS_ZH)
-                    storefronts.append({
-                        "b": bi,
-                        "p0": [round(a[0] + ux * lo, 2), round(a[1] + uy * lo, 2)],
-                        "p1": [round(a[0] + ux * hi, 2), round(a[1] + uy * hi, 2)],
-                        "n": [round(nx, 4), round(ny, 4)],
-                        "name": sname,
-                        "kind": skind,
-                        "brand": sname,
-                    })
-                used_b_edges.add((bi, ei))
-                break
+            best_hw = 5.0
+            for (rax, ray, rbx, rby, hw) in road_grid.query(mx - 26, my - 26, mx + 26, my + 26):
+                dd = seg_dist(mx, my, rax, ray, rbx, rby)[0] - hw
+                if dd < best_d:
+                    best_d = dd
+                    best_hw = hw
+            if best_d <= 16.0:
+                if best_e is None or best_d < best_e[0]:
+                    best_e = (best_d, best_hw, ei, a, c, el, ccw)
+        if best_e is not None:
+            # Sort key: wider avenues + closer facades first!
+            b_candidates.append((best_e[0] - best_e[1] * 0.65, bi, best_e))
+    b_candidates.sort(key=lambda it: it[0])
 
-    print(f"Street furniture: {len(d_cws)} crosswalks, {len(d_lamps)} lamps, {len(d_trees)} trees, {len(storefronts)} storefronts")
+    for _prio, bi, (best_d, best_hw, ei, a, c, el, ccw) in b_candidates:
+        if len(storefronts) >= 13500:
+            break
+        cen = centroid(blds[bi]["pts"])
+        dist_center = math.hypot(cen[0] - OLD_CITY_CENTER[0], cen[1] - OLD_CITY_CENTER[1])
+        dist_nanhu = math.hypot(cen[0] - NANHU_ORIGIN[0], cen[1] - NANHU_ORIGIN[1])
+        dist_hsr = math.hypot(cen[0] - SOUTH_STA_POS[0], cen[1] - SOUTH_STA_POS[1])
+        dist_yuehe = math.hypot(cen[0] - YUEHE_POS[0], cen[1] - YUEHE_POS[1])
+        in_core_comm = min(dist_center, dist_nanhu) < 2200.0 or dist_hsr < 900.0 or best_hw >= 6.0
+        prob = 0.92 if (best_hw >= 5.8 or in_core_comm) else 0.72
+        if rng.random() > prob:
+            continue
+        nx, ny = ((c[1] - a[1]) / el, -(c[0] - a[0]) / el) if ccw else (-(c[1] - a[1]) / el, (c[0] - a[0]) / el)
+        ux, uy = (c[0] - a[0]) / el, (c[1] - a[1]) / el
+        # Wide street-facing facades get 2-3 adjacent shops side by side just like real Chinese street-level 底商!
+        n_shops = 3 if (el >= 25.0 and best_hw >= 5.5) else (2 if el >= 13.5 else 1)
+        for si in range(n_shops):
+            seg_a = (el / n_shops) * si + 0.35
+            seg_b = (el / n_shops) * (si + 1) - 0.35
+            sw = min(7.4, seg_b - seg_a)
+            if sw < 3.8:
+                continue
+            lo = (seg_a + seg_b - sw) * 0.5
+            hi = lo + sw
+            if dist_yuehe < 380.0:
+                sname, skind, stier = rng.choice(YUEHE_SHOPS)
+            else:
+                # Authentic Chinese city street mix: ~42% Chains on main avenues (~28% on side streets), ~58-72% Local shops!
+                chain_p = 0.44 if (best_hw >= 6.0 or in_core_comm) else 0.28
+                if rng.random() < chain_p:
+                    sname, skind = rng.choice(CHAIN_SHOPS)
+                    stier = "chain"
+                else:
+                    sname, skind = rng.choice(LOCAL_SHOPS)
+                    stier = "local"
+            storefronts.append({
+                "b": bi,
+                "p0": [round(a[0] + ux * lo, 2), round(a[1] + uy * lo, 2)],
+                "p1": [round(a[0] + ux * hi, 2), round(a[1] + uy * hi, 2)],
+                "n": [round(nx, 4), round(ny, 4)],
+                "name": sname,
+                "kind": skind,
+                "brand": sname,
+                "tier": stier,
+            })
+        used_b_edges.add((bi, ei))
+
+    print(f"Street furniture: {len(d_cws)} crosswalks, {len(d_lamps)} lamps, {len(d_trees)} trees, {len(storefronts)} storefronts "
+          f"({sum(1 for s in storefronts if s.get('tier') == 'chain')} chain + {sum(1 for s in storefronts if s.get('tier') == 'local')} local)")
     return roads, d_cws, d_lamps, d_trees, storefronts
 
 
 # ---------------------------------------------------------------------------------------------
-# 6. Starter Demo Network: Jiaxing Tram T1 Line (嘉兴南站 -> 庆丰路 -> 长水路 -> 南湖 -> 嘉兴火车站)
+# 6. Starter Demo Network: Authentic Real-Life Jiaxing Tram T1 Phase 1 (21 Stations!)
+#    嘉兴南站 -> 庆丰路 -> 由拳路 -> 纺工路 -> 嘉兴火车站 -> 中山东路 -> 安乐路（旭辉广场）
+#    Rolling Stock: 中车长客 · 嘉兴“南湖号” 5-Module Supercapacitor 100% Low-Floor Tram
 # ---------------------------------------------------------------------------------------------
 def build_t1_starter_network(nodes_list, edges_list):
     adj = defaultdict(list)
     for e in edges_list:
         if e.get("underground"):
             continue
-        adj[e["a"]].append((e["b"], e["id"], float(e["length"])))
-        adj[e["b"]].append((e["a"], e["id"], float(e["length"])))
+        adj[e["a"]].append((e["b"], e["id"], float(e["length"]), e.get("name", "")))
+        adj[e["b"]].append((e["a"], e["id"], float(e["length"]), e.get("name", "")))
 
-    def nearest_node(lat, lon):
-        tx, ty = proj(lat, lon)
-        best_id, best_d = 0, 1e18
+    T1_AVENUE_KWS = ("庆丰路", "由拳路", "纺工路", "中山东路", "勤俭路")
+
+    def nearest_node_xy(tx, ty, prefer_kw=""):
+        best_id, best_sc = 0, 1e18
         for n in nodes_list:
+            nid = n["id"]
+            if not adj[nid]:
+                continue
             d = math.hypot(n["pos"][0] - tx, n["pos"][1] - ty)
-            if d < best_d:
-                best_d = d
-                best_id = n["id"]
+            bonus = -35.0 if (prefer_kw and any(prefer_kw in nm for _, _, _, nm in adj[nid])) else 0.0
+            if d + bonus < best_sc:
+                best_sc = d + bonus
+                best_id = nid
         return best_id
 
-    def shortest_path_edges(src, dst):
+    def shortest_path_edges(src, dst, avoid_eids):
         pq = [(0.0, src)]
         dist = {src: 0.0}
         prev = {}
@@ -2272,8 +2338,11 @@ def build_t1_starter_network(nodes_list, edges_list):
                 break
             if d > dist.get(u, 1e18):
                 continue
-            for v, eid, w in adj[u]:
-                nd = d + w
+            for v, eid, w, nm in adj[u]:
+                if eid in avoid_eids:
+                    continue
+                mult = 0.80 if any(kw in nm for kw in T1_AVENUE_KWS) else 1.0
+                nd = d + w * mult
                 if nd < dist.get(v, 1e18):
                     dist[v] = nd
                     prev[v] = (u, eid)
@@ -2289,78 +2358,120 @@ def build_t1_starter_network(nodes_list, edges_list):
         path.reverse()
         return path
 
-    # Real Jiaxing Tram T1 Corridor waypoints (嘉兴南站 -> 庆丰路 -> 长水路 -> 纺工路/南湖 -> 嘉兴火车站 -> 中山东路)
+    # All 21 authentic Phase 1 stations of Jiaxing Tram Line T1 in exact real-world sequence!
     waypoints = [
-        ("嘉兴南站", 30.6952, 120.7960),
-        ("庆丰路三环南路站", 30.7034, 120.7963),
-        ("庆丰路双溪湖站", 30.7138, 120.7963),
-        ("长水路庆丰路站", 30.7237, 120.7963),
-        ("长水路商务大道站", 30.7237, 120.7775),
-        ("嘉兴植物园站", 30.7237, 120.7650),
-        ("由拳路南湖大道站", 30.7322, 120.7555),
-        ("南湖革命纪念馆站", 30.7460, 120.7570),
-        ("南湖景区站", 30.7565, 120.7615),
-        ("嘉兴火车站", 30.7645, 120.7595),
+        ("嘉兴南站", 4181.0, 6775.0, "庆丰路"),
+        ("庆丰路百川路", 4225.0, 6460.0, "庆丰路"),
+        ("庆丰路三环南路", 4240.0, 5695.0, "庆丰路"),
+        ("庆丰路五环洞路", 4248.0, 4950.0, "庆丰路"),
+        ("庆丰路基地", 4252.0, 4297.0, "庆丰路"),
+        ("庆丰路长水路", 4242.0, 3527.0, "庆丰路"),
+        ("由拳路庆丰路", 4245.0, 2550.0, "由拳路"),
+        ("由拳路双溪路", 3193.0, 2537.0, "由拳路"),
+        ("由拳路商务大道", 2408.0, 2529.0, "由拳路"),
+        ("由拳路富润路", 1900.0, 2490.0, "由拳路"),
+        ("纺工路由拳路（中央公园）", 1420.0, 2436.0, "纺工路"),
+        ("嘉兴一中", 1433.0, 1480.0, "纺工路"),
+        ("纺工路烟雨路", 1294.0, 724.0, "纺工路"),
+        ("纺工路南溪西路（南湖湖滨）", 1191.0, 224.0, "纺工路"),
+        ("纺工路景湖路", 1141.0, -265.0, "纺工路"),
+        ("纺工路滨河路", 974.0, -867.0, "纺工路"),
+        ("嘉兴火车站", 901.0, -1357.0, ""),
+        ("人民公园", 280.0, -1100.0, "中山东路"),
+        ("中山东路建国南路（瓶山）", -265.0, -1010.0, "中山东路"),
+        ("中山东路禾兴南路", -695.0, -990.0, "中山东路"),
+        ("中山东路安乐路（旭辉广场）", -1115.0, -943.0, "中山东路"),
     ]
-    wp_nodes = [(nm, nearest_node(lat, lon)) for nm, lat, lon in waypoints]
+    wp_nodes = [(nm, nearest_node_xy(x, y, kw), x, y) for nm, x, y, kw in waypoints]
 
     track_eids = []
     seen_e = set()
     edge_by_id = {e["id"]: e for e in edges_list}
-    station_anchors = []  # (name, eid)
+    station_targets = []  # (name, ideal_x, ideal_y, hint_idx_in_track_eids)
 
     for i in range(len(wp_nodes) - 1):
-        nm_a, na = wp_nodes[i]
-        nm_b, nb = wp_nodes[i + 1]
-        seg_eids = shortest_path_edges(na, nb)
+        nm_a, na, xa, ya = wp_nodes[i]
+        nm_b, nb, xb, yb = wp_nodes[i + 1]
+        if na == nb:
+            continue
+        seg_eids = shortest_path_edges(na, nb, seen_e)
+        if not seg_eids:
+            seg_eids = shortest_path_edges(na, nb, set())
         if not seg_eids:
             continue
         if i == 0:
-            station_anchors.append((nm_a, seg_eids[0], 0.25))
+            station_targets.append((nm_a, xa, ya, 0, True))
         for eid in seg_eids:
             if eid not in seen_e:
                 seen_e.add(eid)
                 track_eids.append(eid)
-        station_anchors.append((nm_b, seg_eids[-1], 0.75 if i == len(wp_nodes) - 2 else 0.5))
+        station_targets.append((nm_b, xb, yb, len(track_eids) - 1, i == len(wp_nodes) - 2))
 
-    # Deduplicate station edges so each station sits on a distinct edge
-    used_st_e = set()
+    # Place terminal scissors crossovers (CrossoverType.DOUBLE = 2) on clean long edges near both termini FIRST
+    # so NO station ever overlaps a crossover!
+    xover_eids = set()
+    if len(track_eids) >= 8:
+        for group in (track_eids[1:6], list(reversed(track_eids[-6:-1]))):
+            for cand_eid in group:
+                if float(edge_by_id[cand_eid]["length"]) >= 62.0:
+                    xover_eids.add(cand_eid)
+                    break
+
+    # Assign each of the 21 real stations cleanly to an ordered distinct edge (or well-spaced slot on a long avenue edge!)
     stations = []
-    for nm, eid, t_pos in station_anchors:
-        if eid in used_st_e:
-            continue
-        if float(edge_by_id[eid]["length"]) < 44.0:
-            idx = track_eids.index(eid) if eid in track_eids else -1
-            alt = -1
-            for off in (1, -1, 2, -2):
-                if 0 <= idx + off < len(track_eids):
-                    cand = track_eids[idx + off]
-                    if cand not in used_st_e and float(edge_by_id[cand]["length"]) >= 44.0:
-                        alt = cand
-                        break
-            if alt < 0:
+    used_slots = defaultdict(list)  # eid -> list of t positions already placed
+    min_track_idx = 0
+    for st_i, (nm, sx, sy, hint_idx, is_term) in enumerate(station_targets):
+        # Search nearby ordered edges along track_eids for a valid non-crossover edge
+        chosen_eid = -1
+        chosen_t = 0.5
+        if st_i == 0:
+            cand_order = list(range(0, min(4, len(track_eids))))
+        elif st_i == len(station_targets) - 1:
+            cand_order = list(range(len(track_eids) - 1, max(-1, len(track_eids) - 5), -1))
+        else:
+            lo_i = max(min_track_idx, hint_idx - 2)
+            hi_i = min(len(track_eids) - 1, hint_idx + 2)
+            cand_order = sorted(range(lo_i, hi_i + 1), key=lambda k: abs(k - hint_idx))
+
+        for ti in cand_order:
+            eid = track_eids[ti]
+            if eid in xover_eids:
                 continue
-            eid = alt
-        used_st_e.add(eid)
+            elen = float(edge_by_id[eid]["length"])
+            if elen < 48.0:
+                continue
+            # Compute ideal t along this edge closest to (sx, sy)
+            pts_e = edge_by_id[eid]["pts"]
+            pa, pb = pts_e[0], pts_e[-1]
+            dx, dy = pb[0] - pa[0], pb[1] - pa[1]
+            l2 = dx * dx + dy * dy
+            t_raw = 0.5 if l2 < 1e-6 else ((sx - pa[0]) * dx + (sy - pa[1]) * dy) / l2
+            margin_t = min(0.36, 40.0 / elen)
+            t_clamped = max(margin_t, min(1.0 - margin_t, t_raw))
+            if st_i == 0:
+                t_clamped = max(margin_t, min(0.35, t_clamped))
+            elif st_i == len(station_targets) - 1:
+                t_clamped = min(1.0 - margin_t, max(0.65, t_clamped))
+            # Check spacing against any station already on this same long edge (need >= 95m apart!)
+            if all(abs(t_clamped - prev_t) * elen >= 95.0 for prev_t in used_slots[eid]):
+                chosen_eid = eid
+                chosen_t = t_clamped
+                min_track_idx = max(min_track_idx, ti)
+                break
+        if chosen_eid < 0:
+            continue
+        used_slots[chosen_eid].append(chosen_t)
         sid = len(stations) + 1
         stations.append({
             "id": sid,
-            "edge_id": eid,
-            "t": round(t_pos, 3),
+            "edge_id": chosen_eid,
+            "t": round(chosen_t, 3),
             "side": 0,
             "name": nm,
             "kind": 2,  # StationKind.ISLAND
-            "platform_len": 38.0,
+            "platform_len": 40.0,  # Fits the real 34.8m 5-module "南湖号" cleanly!
         })
-
-    # Place terminal scissors crossovers (CrossoverType.DOUBLE = 2) on edges adjacent to both termini
-    xover_eids = set()
-    if len(track_eids) >= 6:
-        for group in ([track_eids[1], track_eids[2], track_eids[3]], [track_eids[-2], track_eids[-3], track_eids[-4]]):
-            for cand_eid in group:
-                if cand_eid not in used_st_e and float(edge_by_id[cand_eid]["length"]) >= 56.0:
-                    xover_eids.add(cand_eid)
-                    break
 
     starter_tracks = []
     for eid in track_eids:
@@ -2378,22 +2489,180 @@ def build_t1_starter_network(nodes_list, edges_list):
     if len(stations) >= 3:
         starter_lines.append({
             "id": 1,
-            "name": "T1线 · 嘉兴南站—嘉兴火车站",
-            "color": [0.88, 0.22, 0.24],
-            "model_key": "crrc-haizhu",
-            "sections": 3,
-            "trams_count": 4,
+            "name": "T1线 · 嘉兴南站—安乐路",
+            "color": [0.82, 0.12, 0.15],
+            "model_key": "crrc-jiaxing-nanhu",
+            "sections": 5,
+            "trams_count": 6,
             "station_ids": [s["id"] for s in stations],
             "signal_priority": True,
         })
 
-    print(f"Starter T1 network: {len(starter_tracks)} tracked edges, {len(stations)} stations, {len(xover_eids)} crossovers")
+    print(f"Starter T1 network (Real Phase 1): {len(starter_tracks)} tracked edges, {len(stations)} stations, {len(xover_eids)} crossovers")
     return {
         "tracks": starter_tracks,
         "stations": stations,
         "lines": starter_lines,
         "global_signal_priority": False,
     }
+
+
+# ---------------------------------------------------------------------------------------------
+# 6b. Chinese Gated Residential Compounds (封闭式小区围墙、小区大门牌楼、保安亭与道闸)
+# ---------------------------------------------------------------------------------------------
+COMPOUND_NAMES_ZH = [
+    "南湖名苑", "凌公塘花园", "巴黎都市", "格林小镇", "万科金色梦想", "佳源都市",
+    "御溪半岛", "翰林府第", "景宜社区", "东栅新村", "烟雨小区", "紫阳花苑",
+    "中南樾府", "绿城留香园", "尚东名邸", "秀洲花园", "月河雅苑", "双溪华庭",
+    "庆丰新苑", "长水嘉园", "翠柳庄园", "金都景苑", "禾兴新村", "江南摩尔苑",
+    "融创望海潮", "龙湖春江天玺", "荣安府", "保利西塘越", "云海湾花园", "晴湾名苑",
+    "望湖公馆", "文贤社区", "新嘉花苑", "松鹤里小区", "梅湾花园", "中港城名邸",
+]
+
+
+def build_gated_compounds(landuse_zones, ways, nodes, road_grid, water_grid, rail_grid, bld_grid):
+    """Build authentic Chinese gated residential compound walls & street-facing gatehouses."""
+    compounds = []
+    rng = random.Random(20260530)
+
+    # Collect named OSM residential polygons first so real compound names show up!
+    res_polys = []
+    for wid, (refs, t) in ways.items():
+        if t.get("landuse") == "residential" and len(refs) >= 4 and refs[0] == refs[-1]:
+            pts = [nodes[r] for r in refs if r in nodes][:-1]
+            ring = simplify_ring(pts, 4.0)
+            if len(ring) >= 4 and abs(poly_area(ring)) >= 3600.0:
+                res_polys.append((ring, t.get("name", "")))
+    # Add remaining landuse_zones residential polygons (deduplicated by centroid)
+    seen_c = set()
+    for ring, nm in res_polys:
+        c = centroid(ring)
+        seen_c.add((int(c[0] // 80), int(c[1] // 80)))
+    for lu, ring in landuse_zones:
+        if lu != "residential":
+            continue
+        c = centroid(ring)
+        ck = (int(c[0] // 80), int(c[1] // 80))
+        if ck in seen_c or abs(poly_area(ring)) < 3600.0:
+            continue
+        seen_c.add(ck)
+        res_polys.append((simplify_ring(ring, 4.0), ""))
+
+    # Also synthesize gated compounds for the eastern residential grid blocks so eastern Jiaxing is equally authentic!
+    for ex in range(1800, 5400, 240):
+        for ey in range(-3600, 3400, 240):
+            cx, cy = ex + 120.0, ey + 120.0
+            ck = (int(cx // 80), int(cy // 80))
+            if ck in seen_c or not in_rect((cx, cy), MAIN_RECT, -80.0):
+                continue
+            # Check at least 3 residential buildings inside this block
+            b_in = sum(1 for ob in bld_grid.query(cx - 80, cy - 80, cx + 80, cy + 80)
+                       if abs(centroid(ob[4])[0] - cx) < 88 and abs(centroid(ob[4])[1] - cy) < 88)
+            if b_in < 3:
+                continue
+            rect_r = [(cx - 96.0, cy - 96.0), (cx + 96.0, cy - 96.0), (cx + 96.0, cy + 96.0), (cx - 96.0, cy + 96.0)]
+            seen_c.add(ck)
+            res_polys.append((rect_r, ""))
+
+    name_idx = 0
+    for ring, raw_nm in res_polys:
+        if len(compounds) >= 130:
+            break
+        if len(ring) < 4 or len(ring) > 36:
+            continue
+        c = centroid(ring)
+        if not in_active(c, -20.0):
+            continue
+        # Never enclose landmarks, parks or water
+        if any(point_in_poly(c[0], c[1], wp) for wp in water_grid.query(c[0] - 4, c[1] - 4, c[0] + 4, c[1] + 4)):
+            continue
+        # Require at least 2 buildings inside so empty lots aren't walled
+        xs = [p[0] for p in ring]
+        ys = [p[1] for p in ring]
+        b_cnt = sum(1 for ob in bld_grid.query(min(xs), min(ys), max(xs), max(ys))
+                    if point_in_poly(*centroid(ob[4]), ring))
+        if b_cnt < 2:
+            continue
+
+        # Shrink polygon vertices slightly inward toward centroid (~5%) so fence stays cleanly behind sidewalks!
+        shrunk = []
+        for p in ring:
+            vx, vy = p[0] - c[0], p[1] - c[1]
+            L = math.hypot(vx, vy)
+            if L > 8.0:
+                sh = min(4.5, L * 0.08)
+                shrunk.append((p[0] - vx / L * sh, p[1] - vy / L * sh))
+            else:
+                shrunk.append(p)
+
+        # Keep only perimeter segments completely clear of roadways, water & railways!
+        clean_segs = []
+        gate_cand = None  # (dist_to_road, mx, my, ux, uy, nx, ny)
+        ccw = poly_area(shrunk) > 0.0
+        for i in range(len(shrunk)):
+            a = shrunk[i]
+            b = shrunk[(i + 1) % len(shrunk)]
+            sl = math.hypot(b[0] - a[0], b[1] - a[1])
+            if sl < 8.0:
+                continue
+            mx, my = (a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5
+            # Skip any fence segment that crosses a road, water, or railway!
+            hits_bad = False
+            for (rax, ray, rbx, rby, hw) in road_grid.query(min(a[0], b[0]) - 14, min(a[1], b[1]) - 14, max(a[0], b[0]) + 14, max(a[1], b[1]) + 14):
+                if seg_intersection(a, b, (rax, ray), (rbx, rby)) is not None:
+                    hits_bad = True
+                    break
+                if seg_dist(mx, my, rax, ray, rbx, rby)[0] < hw + 1.8:
+                    hits_bad = True
+                    break
+            if hits_bad:
+                continue
+            for (rax, ray, rbx, rby, rw) in rail_grid.query(min(a[0], b[0]) - 14, min(a[1], b[1]) - 14, max(a[0], b[0]) + 14, max(a[1], b[1]) + 14):
+                if seg_dist(mx, my, rax, ray, rbx, rby)[0] < rw:
+                    hits_bad = True
+                    break
+            if hits_bad:
+                continue
+            if any(point_in_poly(mx, my, wp) for wp in water_grid.query(mx - 4, my - 4, mx + 4, my + 4)):
+                continue
+            clean_segs.append((a, b))
+            if sl >= 16.0:
+                rd_d = 1e9
+                for (rax, ray, rbx, rby, hw) in road_grid.query(mx - 28, my - 28, mx + 28, my + 28):
+                    rd_d = min(rd_d, seg_dist(mx, my, rax, ray, rbx, rby)[0] - hw)
+                if rd_d <= 22.0 and (gate_cand is None or rd_d < gate_cand[0]):
+                    ux, uy = (b[0] - a[0]) / sl, (b[1] - a[1]) / sl
+                    nx, ny = (uy, -ux) if ccw else (-uy, ux)
+                    gate_cand = (rd_d, mx, my, ux, uy, nx, ny, len(clean_segs) - 1)
+
+        if len(clean_segs) < 3 or gate_cand is None:
+            continue
+        _gd, gx, gy, gux, guy, gnx, gny, g_seg_idx = gate_cand
+        # Split the gate segment to leave an 11m clean entrance driveway opening for the gatehouse & boom barrier!
+        ga, gb = clean_segs[g_seg_idx]
+        final_segs = []
+        for si, (sa, sb) in enumerate(clean_segs):
+            if si != g_seg_idx:
+                final_segs.append([rnd(sa), rnd(sb)])
+            else:
+                g_left = (gx - gux * 5.6, gy - guy * 5.6)
+                g_right = (gx + gux * 5.6, gy + guy * 5.6)
+                if math.hypot(g_left[0] - sa[0], g_left[1] - sa[1]) >= 2.5:
+                    final_segs.append([rnd(sa), rnd(g_left)])
+                if math.hypot(sb[0] - g_right[0], sb[1] - g_right[1]) >= 2.5:
+                    final_segs.append([rnd(g_right), rnd(sb)])
+        nm = raw_nm if raw_nm else COMPOUND_NAMES_ZH[name_idx % len(COMPOUND_NAMES_ZH)]
+        name_idx += 1
+        compounds.append({
+            "name": nm,
+            "segs": final_segs,
+            "gate_pos": rnd((gx, gy)),
+            "gate_angle": round(-math.atan2(gny, gnx) + math.pi * 0.5, 4),
+            "style": rng.randint(0, 2),
+        })
+
+    print(f"Chinese gated compounds: {len(compounds)} enclosed 小区 with perimeter walls, gatehouses & boom barriers")
+    return compounds
 
 
 def main():
@@ -2463,6 +2732,7 @@ def main():
     roads, cws, lamps, trees, storefronts = build_street_furniture(
         graph_edges, graph_nodes, blds, poi_nodes, nodes, road_grid, water_grid, rail_grid, bld_grid, freeway_grid
     )
+    gated_compounds = build_gated_compounds(landuse_zones, ways, nodes, road_grid, water_grid, rail_grid, bld_grid)
     starter = build_t1_starter_network(graph_nodes, graph_edges)
 
     # Exact HSR station angle from real OSM platform orientation (~27 deg ENE-WSW)
@@ -2659,6 +2929,7 @@ def main():
         },
         "scenic_paths": scenic_paths,
         "scenic_pavilions": scenic_pavilions,
+        "gated_compounds": gated_compounds,
         "zicheng_park": {"pos": rnd(ZICHENG_POS), "angle": 0.05},
         "catholic_church": {"pos": rnd(CATHOLIC_CHURCH_POS), "angle": 0.06},
         "first_hospital": {"pos": rnd(FIRST_HOSPITAL_POS), "angle": 0.03},

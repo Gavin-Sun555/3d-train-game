@@ -44,6 +44,9 @@ static func build(root: Node3D, lm: Dictionary, lights: Array) -> void:
 	var spavs: Array = lm.get("scenic_pavilions", [])
 	if not spaths.is_empty() or not spavs.is_empty():
 		_build_scenic_paths_and_pavilions(root, spaths, spavs)
+	var gcomps: Array = lm.get("gated_compounds", [])
+	if not gcomps.is_empty():
+		ChineseCompoundBuilder.build(root, gcomps, lights)
 	for cs in lm.get("commercial_signs", []):
 		if cs is Dictionary:
 			_commercial_signboard(root, cs)

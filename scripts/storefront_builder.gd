@@ -107,7 +107,44 @@ const BRANDS := {
 	"南湖茶楼": {"bg": Color(0.20, 0.14, 0.10), "fg": Color(0.96, 0.86, 0.52), "frame": Color(0.28, 0.18, 0.12), "awning": Color(0.46, 0.16, 0.12)},
 	"月河茶馆": {"bg": Color(0.18, 0.14, 0.11), "fg": Color(0.95, 0.86, 0.56), "frame": Color(0.26, 0.18, 0.12), "awning": Color(0.42, 0.16, 0.12)},
 	"禾城老面馆": {"bg": Color(0.32, 0.16, 0.10), "fg": Color(0.98, 0.90, 0.64), "frame": Color(0.24, 0.15, 0.10), "awning": Color(0.52, 0.18, 0.12)},
+	# Extended national & regional Chinese chain brands (standardized corporate fascia signboards)
+	"奈雪的茶": {"bg": Color(0.54, 0.78, 0.24), "fg": Color(1, 1, 1), "frame": Color(0.92, 0.92, 0.90), "awning": Color(0.46, 0.70, 0.20)},
+	"古茗奶茶": {"bg": Color(0.94, 0.94, 0.92), "fg": Color(0.10, 0.10, 0.12), "frame": Color(0.18, 0.18, 0.20)},
+	"沪上阿姨": {"bg": Color(0.68, 0.16, 0.24), "fg": Color(1.0, 0.95, 0.86), "frame": Color(0.22, 0.14, 0.16)},
+	"coco都可": {"bg": Color(0.94, 0.46, 0.08), "fg": Color(1, 1, 1), "frame": Color(0.24, 0.20, 0.18)},
+	"一点点": {"bg": Color(0.06, 0.44, 0.34), "fg": Color(1, 1, 1), "frame": Color(0.92, 0.92, 0.90)},
+	"塔斯汀汉堡": {"bg": Color(0.82, 0.12, 0.14), "fg": Color(1.0, 0.88, 0.38), "frame": Color(0.18, 0.14, 0.14)},
+	"杨国福麻辣烫": {"bg": Color(0.92, 0.42, 0.06), "fg": Color(1, 1, 1), "frame": Color(0.24, 0.16, 0.12)},
+	"绝味鸭脖": {"bg": Color(0.84, 0.08, 0.12), "fg": Color(1.0, 0.92, 0.20), "frame": Color(0.20, 0.12, 0.12)},
+	"紫燕百味鸡": {"bg": Color(0.76, 0.10, 0.14), "fg": Color(1, 1, 1), "frame": Color(0.24, 0.16, 0.14)},
+	"小菜园": {"bg": Color(0.16, 0.26, 0.18), "fg": Color(0.98, 0.94, 0.82), "frame": Color(0.24, 0.18, 0.14)},
+	"十足便利店": {"bg": Color(0.88, 0.12, 0.14), "fg": Color(1, 1, 1), "frame": Color(0.94, 0.94, 0.92)},
+	"良品铺子": {"bg": Color(0.82, 0.10, 0.14), "fg": Color(1.0, 0.92, 0.68), "frame": Color(0.26, 0.18, 0.16)},
+	"名创优品": {"bg": Color(0.88, 0.08, 0.16), "fg": Color(1, 1, 1), "frame": Color(0.95, 0.95, 0.95)},
+	"屈臣氏": {"bg": Color(0.02, 0.60, 0.58), "fg": Color(1, 1, 1), "frame": Color(0.92, 0.94, 0.94)},
+	"邮政储蓄": {"bg": Color(0.02, 0.46, 0.22), "fg": Color(1, 1, 1), "frame": Color(0.22, 0.28, 0.24)},
+	"中国联通": {"bg": Color(0.84, 0.08, 0.14), "fg": Color(1, 1, 1), "frame": Color(0.24, 0.24, 0.26)},
+	"益丰大药房": {"bg": Color(0.04, 0.56, 0.26), "fg": Color(1, 1, 1), "frame": Color(0.92, 0.94, 0.92)},
+	"顺丰速运": {"bg": Color(0.10, 0.10, 0.12), "fg": Color(1, 1, 1), "frame": Color(0.80, 0.12, 0.14)},
+	"菜鸟驿站": {"bg": Color(0.04, 0.46, 0.88), "fg": Color(1, 1, 1), "frame": Color(0.92, 0.94, 0.96)},
+	"链家房产": {"bg": Color(0.02, 0.60, 0.40), "fg": Color(1, 1, 1), "frame": Color(0.90, 0.92, 0.90)},
+	"汉庭酒店": {"bg": Color(0.10, 0.34, 0.68), "fg": Color(1, 1, 1), "frame": Color(0.22, 0.24, 0.28)},
+	"全季酒店": {"bg": Color(0.32, 0.26, 0.20), "fg": Color(0.96, 0.93, 0.86), "frame": Color(0.26, 0.22, 0.18)},
+	"亚朵酒店": {"bg": Color(0.14, 0.16, 0.20), "fg": Color(0.96, 0.95, 0.92), "frame": Color(0.20, 0.22, 0.26)},
 }
+
+# Authentic earthy local Chinese street-shop PVC/acrylic lightbox palettes (接地气非连锁底商招牌):
+# [bg, fg, frame, awning] — bold red/blue/green/yellow/orange boards with high-contrast white/yellow lettering!
+const LOCAL_CHINESE_STYLES := [
+	[Color(0.84, 0.10, 0.10), Color(1.0, 1.0, 1.0), Color(0.32, 0.30, 0.30), Color(0.76, 0.14, 0.14)],    # 经典大红底白字 (小吃/副食/五金)
+	[Color(0.80, 0.08, 0.08), Color(1.0, 0.90, 0.16), Color(0.30, 0.24, 0.20), Color(0.72, 0.12, 0.10)],  # 经典大红底黄字 (牛肉面/足浴/宾馆)
+	[Color(0.05, 0.32, 0.78), Color(1.0, 1.0, 1.0), Color(0.34, 0.36, 0.40), Color(0.08, 0.36, 0.72)],    # 经典蓝底白字 (电动车维修/打印/手机快修)
+	[Color(0.06, 0.54, 0.24), Color(1.0, 1.0, 1.0), Color(0.28, 0.34, 0.30), Color(0.08, 0.48, 0.22)],    # 经典绿底白字 (生鲜果蔬/药房/早点)
+	[Color(0.95, 0.78, 0.08), Color(0.82, 0.06, 0.08), Color(0.36, 0.32, 0.24), Color(0.86, 0.16, 0.12)], # 亮黄底大红字 (臭豆腐/鸡排/百货特卖)
+	[Color(0.92, 0.38, 0.06), Color(1.0, 1.0, 1.0), Color(0.32, 0.26, 0.22), Color(0.84, 0.34, 0.08)],    # 亮橙底白字 (理发/烟酒/快递)
+	[Color(0.56, 0.08, 0.14), Color(1.0, 0.92, 0.56), Color(0.28, 0.20, 0.18), Color(0.52, 0.12, 0.14)],  # 枣红底金字 (老面馆/茶庄/糕点)
+	[Color(0.04, 0.48, 0.56), Color(1.0, 1.0, 1.0), Color(0.30, 0.34, 0.36), Color(0.08, 0.42, 0.48)],    # 蓝绿底白字 (干洗/眼镜/社区服务)
+]
 
 # Fallback palettes by shop category: [bg, fg, frame, awning]
 const CAT_STYLES := {
@@ -183,6 +220,7 @@ static func build_storefronts(parent: Node3D, storefronts: Array, buildings: Arr
 static func _style_for(sf: Dictionary) -> Dictionary:
 	var kind := str(sf.get("kind", ""))
 	var name := str(sf.get("name", ""))
+	var tier := str(sf.get("tier", ""))
 	var key := str(sf.get("brand", "")).to_lower()
 	if not BRANDS.has(key):
 		key = name.to_lower()
@@ -202,14 +240,27 @@ static func _style_for(sf: Dictionary) -> Dictionary:
 		interior = INTERIOR_OFFICE
 		cat = "service"
 	var pal: Array = CAT_STYLES[cat][h % (CAT_STYLES[cat] as Array).size()]
+	var is_local_zh := (tier == "local") and not BRANDS.has(key)
+	if is_local_zh:
+		# Pick characteristic earthy Chinese street signboard colors by business type!
+		var l_idx := h % LOCAL_CHINESE_STYLES.size()
+		if kind in ["hardware", "mobile_phone", "office", "dry_cleaning"]:
+			l_idx = 2 if (h % 3 != 0) else 0  # Blue-white or Red-white
+		elif kind in ["greengrocer", "pharmacy"]:
+			l_idx = 3 if (h % 3 != 0) else 0  # Green-white or Red-white
+		elif kind in ["fast_food", "restaurant"]:
+			var f_picks := [0, 1, 4, 5, 6]
+			l_idx = f_picks[h % f_picks.size()]
+		pal = LOCAL_CHINESE_STYLES[l_idx]
 	var st := {
 		"bg": pal[0], "fg": pal[1], "frame": pal[2], "awning": pal[3], "letters": false,
+		"is_local_zh": is_local_zh,
 		"interior": interior, "accent": (pal[3] as Color).lerp(Color(0.8, 0.7, 0.5), 0.3),
-		"has_awning": (cat == "food" and h % 3 != 0) or (cat == "bar" and h % 2 == 0) or kind == "florist",
-		"has_blade": (cat == "food" or cat == "bar") and h % 4 < 2,
+		"has_awning": (is_local_zh and h % 2 == 0) or (cat == "food" and h % 3 != 0) or (cat == "bar" and h % 2 == 0) or kind == "florist",
+		"has_blade": (is_local_zh and h % 4 == 0) or ((cat == "food" or cat == "bar") and h % 4 < 2),
 		"planters": kind == "restaurant" and h % 3 == 0,
 		"cafe_tables": kind == "cafe" and h % 2 == 0,
-		"striped": cat == "food" and h % 5 == 0,
+		"striped": (is_local_zh and h % 3 == 0) or (cat == "food" and h % 5 == 0),
 	}
 	if BRANDS.has(key):
 		var b: Dictionary = BRANDS[key]
@@ -219,6 +270,7 @@ static func _style_for(sf: Dictionary) -> Dictionary:
 		st["has_awning"] = b.has("awning")
 		st["has_blade"] = false
 		st["striped"] = false
+		st["is_local_zh"] = false
 	if (st["bg"] as Color).get_luminance() < 0.05 and not bool(st["letters"]):
 		st["accent"] = Color(0.75, 0.70, 0.62)
 	return st
@@ -239,8 +291,10 @@ static func _build_one(fst: SurfaceTool, gst: SurfaceTool, labels: Node3D, sf: D
 	var gh := 4.4 if bh >= 7.0 else clampf(bh - 0.8, 3.2, 4.0)
 	var frame_c: Color = st["frame"]
 	var bulk_c: Color = Color(0.20, 0.20, 0.21) if (absi(hash(str(sf["name"]))) % 2 == 0) else frame_c.darkened(0.25)
-	var sign_y0 := gh - 1.05
-	var sign_y1 := gh - 0.18
+	var is_local_zh := bool(st.get("is_local_zh", false))
+	var sign_y0 := (gh - 1.22) if is_local_zh else (gh - 1.05)
+	var sign_y1 := (gh - 0.14) if is_local_zh else (gh - 0.18)
+	var sign_d := 0.42 if is_local_zh else 0.34
 	var glass_top := sign_y0 - 0.06
 	var has_awning := bool(st["has_awning"])
 	if has_awning:
@@ -255,9 +309,10 @@ static func _build_one(fst: SurfaceTool, gst: SurfaceTool, labels: Node3D, sf: D
 		# Stone fascia band with raised individual letters
 		_box(ctx, 0.0, w, sign_y0, sign_y1, 0.0, 0.22, Color(0.80, 0.77, 0.72))
 	else:
-		_box(ctx, 0.08, w - 0.08, sign_y0, sign_y1, 0.0, 0.34, st["bg"])
-		_box(ctx, 0.05, w - 0.05, sign_y1, sign_y1 + 0.05, 0.0, 0.38, frame_c.darkened(0.3))
-		_box(ctx, 0.05, w - 0.05, sign_y0 - 0.04, sign_y0, 0.0, 0.38, frame_c.darkened(0.3))
+		_box(ctx, 0.08, w - 0.08, sign_y0, sign_y1, 0.0, sign_d, st["bg"])
+		var trim_c := Color(0.88, 0.88, 0.86) if is_local_zh else frame_c.darkened(0.3)
+		_box(ctx, 0.05, w - 0.05, sign_y1, sign_y1 + 0.05, 0.0, sign_d + 0.04, trim_c)
+		_box(ctx, 0.05, w - 0.05, sign_y0 - 0.04, sign_y0, 0.0, sign_d + 0.04, trim_c)
 
 	# Entrance door position (recessed double door for wide shops, single otherwise)
 	var door_w := 1.9 if w >= 8.0 else 1.05
@@ -302,8 +357,8 @@ static func _build_one(fst: SurfaceTool, gst: SurfaceTool, labels: Node3D, sf: D
 	var name_txt := str(sf.get("name", ""))
 	var letters := bool(st["letters"])
 	var txt := name_txt.to_upper() if (letters or name_txt.length() <= 12) else name_txt
-	var depth := 0.235 if letters else 0.355
-	_sign_label(labels, o + U * (w * 0.5) + N * depth + Vector3.UP * ((sign_y0 + sign_y1) * 0.5), N, txt, w * 0.84, (sign_y1 - sign_y0) * 0.62, st["fg"], letters)
+	var depth := 0.235 if letters else (sign_d + 0.018)
+	_sign_label(labels, o + U * (w * 0.5) + N * depth + Vector3.UP * ((sign_y0 + sign_y1) * 0.5), N, txt, w * 0.86, (sign_y1 - sign_y0) * (0.68 if is_local_zh else 0.62), st["fg"], letters)
 
 	# Awning (sloped fabric with valance; striped for some cafes)
 	if has_awning:
@@ -374,7 +429,7 @@ static func _make_label(txt: String, col: Color, letters: bool) -> Label3D:
 	l.modulate = col
 	l.double_sided = false
 	l.shaded = letters
-	l.visibility_range_end = 135.0
+	l.visibility_range_end = 185.0
 	l.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	l.render_priority = 1
 	return l

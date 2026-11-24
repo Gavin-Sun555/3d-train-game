@@ -78,7 +78,7 @@ func rebuild_fleet(
 		line_variants[lid] = _compile_line_variants(graph, ln, compiled)
 
 		var spec := _find_model_spec(catalogue, str(ln.get("model_key", "siemens-s700")))
-		var sec_cnt := clampi(int(ln.get("sections", int(spec.get("default_sections", 2)))), 1, 4)
+		var sec_cnt := clampi(int(ln.get("sections", int(spec.get("default_sections", 2)))), 1, 5)
 		var fleet_n := clampi(int(ln.get("trams_count", 2)), 1, 15)
 		var route_len := float(compiled["length"])
 		var is_loop := bool(compiled["is_loop"])

@@ -1,13 +1,14 @@
 class_name TrafficSim
 extends Node3D
 
-const MAX_CARS := 40
+const MAX_CARS := 48
 const CAR_HALF_LEN := 2.22
 const CAR_HALF_WID := 0.90
 const CYCLE_SEC := 26.0
 const STOP_LINE_DIST := 9.2
 
 var cars: Array[Dictionary] = []
+var ebike_sim: EbikeSim = null
 var signals: Dictionary = {} # node_id (int) -> {axis: Vector2, timer: float, state_code: int, heads_a: Array, heads_b: Array, tram_heads: Array}
 # Big maps have thousands of signals: only tram-crossing signals (few) are stepped individually (transit signal
 # priority); plain street signals run off one shared clock and only refresh their lamps near the camera.
@@ -35,6 +36,7 @@ var _tsp_sig_cache_frame := -1
 var _tsp_sig_cache: Dictionary = {} # tram_dict_id -> {"reach": float, "res": Dictionary}
 
 var _car_meshes: Array[ArrayMesh] = []
+var _zh_car_meshes: Array[ArrayMesh] = []
 var _veh_mat: ShaderMaterial
 var _sig_pole_mat: StandardMaterial3D
 var _sig_box_mat: StandardMaterial3D
@@ -87,6 +89,7 @@ func rebuild_traffic(graph: NetworkGraph, focus_pos: Vector3) -> void:
 	for c in get_children():
 		c.queue_free()
 	cars.clear()
+	ebike_sim = null
 	_rides_rails.clear()
 	signals.clear()
 	track_sig_ids.clear()
@@ -96,6 +99,9 @@ func rebuild_traffic(graph: NetworkGraph, focus_pos: Vector3) -> void:
 		return
 
 	_build_intersection_signals(graph, focus_pos)
+
+	var is_zh := bool(graph.get_meta("is_chinese_city", false))
+	var mesh_pool: Array[ArrayMesh] = _zh_car_meshes if (is_zh and not _zh_car_meshes.is_empty()) else _car_meshes
 
 	var edge_ids := graph.edges.keys()
 	var target_count := mini(MAX_CARS, maxi(14, edge_ids.size() / 7))
@@ -117,7 +123,7 @@ func rebuild_traffic(graph: NetworkGraph, focus_pos: Vector3) -> void:
 		var base_lane := _compute_dynamic_lane_offset(graph, eid, s_init, elen, dir, lane_k)
 
 		var mi := MeshInstance3D.new()
-		mi.mesh = _car_meshes[i % _car_meshes.size()]
+		mi.mesh = mesh_pool[i % mesh_pool.size()]
 		mi.material_override = _veh_mat
 		mi.visibility_range_end = 260.0
 		add_child(mi)
@@ -154,6 +160,12 @@ func rebuild_traffic(graph: NetworkGraph, focus_pos: Vector3) -> void:
 			continue
 
 		cars.append(car_dict)
+
+	if is_zh:
+		ebike_sim = EbikeSim.new()
+		ebike_sim.name = "EbikeSim"
+		add_child(ebike_sim)
+		ebike_sim.rebuild(graph, focus_pos)
 
 
 func _build_intersection_signals(graph: NetworkGraph, focus_pos: Vector3 = Vector3.ZERO) -> void:
@@ -1054,7 +1066,7 @@ func step_traffic(
 		var c_fwd: Vector3 = c["fwd"]
 		var c_right := c_fwd.cross(Vector3.UP).normalized()
 
-		# (A) Car-to-Car safe following distance
+		# (A) Car-to-Car safe following distance (heading-aware so opposing lanes NEVER head-on deadlock!)
 		for j in range(cars.size()):
 			if j == idx:
 				continue
@@ -1062,22 +1074,32 @@ func step_traffic(
 			var dv := (oth["pos"] as Vector3) - c_pos
 			var d2 := dv.length_squared()
 			if d2 < 196.0 and d2 > 0.05:
+				var hdg_dot := c_fwd.dot(oth["fwd"] as Vector3)
 				var along := dv.dot(c_fwd)
 				var lat := absf(dv.dot(c_right))
-				if along > 0.4 and lat < 2.1:
-					if along < 7.4:
+				if hdg_dot > 0.25:
+					# Same-direction lane following
+					if along > 0.4 and lat < 1.95:
+						if along < 7.2:
+							target_spd = 0.0
+						elif along < 13.8:
+							target_spd = minf(target_spd, float(oth["speed"]) * 0.80)
+				elif absf(hdg_dot) <= 0.25:
+					# Crossing car at junction: yield to moving cross traffic (tie-break stopped cars by idx!)
+					if along > 0.4 and along < 6.4 and lat < 1.85 and (float(oth["speed"]) > 0.45 or idx > j):
 						target_spd = 0.0
-					elif along < 14.0:
-						target_spd = minf(target_spd, float(oth["speed"]) * 0.78)
 
 		# (B) Strict Motor Traffic Light Obedience WELL BEHIND Crosswalk & Tram Tracks!
 		var stop_line_d := _intersection_stop_line(graph, next_nid, eid)
+		var planned_xing: Variant = null
+		var waiting_at_red := false
 		# (B0) Moves that cross tram tracks: decided at the stop line, never inside the junction. While a tram signal
 		# here shows go / caution (or turns to go within 4 s), or a tram is in the box / heading for the crossing
 		# point, the car takes another move that keeps off the rails, or waits behind the stop line.
 		if dist_to_end <= stop_line_d + 40.0:
 			var pl := _plan_move(c, graph, eid, next_nid)
 			var xing = _plan_track_crossing(c, graph, pl)
+			planned_xing = xing
 			if xing != null and dist_to_end > stop_line_d - 1.5:
 				var ok := not _tram_threat_at(trams_c, xing, 11.0)
 				if ok and signals.has(next_nid) and bool(signals[next_nid]["has_track"]):
@@ -1086,7 +1108,7 @@ func step_traffic(
 						ok = false
 						# a long wait with no tram anywhere near (tracks on both axes keep some tram head lit)
 						var jp_w: Vector2 = graph.nodes[next_nid]["pos"]
-						if float(c.get("xwait", 0.0)) > 20.0 and not _any_tram_within(trams_c, Vector3(jp_w.x, 0.0, jp_w.y), 150.0):
+						if float(c.get("xwait", 0.0)) > 16.0 and not _any_tram_within(trams_c, Vector3(jp_w.x, 0.0, jp_w.y), 140.0):
 							ok = true
 				if ok and pl.has("exit_pts"):
 					# don't block the box: only across the rails with room to clear them on the far side
@@ -1112,6 +1134,7 @@ func step_traffic(
 							if _plan_track_crossing(c, graph, pl2) == null:
 								pl = pl2
 								xing = null
+								planned_xing = null
 								break
 							c["plan"] = pl
 					if xing != null:
@@ -1130,15 +1153,17 @@ func step_traffic(
 				# Stop cleanly well behind crosswalk & double-track clearance zone!
 				if dist_to_end <= stop_line_d + 1.8:
 					target_spd = 0.0
+					waiting_at_red = true
 				else:
 					target_spd = minf(target_spd, maxf(1.0, (dist_to_end - stop_line_d) * 0.50))
 			else:
-				# Even on Green, "Don't Block the Box": never enter intersection if a tram is currently occupying the box!
-				var jp2_box: Vector2 = graph.nodes[next_nid]["pos"]
-				var jp3_box := Vector3(jp2_box.x, 0.0, jp2_box.y)
-				if _is_any_tram_occupying_point(trams_c, jp3_box, 14.5):
-					if dist_to_end <= stop_line_d + 2.2:
-						target_spd = 0.0
+				# Even on Green, "Don't Block the Box": only hold if crossing rails / turning into an occupied box!
+				if planned_xing != null or not _is_tram_edge(graph, eid):
+					var jp2_box: Vector2 = graph.nodes[next_nid]["pos"]
+					var jp3_box := Vector3(jp2_box.x, 0.0, jp2_box.y)
+					if _is_any_tram_occupying_point(trams_c, jp3_box, 14.5):
+						if dist_to_end <= stop_line_d + 2.2:
+							target_spd = 0.0
 
 		# (C) Full-Consist & Crossing Tram Hard Protection (handles BOTH Front Cab & Rear Cab active_end == 1!)
 		var emerg_stop := false
@@ -1193,40 +1218,43 @@ func step_traffic(
 						emerg_stop = true
 						break
 					continue
-				# 1. Any tram section in forward corridor (including close nose range -1.5..24m)
-				if along_t > -1.5 and along_t < 24.0 and lat_t < lat_guard:
+				# 1. Any tram section in forward corridor (parallel cars in adjacent motor lane use true physical clearance!)
+				var sec_fwd2: Vector2 = -(se[1] as Vector2) if bool(se[4]) else (se[1] as Vector2)
+				var is_parallel := absf(sec_fwd2.dot(cf2_c)) > 0.82 and not bool(c.get("turning", false))
+				var eff_lat_guard := (float(se[3]) + CAR_HALF_WID + 0.42) if is_parallel else lat_guard
+				if along_t > -1.5 and along_t < 24.0 and lat_t < eff_lat_guard:
 					target_spd = 0.0
 					emerg_stop = true
 					break
 				# 2. Moving tram crossing perpendicularly toward car's path ahead (using TRUE travel direction!)
 				var tr_spd := float(se[5])
-				var sec_fwd2: Vector2 = -(se[1] as Vector2) if bool(se[4]) else (se[1] as Vector2)
 				var cross_dot := sec_fwd2.dot(cr2_c)
 				if tr_spd > 0.3 and along_t > -1.5 and along_t < 28.0 and lat_t < 18.0 and absf(cross_dot) > 0.30 and (lat_signed_t * cross_dot) < 0.0:
 					target_spd = 0.0
 					emerg_stop = true
 					break
 
-		# (D) Never enter an intersection box if ANY tram is within 30m of that intersection!
+		# (D) Never enter an intersection box if ANY tram is within 30m — ONLY when crossing rails or from a cross-street!
+		#     Straight-through cars running parallel beside a tram on a green light keep flowing smoothly!
 		var committed := int(c.get("xcommit_nid", -1)) == next_nid and dist_to_end < stop_line_d
-		if dist_to_end >= stop_line_d - 3.2 and dist_to_end <= stop_line_d + 6.5 and not committed and not on_crossing:
+		var needs_box_hold := planned_xing != null or bool(c.get("turning", false)) or not _is_tram_edge(graph, eid)
+		if needs_box_hold and dist_to_end >= stop_line_d - 3.2 and dist_to_end <= stop_line_d + 6.5 and not committed and not on_crossing:
 			var np2_chk: Vector2 = graph.nodes[next_nid]["pos"]
 			if _is_any_tram_occupying_point(trams_c, Vector3(np2_chk.x, 0.0, np2_chk.y), 30.0):
 				target_spd = 0.0
 				emerg_stop = true
 
 		var cur_spd := float(c["speed"])
-		var acc_rate := 32.0 if emerg_stop else (9.5 if target_spd < cur_spd else 3.2)
+		var acc_rate := 32.0 if emerg_stop else (9.5 if target_spd < cur_spd else 3.8)
 		cur_spd = move_toward(cur_spd, target_spd, acc_rate * dt)
 		if emerg_stop:
 			cur_spd = 0.0
 		c["speed"] = cur_spd
 
-		# Anti-gridlock recovery: if a car stays deadlocked (especially near a tram or longer than a full signal cycle),
-		# cleanly relocate it to an open street so road gridlock can never freeze a tram route!
+		# Anti-gridlock recovery: promptly relocate any deadlocked car so road pileups never form!
 		var stuck_t := (float(c.get("stuck_t", 0.0)) + dt) if cur_spd < 0.25 else 0.0
 		c["stuck_t"] = stuck_t
-		if stuck_t >= 48.0 or (stuck_t >= 20.0 and _is_any_tram_occupying_point(trams_c, c_pos, 42.0)):
+		if stuck_t >= 32.0 or (stuck_t >= 18.0 and not waiting_at_red) or (stuck_t >= 11.0 and _is_any_tram_occupying_point(trams_c, c_pos, 42.0)):
 			_respawn_car_near(c, graph, edge_ids, focus_pos, trams, true)
 			continue
 
@@ -1317,6 +1345,9 @@ func step_traffic(
 			var dh := Terrain.surface(vp2.x + vf2.x * 2.0, vp2.z + vf2.z * 2.0) - Terrain.surface(vp2.x - vf2.x * 2.0, vp2.z - vf2.z * 2.0)
 			look = (Vector3(vf2.x, 0.0, vf2.z).normalized() * 4.0 + Vector3(0.0, dh, 0.0)).normalized()
 		mi2.global_transform = Transform3D(Basis.looking_at(look, Vector3.UP), vp2 + Vector3(0.0, gy, 0.0))
+
+	if ebike_sim != null:
+		ebike_sim.step(dt, graph, self, trams_c_all, focus_pos)
 
 
 static func _flat(v: Vector3) -> Vector3:
@@ -2251,6 +2282,191 @@ func _build_shared_car_meshes() -> void:
 				_emit_round_wheel(st, Vector3(wx, 0.33, wz), 0.33, 0.22, signf(wx), c_wheel)
 
 		_car_meshes.append(st.commit())
+
+	_build_chinese_ev_meshes()
+
+
+# Authentic Chinese urban fleet (~75% NEV/EV with green plates 渐变绿牌: Xiaomi SU7, BYD Han/Qin/Dolphin,
+# Li Auto L8/L7 with Star-Ring LED bar, NIO ET5/ES6 with roof LiDAR watchtowers, Tesla Model 3/Y,
+# Wuling Hongguang MINIEV micro-EV, Jiaxing green/white EV taxis, plus blue-plate ICE sedans/SUVs).
+func _build_chinese_ev_meshes() -> void:
+	_zh_car_meshes.clear()
+	var specs: Array[Dictionary] = [
+		# 0: 小米 SU7 海湾蓝 (Bay Blue Fastback EV)
+		{"col": Color(0.16, 0.64, 0.86), "body": "fastback", "ev": true, "star_ring": false, "lidar": true, "taxi": false},
+		# 1: 小米 SU7 橄榄绿 (Olive Metallic Fastback EV)
+		{"col": Color(0.32, 0.42, 0.30), "body": "fastback", "ev": true, "star_ring": false, "lidar": true, "taxi": false},
+		# 2: 比亚迪 汉 EV 赤帝红 (Crimson Flagship EV)
+		{"col": Color(0.68, 0.10, 0.14), "body": "sedan", "ev": true, "star_ring": false, "lidar": false, "taxi": false},
+		# 3: 比亚迪 秦 PLUS DM-i 雪域白 (White NEV Commuter)
+		{"col": Color(0.92, 0.93, 0.94), "body": "sedan", "ev": true, "star_ring": false, "lidar": false, "taxi": false},
+		# 4: 理想 L8/L9 银灰 (Flagship SUV + Star-Ring Front LED Bar + Roof LiDAR!)
+		{"col": Color(0.62, 0.65, 0.69), "body": "suv", "ev": true, "star_ring": true, "lidar": true, "taxi": false},
+		# 5: 理想 L7 珍珠白 (White Flagship SUV + Star-Ring LED Bar!)
+		{"col": Color(0.91, 0.92, 0.93), "body": "suv", "ev": true, "star_ring": true, "lidar": true, "taxi": false},
+		# 6: 蔚来 ET5 宇航蓝 (Sport EV Sedan + Twin Roof LiDAR Watchtower!)
+		{"col": Color(0.18, 0.32, 0.56), "body": "fastback", "ev": true, "star_ring": false, "lidar": true, "nio_ears": true, "taxi": false},
+		# 7: 蔚来 ES6 极光绿 (Mid-Size EV SUV + Roof LiDAR Watchtower!)
+		{"col": Color(0.16, 0.36, 0.32), "body": "suv", "ev": true, "star_ring": false, "lidar": true, "nio_ears": true, "taxi": false},
+		# 8: 特斯拉 Model Y 珍珠白 (Minimalist Crossover EV)
+		{"col": Color(0.93, 0.94, 0.95), "body": "crossover", "ev": true, "star_ring": false, "lidar": false, "taxi": false},
+		# 9: 特斯拉 Model 3 星空灰 (Minimalist EV Sedan)
+		{"col": Color(0.36, 0.39, 0.43), "body": "fastback", "ev": true, "star_ring": false, "lidar": false, "taxi": false},
+		# 10: 比亚迪 海豚 / 吉利星愿 冰莓粉 (Compact Urban Hatchback EV)
+		{"col": Color(0.88, 0.72, 0.78), "body": "hatch", "ev": true, "star_ring": false, "lidar": false, "taxi": false},
+		# 11: 五菱宏光 MINIEV 马卡龙薄荷绿 (Iconic Boxy Micro-EV + White Contrast Roof!)
+		{"col": Color(0.54, 0.84, 0.74), "body": "micro", "ev": true, "star_ring": false, "lidar": false, "taxi": false},
+		# 12: 嘉兴新能源出租车 (Mint-Green & White Electric Taxi + Roof Light)
+		{"col": Color(0.16, 0.68, 0.54), "body": "sedan", "ev": true, "star_ring": false, "lidar": false, "taxi": true},
+		# 13: 嘉兴新能源出租车 #2 (Sky-Teal & White Electric Taxi + Roof Light)
+		{"col": Color(0.10, 0.54, 0.72), "body": "sedan", "ev": true, "star_ring": false, "lidar": false, "taxi": true},
+		# 14: 黑色行政轿车 (Executive ICE Sedan — Blue Plate 蓝牌)
+		{"col": Color(0.14, 0.15, 0.17), "body": "sedan", "ev": false, "star_ring": false, "lidar": false, "taxi": false},
+		# 15: 银色家用SUV (Family ICE SUV — Blue Plate 蓝牌)
+		{"col": Color(0.74, 0.76, 0.79), "body": "suv", "ev": false, "star_ring": false, "lidar": false, "taxi": false},
+	]
+
+	for sp: Dictionary in specs:
+		var body_rgb: Color = sp["col"]
+		var body_t: String = str(sp["body"])
+		var is_ev := bool(sp["ev"])
+		var is_micro := body_t == "micro"
+		var is_hatch := body_t == "hatch"
+		var is_suv := body_t == "suv"
+		var is_fast := body_t == "fastback"
+		var is_xover := body_t == "crossover"
+		var is_taxi := bool(sp["taxi"])
+
+		var c_paint := Color(body_rgb.r, body_rgb.g, body_rgb.b, 0.0)
+		var c_white := Color(0.94, 0.95, 0.96, 0.0)
+		var c_glass := Color(0.07, 0.11, 0.16, 0.1)
+		var c_wheel := Color(0.10, 0.10, 0.11, 0.2)
+		var c_trim := Color(0.12, 0.13, 0.15, 0.3)
+		var c_chrome := Color(0.76, 0.80, 0.84, 0.3)
+		var c_head := Color(1.0, 0.97, 0.90, 0.4)
+		var c_tail := Color(0.96, 0.10, 0.10, 0.5)
+		# Authentic Chinese Green NEV License Plate (渐变绿牌) vs Blue ICE Plate (蓝牌)!
+		var c_plate := Color(0.24, 0.88, 0.44, 0.3) if is_ev else Color(0.08, 0.30, 0.78, 0.3)
+
+		var st := SurfaceTool.new()
+		st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+		var hw := 0.74 if is_micro else (0.84 if is_hatch else (0.94 if is_suv else 0.89))
+		var roof_y := 1.54 if is_micro else (1.58 if is_suv else (1.46 if is_xover else (1.42 if is_hatch else (1.30 if is_fast else 1.36))))
+		var front_z := -1.48 if is_micro else (-1.92 if is_hatch else -2.22)
+		var rear_z := 1.48 if is_micro else (1.90 if is_hatch else 2.20)
+
+		var prof_zy: Array[Vector2] = []
+		var ws_z0 := -0.88
+		var ws_z1 := -0.26
+		var rw_z0 := 0.92
+		var rw_z1 := 1.54
+		var trunk_y := 0.90
+		if is_micro:
+			ws_z0 = -0.88; ws_z1 = -0.56; rw_z0 = 1.18; rw_z1 = 1.44; trunk_y = 0.92
+			prof_zy = [
+				Vector2(-1.46, 0.22), Vector2(-1.49, 0.56), Vector2(-1.38, 0.80),
+				Vector2(-0.88, 0.86), Vector2(-0.56, roof_y), Vector2(1.18, roof_y),
+				Vector2(1.44, 0.92), Vector2(1.48, 0.50), Vector2(1.40, 0.22),
+			]
+		elif is_suv:
+			ws_z0 = -0.94; ws_z1 = -0.34; rw_z0 = 1.66; rw_z1 = 2.02; trunk_y = 1.08
+			prof_zy = [
+				Vector2(-2.18, 0.25), Vector2(-2.24, 0.62), Vector2(-2.12, 0.90),
+				Vector2(-0.94, 0.96), Vector2(-0.34, roof_y), Vector2(1.66, roof_y - 0.02),
+				Vector2(2.02, 1.08), Vector2(2.18, 1.02), Vector2(2.22, 0.54), Vector2(2.12, 0.25),
+			]
+		elif is_hatch:
+			ws_z0 = -0.82; ws_z1 = -0.28; rw_z0 = 1.24; rw_z1 = 1.76; trunk_y = 0.98
+			prof_zy = [
+				Vector2(-1.88, 0.22), Vector2(-1.93, 0.54), Vector2(-1.78, 0.74),
+				Vector2(-0.82, 0.84), Vector2(-0.28, roof_y), Vector2(1.24, roof_y - 0.02),
+				Vector2(1.76, 0.98), Vector2(1.90, 0.54), Vector2(1.82, 0.22),
+			]
+		elif is_fast or is_xover:
+			ws_z0 = -0.90; ws_z1 = -0.22; rw_z0 = 0.78; rw_z1 = 1.88; trunk_y = 0.92 if is_fast else 1.00
+			prof_zy = [
+				Vector2(-2.18, 0.20), Vector2(-2.23, 0.50), Vector2(-2.06, 0.68),
+				Vector2(-0.90, 0.80), Vector2(-0.22, roof_y), Vector2(0.78, roof_y - 0.02),
+				Vector2(1.88, trunk_y), Vector2(2.18, trunk_y - 0.06), Vector2(2.20, 0.50), Vector2(2.10, 0.20),
+			]
+		else:
+			ws_z0 = -0.88; ws_z1 = -0.28; rw_z0 = 0.92; rw_z1 = 1.54; trunk_y = 0.88
+			prof_zy = [
+				Vector2(-2.16, 0.22), Vector2(-2.20, 0.54), Vector2(-2.05, 0.72),
+				Vector2(-0.88, 0.82), Vector2(-0.28, roof_y), Vector2(0.92, roof_y - 0.02),
+				Vector2(1.54, 0.88), Vector2(2.14, 0.84), Vector2(2.18, 0.52), Vector2(2.08, 0.22),
+			]
+		_emit_car_hull_profile(st, prof_zy, hw, c_paint)
+
+		# Two-tone white roof on Wuling MINIEV & Jiaxing EV Taxis!
+		if is_micro or is_taxi:
+			CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(0.0, roof_y + 0.01, (ws_z1 + rw_z0) * 0.5)),
+				Vector3(hw * 1.62, 0.05, maxf(0.9, rw_z0 - ws_z1)), c_white)
+
+		# Flush Windshield, Backlight & Side Windows
+		_emit_sloped_quad(st, Vector3(-hw * 0.84, 0.84, ws_z0 - 0.01), Vector3(hw * 0.84, 0.84, ws_z0 - 0.01),
+			Vector3(hw * 0.77, roof_y - 0.03, ws_z1 - 0.02), Vector3(-hw * 0.77, roof_y - 0.03, ws_z1 - 0.02), c_glass)
+		_emit_sloped_quad(st, Vector3(hw * 0.77, roof_y - 0.04, rw_z0 + 0.01), Vector3(-hw * 0.77, roof_y - 0.04, rw_z0 + 0.01),
+			Vector3(-hw * 0.82, trunk_y + 0.02, rw_z1 + 0.01), Vector3(hw * 0.82, trunk_y + 0.02, rw_z1 + 0.01), c_glass)
+		# Panoramic glass roof on modern EVs (Tesla / SU7 / NIO / Li Auto)
+		if is_ev and not is_micro and not is_taxi:
+			_emit_sloped_quad(st, Vector3(-hw * 0.72, roof_y + 0.006, ws_z1), Vector3(hw * 0.72, roof_y + 0.006, ws_z1),
+				Vector3(hw * 0.72, roof_y - 0.012, rw_z0), Vector3(-hw * 0.72, roof_y - 0.012, rw_z0), c_glass)
+		for side: float in [-1.0, 1.0]:
+			var sx := side * (hw + 0.006)
+			var out_n := Vector3(side, 0.0, 0.0)
+			_emit_uv_quad(st, Vector3(sx, 0.86, ws_z0 + 0.14), Vector3(sx, 0.86, rw_z1 - 0.14),
+				Vector3(sx * 0.92, roof_y - 0.06, rw_z0 - 0.05), Vector3(sx * 0.92, roof_y - 0.06, ws_z1 + 0.05), out_n, c_glass)
+			CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(side * (hw - 0.02), (0.86 + roof_y) * 0.5, (ws_z1 + rw_z0) * 0.35)),
+				Vector3(0.06, roof_y - 0.90, 0.09), c_trim)
+			CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(side * (hw + 0.08), 0.90, ws_z0 + 0.25)),
+				Vector3(0.14, 0.08, 0.11), c_paint)
+
+		# EV Smooth Closed Aero Nose vs ICE Honeycomb Grille + Chinese Green/Blue License Plates!
+		if is_ev:
+			CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(0.0, 0.30, front_z + 0.01)), Vector3(hw * 1.48, 0.11, 0.05), c_trim)
+		else:
+			CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(0.0, 0.48, front_z + 0.01)), Vector3(1.14, 0.24, 0.06), c_trim)
+			CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(0.0, 0.61, front_z)), Vector3(1.18, 0.035, 0.06), c_chrome)
+		# Front & rear license plates (Green NEV 渐变绿牌 on EVs, Blue 蓝牌 on ICE!)
+		CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(0.0, 0.36, front_z - 0.02)), Vector3(0.44, 0.12, 0.03), c_plate)
+		CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(0.0, 0.48, rear_z + 0.01)), Vector3(0.44, 0.12, 0.03), c_plate)
+
+		# Signature Lighting: Li Auto Star-Ring full-width white DRL bar vs standard LED headlights
+		if bool(sp.get("star_ring", false)):
+			CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(0.0, 0.84, front_z + 0.04)), Vector3(hw * 1.76, 0.055, 0.07), c_head)
+			for lx: float in [-hw * 0.72, hw * 0.72]:
+				CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(lx, 0.56, front_z + 0.02)), Vector3(0.26, 0.10, 0.06), c_head)
+		else:
+			for lx: float in [-hw * 0.74, hw * 0.74]:
+				CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(lx, 0.62, front_z + 0.04)), Vector3(0.32, 0.10, 0.08), c_head)
+		# Full-width modern Chinese EV ruby LED taillight bar (贯穿式尾灯!)
+		var tail_y := 0.84 if is_suv else 0.72
+		CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(0.0, tail_y, rear_z - 0.01)), Vector3(hw * 1.66, 0.055, 0.06), c_tail)
+		for lx: float in [-hw * 0.72, hw * 0.72]:
+			CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(lx, tail_y - 0.02, rear_z - 0.01)), Vector3(0.34, 0.11, 0.07), c_tail)
+
+		# Signature Chinese Smart-EV Roof LiDAR Sensor Pod (瞭望塔激光雷达 on SU7 / Li Auto / NIO!)
+		if bool(sp.get("lidar", false)):
+			CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(0.0, roof_y + 0.035, ws_z1 + 0.06)), Vector3(0.22, 0.07, 0.18), c_trim)
+			if bool(sp.get("nio_ears", false)):
+				for ex: float in [-0.36, 0.36]:
+					CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(ex, roof_y + 0.028, ws_z1 + 0.08)), Vector3(0.11, 0.055, 0.13), c_trim)
+
+		# Jiaxing EV Taxi glowing roof beacon
+		if is_taxi:
+			CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(0.0, roof_y + 0.09, 0.08)), Vector3(0.48, 0.13, 0.18), c_head)
+
+		# Four Round Tires + Alloy Rims
+		var wr := 0.27 if is_micro else (0.36 if is_suv else 0.33)
+		var wz_f := -0.96 if is_micro else (-1.22 if is_hatch else -1.38)
+		var wz_r := 0.96 if is_micro else (1.20 if is_hatch else 1.36)
+		for wx: float in [-(hw - 0.04), (hw - 0.04)]:
+			for wz: float in [wz_f, wz_r]:
+				_emit_round_wheel(st, Vector3(wx, wr, wz), wr, 0.20 if is_micro else 0.23, signf(wx), c_wheel)
+
+		_zh_car_meshes.append(st.commit())
 
 
 static func _emit_car_hull_profile(st: SurfaceTool, prof: Array[Vector2], half_w: float, col: Color) -> void:

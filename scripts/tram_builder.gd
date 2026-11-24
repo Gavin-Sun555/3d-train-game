@@ -7,7 +7,7 @@ static func build_tram(spec: Dictionary, override_sections: int = -1) -> Diction
 	root.name = "TramVehicle"
 
 	var default_sec := maxi(1, int(spec.get("default_sections", spec.get("sections", 3))))
-	var sections_count := clampi(override_sections if override_sections > 0 else default_sec, 1, 4)
+	var sections_count := clampi(override_sections if override_sections > 0 else default_sec, 1, 5)
 	var sec_len := float(spec.get("section_len", 9.2))
 	var width := float(spec.get("width", 2.60))
 	var vintage := bool(spec.get("vintage", false))
@@ -418,9 +418,9 @@ static func build_tram(spec: Dictionary, override_sections: int = -1) -> Diction
 				_build_detailed_bogie(sec, bz, mat_dark, mat_steel, mat_accent)
 
 		# 6. Rooftop Shrouds / HVAC / Supercap Pods / Vintage Clerestory Lantern Roof
-		_build_roof_equipment(sec, width, sec_len, roof_kind, vintage, mat_roof, mat_body, mat_dark, mat_cove_light)
+		_build_roof_equipment(sec, width, sec_len, roof_kind, vintage, mat_roof, mat_body, mat_dark, mat_cove_light, mat_accent)
 
-		var panto_sec_idx := 1 if sections_count >= 3 else 0
+		var panto_sec_idx := (sections_count / 2) if sections_count >= 3 else 0
 		if idx == panto_sec_idx and not monorail:
 			_build_pantograph(sec, panto_kind, mat_dark, mat_steel, mat_brass)
 
@@ -876,13 +876,27 @@ static func _build_front_cab_and_nose(
 ) -> Dictionary:
 	var hw := width * 0.5
 	var fz := -hl
-	var slope_deg := 18.0 if nose_kind == "sleek" else (12.0 if nose_kind in ["streamlined", "faceted"] else 5.0)
+	var is_nanhu := (nose_kind == "nanhu_swift")
+	var slope_deg := 21.0 if is_nanhu else (18.0 if nose_kind == "sleek" else (12.0 if nose_kind in ["streamlined", "faceted"] else 5.0))
 
 	# Sculpted bumper, coupler pocket & lower nose apron
 	_add_box(sec, Vector3(width - 0.10, 0.32, 0.64), Vector3(0.0, 0.48, fz + 0.14), mat_dark)
 	var nose_apron := _add_box(sec, Vector3(width - 0.04, 0.76, 0.58), Vector3(0.0, 0.94, fz + 0.24), mat_body)
 	nose_apron.rotation.x = deg_to_rad(slope_deg * 0.45)
 	_add_box(sec, Vector3(width + 0.015, 0.20, 0.60), Vector3(0.0, 0.96, fz + 0.22), mat_accent)
+	if is_nanhu:
+		# Iconic Jiaxing "南湖号" CRRC Changchun aerodynamic "南湖雨燕 / 红船" prow:
+		var prow := _add_box(sec, Vector3(width - 0.16, 0.68, 0.42), Vector3(0.0, 0.88, fz - 0.06), mat_body)
+		prow.rotation.x = deg_to_rad(14.0)
+		var red_wave := _add_box(sec, Vector3(width - 0.08, 0.14, 0.46), Vector3(0.0, 1.18, fz - 0.04), mat_accent)
+		red_wave.rotation.x = deg_to_rad(16.0)
+		var brow := _add_box(sec, Vector3(width - 0.12, 0.34, 0.56), Vector3(0.0, 2.86, fz + 0.36), mat_body)
+		brow.rotation.x = deg_to_rad(10.0)
+		_add_box(sec, Vector3(width - 0.06, 0.11, 0.62), Vector3(0.0, 3.04, fz + 0.44), mat_accent)
+		for side_n: float in [-1.0, 1.0]:
+			var drl := _add_box(sec, Vector3(0.46, 0.075, 0.14), Vector3(side_n * (hw - 0.36), 1.04, fz - 0.24), mat_headlight)
+			drl.rotation.z = deg_to_rad(-side_n * 14.0)
+			_add_box(sec, Vector3(0.05, 1.48, 0.22), Vector3(side_n * (hw - 0.03), 1.98, fz + 0.42), mat_dark)
 
 	# Vintage iron cowcatcher / lifeguard grille under front bumper!
 	if vintage:
@@ -1166,7 +1180,8 @@ static func _build_roof_equipment(
 	mat_roof: Material,
 	mat_body: Material,
 	mat_dark: Material,
-	mat_cove: Material
+	mat_cove: Material,
+	mat_accent: Material = null
 ) -> void:
 	if vintage or roof_kind == "clerestory":
 		# Classic raised monitor clerestory roof with glowing side transom windows!
@@ -1176,6 +1191,14 @@ static func _build_roof_equipment(
 		_add_box(sec, Vector3(width * 0.74, 0.20, sec_len * 0.84), Vector3(0.0, 3.22, 0.0), mat_roof)
 		for vz: float in [-2.6, 0.0, 2.6]:
 			_add_cyl(sec, 0.16, 0.12, Vector3(0.0, 3.36, vz), mat_dark, Vector3.ZERO)
+	elif roof_kind == "nanhu_supercap":
+		# Authentic Jiaxing "南湖号" full-length sleek white aerodynamic supercapacitor roof fairings + red pinstripe!
+		for side: float in [-1.0, 1.0]:
+			_add_box(sec, Vector3(0.12, 0.30, sec_len - 0.22), Vector3(side * (width * 0.47), 3.26, 0.0), mat_body)
+			if mat_accent != null:
+				_add_box(sec, Vector3(0.135, 0.08, sec_len - 0.18), Vector3(side * (width * 0.472), 3.16, 0.0), mat_accent)
+		_add_box(sec, Vector3(width * 0.76, 0.26, sec_len * 0.68), Vector3(0.0, 3.25, 0.0), mat_roof)
+		_add_box(sec, Vector3(width * 0.56, 0.06, sec_len * 0.58), Vector3(0.0, 3.39, 0.0), mat_dark)
 	elif roof_kind == "shrouded":
 		# Sleek full-length aerodynamic rooftop side fairings
 		for side: float in [-1.0, 1.0]:
@@ -1241,6 +1264,13 @@ static func _build_pantograph(
 			var up2 := _add_box(panto, Vector3(0.04, 0.98, 0.04), Vector3(side, 1.28, 0.35), mat_steel)
 			up2.rotation.x = deg_to_rad(-36.0)
 		_add_box(panto, Vector3(1.48, 0.05, 0.14), Vector3(0.0, 1.76, 0.0), mat_dark)
+	elif kind == "supercap_charge":
+		# Compact low-profile station rapid-charge supercapacitor collector (retracted while running catenary-free!)
+		var arm_low := _add_box(panto, Vector3(0.08, 0.52, 0.08), Vector3(0.0, 0.20, 0.18), mat_steel)
+		arm_low.rotation.x = deg_to_rad(68.0)
+		var arm_up := _add_box(panto, Vector3(0.06, 0.54, 0.06), Vector3(0.0, 0.42, 0.16), mat_steel)
+		arm_up.rotation.x = deg_to_rad(-70.0)
+		_add_box(panto, Vector3(1.18, 0.06, 0.24), Vector3(0.0, 0.56, -0.06), mat_dark)
 	else:
 		var lower_arm := _add_box(panto, Vector3(0.08, 1.08, 0.08), Vector3(0.0, 0.46, 0.32), mat_steel)
 		lower_arm.rotation.x = deg_to_rad(38.0)

@@ -383,6 +383,9 @@ static func _build_roads_and_curbs(
 	var yellow_st := SurfaceTool.new()
 	yellow_st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var has_yellow := false
+	var bike_st := SurfaceTool.new()
+	bike_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var has_bike := false
 
 	var curb_st := SurfaceTool.new()
 	curb_st.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -531,6 +534,34 @@ static func _build_roads_and_curbs(
 							Vector3(d1.x + dn.x, ym2, d1.y + dn.y), Vector3(d1.x - dn.x, ym2, d1.y - dn.y), Vector3.UP)
 						has_mark = true
 						sd += 9.2
+				# Authentic Chinese Non-Motorized Bike Lane (非机动车道: green outer strip + solid white line)
+				if bool(r.get("bike_lane", false)) and hw >= 5.75 and layer == 0 and seg_len > 22.0:
+					var bl_s0 := minf(9.5, seg_len * 0.25)
+					var bl_s1 := seg_len - bl_s0
+					var ba := a + dir * bl_s0
+					var bb := a + dir * bl_s1
+					var yb := y + 0.011
+					for bside: float in [-1.0, 1.0]:
+						# Subtle muted emerald/teal-green bike-lane asphalt strip along outer 1.85m
+						var inner_o := bside * (hw - 2.10)
+						var outer_o := bside * (hw - 0.16)
+						var o_lo := minf(inner_o, outer_o)
+						var o_hi := maxf(inner_o, outer_o)
+						var p0b := ba + nrm1 * o_lo
+						var p1b := ba + nrm1 * o_hi
+						var p2b := bb + nrm1 * o_hi
+						var p3b := bb + nrm1 * o_lo
+						_add_flat_quad(bike_st, Vector3(p0b.x, yb, p0b.y), Vector3(p1b.x, yb, p1b.y),
+							Vector3(p2b.x, yb, p2b.y), Vector3(p3b.x, yb, p3b.y), Vector3.UP)
+						has_bike = true
+						# Solid white bike-lane divider stripe (机非分界实线)
+						var loff := bside * (hw - 2.18)
+						var l0 := ba + nrm1 * loff
+						var l1 := bb + nrm1 * loff
+						var ln := nrm1 * 0.085
+						_add_flat_quad(mark_st, Vector3(l0.x - ln.x, ym2, l0.y - ln.y), Vector3(l0.x + ln.x, ym2, l0.y + ln.y),
+							Vector3(l1.x + ln.x, ym2, l1.y + ln.y), Vector3(l1.x - ln.x, ym2, l1.y - ln.y), Vector3.UP)
+						has_mark = true
 				continue
 			var s := 3.5
 			while s + 3.0 < seg_len - 3.0:
@@ -612,6 +643,17 @@ static func _build_roads_and_curbs(
 		y_mi.material_override = y_mat
 		y_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(y_mi)
+	if has_bike:
+		var b_mi := MeshInstance3D.new()
+		b_mi.name = "BikeLaneStrips"
+		b_mi.mesh = Terrain.commit_draped(bike_st, b_mi)
+		var b_mat := ShaderMaterial.new()
+		b_mat.shader = load("res://shaders/road_marking.gdshader") as Shader
+		b_mat.set_shader_parameter("paint_col", Color(0.18, 0.42, 0.34))
+		b_mat.set_shader_parameter("rough_val", 0.88)
+		b_mi.material_override = b_mat
+		b_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		parent.add_child(b_mi)
 
 
 static func _build_buildings(parent: Node3D, buildings: Array, building_mat: ShaderMaterial) -> void:
@@ -2255,7 +2297,7 @@ const ROAD_Y := 0.042
 static func _build_kerbs(parent: Node3D, roads: Array, bays: Array, road_mat: Material, clear_idx: Dictionary = {}) -> void:
 	parent.set_meta("last_bays_sig", _station_bays_sig(bays) + "#" + _tile_clear_sig(parent, clear_idx))
 	var has_tracks := not clear_idx.is_empty() and not (clear_idx.get("grid", {}) as Dictionary).is_empty()
-	for nm: String in ["GraniteCurbs", "StationKerbBays", "Sidewalks", "StreetFurniture"]:
+	for nm: String in ["GraniteCurbs", "StationKerbBays", "Sidewalks", "StreetFurniture", "BikeLaneGuardrails"]:
 		var old := parent.get_node_or_null(nm)
 		if old != null:
 			parent.remove_child(old)
@@ -2433,6 +2475,129 @@ static func _build_kerbs(parent: Node3D, roads: Array, bays: Array, road_mat: Ma
 		bay_mi.material_override = road_mat
 		bay_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(bay_mi)
+	_build_bike_guardrails(parent, roads, int(parent.get_meta("kerb_emit_n", roads.size())), seg_grid, bays, clear_idx, has_tracks)
+
+
+# Low white municipal Chinese bike-lane separation guardrails (机非隔离护栏) on wide bike_lane avenues.
+# Strictly skips intersections, side streets, station bays, and laid tram tracks.
+static func _build_bike_guardrails(
+	parent: Node3D, roads: Array, emit_n: int, seg_grid: Dictionary,
+	bays: Array, clear_idx: Dictionary, has_tracks: bool
+) -> void:
+	var gst := SurfaceTool.new()
+	gst.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var has_g := false
+	var rail_white := Color(0.90, 0.91, 0.92)
+	var post_base := Color(0.32, 0.34, 0.37)
+	var accent_blue := Color(0.10, 0.42, 0.78)
+
+	for ri in range(mini(emit_n, roads.size())):
+		var r: Dictionary = roads[ri]
+		if not bool(r.get("bike_lane", false)) or bool(r.get("underground", false)) or int(r.get("layer", 0)) != 0:
+			continue
+		var hw := clampf(float(r.get("width", 12.0)) * 0.5, 3.2, 13.5)
+		if hw < 6.4:
+			continue
+		var pts: Array = r.get("pts", [])
+		if pts.size() < 2:
+			continue
+		var g_off := hw - 2.18
+		for i in range(pts.size() - 1):
+			var a := Vector2(float(pts[i][0]), float(pts[i][1]))
+			var b := Vector2(float(pts[i + 1][0]), float(pts[i + 1][1]))
+			var d := b - a
+			var sl := d.length()
+			if sl < 32.0:
+				continue
+			var dir := d / sl
+			var nrm := Vector2(-dir.y, dir.x)
+			var u3 := Vector3(dir.x, 0.0, dir.y)
+			var n3 := Vector3(nrm.x, 0.0, nrm.y)
+			var s_start := 13.5
+			var s_end := sl - 13.5
+			for side: float in [-1.0, 1.0]:
+				var run_a := -1.0
+				var s := s_start
+				while s <= s_end + 0.01:
+					var sc := minf(s, s_end)
+					var p2 := a + dir * sc + nrm * (side * g_off)
+					var clear_ok := _other_road_clear(seg_grid, p2, ri) >= 3.2 and not _in_bay(bays, p2)
+					if clear_ok and has_tracks:
+						clear_ok = TrackBuilder.track_clearance_dist(clear_idx, p2) >= 2.8
+					if clear_ok and s <= s_end:
+						if run_a < 0.0:
+							run_a = sc
+					else:
+						if run_a >= 0.0 and sc - run_a >= 4.0:
+							_emit_guardrail_run(gst, a + dir * run_a + nrm * (side * g_off), u3, n3, sc - run_a, rail_white, post_base, accent_blue)
+							has_g = true
+						run_a = -1.0
+					s += 4.5
+				if run_a >= 0.0 and s_end - run_a >= 4.0:
+					_emit_guardrail_run(gst, a + dir * run_a + nrm * (side * g_off), u3, n3, s_end - run_a, rail_white, post_base, accent_blue)
+					has_g = true
+
+	if not has_g:
+		return
+	var mi := MeshInstance3D.new()
+	mi.name = "BikeLaneGuardrails"
+	mi.mesh = Terrain.commit_draped(gst, mi)
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.roughness = 0.48
+	mat.metallic = 0.25
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(mi)
+
+
+static func _emit_guardrail_run(
+	st: SurfaceTool, p0: Vector2, U: Vector3, N: Vector3, run_len: float,
+	rail_c: Color, base_c: Color, accent_c: Color
+) -> void:
+	var o := Vector3(p0.x, 0.055, p0.y)
+	# Top horizontal rail (y = 0.62..0.72), blue reflective accent strip (0.55..0.62), mid rail (0.28..0.34)
+	_gr_box(st, o, U, N, 0.0, run_len, 0.62, 0.72, -0.045, 0.045, rail_c)
+	_gr_box(st, o, U, N, 0.0, run_len, 0.56, 0.62, -0.038, 0.038, accent_c)
+	_gr_box(st, o, U, N, 0.0, run_len, 0.24, 0.30, -0.035, 0.035, rail_c.darkened(0.06))
+	# Posts every ~4.5m with weighted footplates
+	var n_posts := maxi(2, int(round(run_len / 4.5)) + 1)
+	for pi in range(n_posts):
+		var pu := run_len * float(pi) / float(n_posts - 1)
+		_gr_box(st, o, U, N, pu - 0.12, pu + 0.12, 0.0, 0.10, -0.14, 0.14, base_c)
+		_gr_box(st, o, U, N, pu - 0.04, pu + 0.04, 0.10, 0.74, -0.045, 0.045, rail_c)
+
+
+static func _gr_box(
+	st: SurfaceTool, o: Vector3, U: Vector3, N: Vector3,
+	u0: float, u1: float, y0: float, y1: float, d0: float, d1: float, col: Color
+) -> void:
+	var p000 := o + U * u0 + N * d0 + Vector3.UP * y0
+	var p100 := o + U * u1 + N * d0 + Vector3.UP * y0
+	var p110 := o + U * u1 + N * d0 + Vector3.UP * y1
+	var p010 := o + U * u0 + N * d0 + Vector3.UP * y1
+	var p001 := o + U * u0 + N * d1 + Vector3.UP * y0
+	var p101 := o + U * u1 + N * d1 + Vector3.UP * y0
+	var p111 := o + U * u1 + N * d1 + Vector3.UP * y1
+	var p011 := o + U * u0 + N * d1 + Vector3.UP * y1
+	for face: Array in [
+		[p001, p101, p111, p011, col],
+		[p100, p000, p010, p110, col.darkened(0.05)],
+		[p011, p111, p110, p010, col.lightened(0.06)],
+		[p000, p001, p011, p010, col.darkened(0.10)],
+		[p101, p100, p110, p111, col.darkened(0.10)],
+	]:
+		var a: Vector3 = face[0]
+		var b: Vector3 = face[1]
+		var c: Vector3 = face[2]
+		var d: Vector3 = face[3]
+		var fc: Color = face[4]
+		var nrm := (b - a).cross(d - a).normalized()
+		for v: Vector3 in [a, b, c, a, c, d]:
+			st.set_color(fc)
+			st.set_normal(nrm)
+			st.add_vertex(v)
 
 
 # Clearance from point p to the nearest carriageway edge of any OTHER street (negative = inside it)

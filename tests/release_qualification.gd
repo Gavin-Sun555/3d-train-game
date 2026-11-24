@@ -575,6 +575,57 @@ func _run() -> void:
 		"3D trains traverse elevated/ramps/tunnels smoothly with zero incidents (LR y=[%.1f..%.1f]m, Mono y=[%.1f..%.1f]m)" % [lr_min_y, lr_max_y, mr_min_y, mr_max_y]
 	)
 
+	# Verify all 5 Jiaxing Realism Upgrades:
+	# 1) Real T1 Phase 1 (21 stations) & 5-module CRRC "南湖号" rolling stock
+	var t1_ln: Dictionary = jx_graph.lines.get(1, {})
+	var t1_tr_secs := 0
+	for tr_chk: Dictionary in jx_tsim.trams:
+		if int(tr_chk.get("line_id", -1)) == 1:
+			t1_tr_secs = (tr_chk["tram_info"]["sections"] as Array).size()
+			break
+	_check(
+		str(t1_ln.get("model_key", "")) == "crrc-jiaxing-nanhu" and (t1_ln.get("station_ids", []) as Array).size() == 21 and t1_tr_secs == 5,
+		"Jiaxing T1 runs 5-module CRRC 南湖号 across all 21 authentic Phase 1 stations (stops=%d, secs=%d)" % [(t1_ln.get("station_ids", []) as Array).size(), t1_tr_secs]
+	)
+	# 2) Dense Chain + Local Chinese Storefronts & 3) Chinese Gated Residential Compounds
+	var sfs_arr: Array = m._map_data.get("storefronts", [])
+	var n_chain := 0; var n_local := 0
+	for sf_d in sfs_arr:
+		if sf_d is Dictionary:
+			if str(sf_d.get("tier", "")) == "chain":
+				n_chain += 1
+			elif str(sf_d.get("tier", "")) == "local":
+				n_local += 1
+	var gcomp_n := m._city_root.get_node_or_null("JiaxingLandmarks/ChineseGatedCompounds/CompoundWallsAndGates") as MeshInstance3D
+	_check(
+		sfs_arr.size() >= 10000 and n_chain >= 3000 and n_local >= 5000 and gcomp_n != null,
+		"Jiaxing builds dense storefronts (%d chain + %d local) & Chinese Gated Residential Compounds" % [n_chain, n_local]
+	)
+	# 4) Bike Lanes + Guardrails + Chinese E-Bikes & 5) Chinese EV Fleet + Jam-Free AI Traffic!
+	var ts_jx: TrafficSim = m._traffic_sim as TrafficSim
+	var ebike_cnt := ts_jx.ebike_sim.ebikes.size() if (ts_jx != null and ts_jx.ebike_sim != null) else 0
+	var zh_ev_cnt := ts_jx._zh_car_meshes.size() if ts_jx != null else 0
+	var focus_jx := Vector3(1191.0, 0.0, 224.0) # 纺工路南溪西路 busy T1 avenue
+	var moving_samples := 0
+	var total_samples := 0
+	var eb_moving := 0
+	for _tf in range(250): # 25s @ 0.1s live road + e-bike + tram co-simulation
+		ts_jx.step_traffic(0.1, jx_graph, jx_tsim.trams, 0, false, focus_jx)
+		if _tf >= 100 and _tf % 10 == 0:
+			for car_d: Dictionary in ts_jx.cars:
+				total_samples += 1
+				if float(car_d.get("speed", 0.0)) > 1.2:
+					moving_samples += 1
+			if ts_jx.ebike_sim != null:
+				for eb_d: Dictionary in ts_jx.ebike_sim.ebikes:
+					if float(eb_d.get("speed", 0.0)) > 1.0:
+						eb_moving += 1
+	var move_ratio := float(moving_samples) / float(maxi(1, total_samples))
+	_check(
+		zh_ev_cnt == 16 and ebike_cnt >= 24 and eb_moving > 0 and move_ratio >= 0.40,
+		"Chinese EV fleet (%d models), %d active e-bikes, and jam-free AI cars (%.0f%% freely cruising)" % [zh_ev_cnt, ebike_cnt, move_ratio * 100.0]
+	)
+
 	# Save/Load round-trip check for 3D elevations, stacked edges, ramps & underground stations
 	var saved_3d := jx_graph.export_state()
 	var g_reload := NetworkGraph.new()

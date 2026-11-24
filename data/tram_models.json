@@ -121,6 +121,46 @@
       ]
     },
     {
+      "key": "crrc-jiaxing-nanhu",
+      "name_zh": "中车长客 · 嘉兴南湖号超级电容电车",
+      "name_en": "CRRC Jiaxing Nanhu Supercap",
+      "era": "modern",
+      "origin": "中国 · 嘉兴T1线南湖号(5模块)",
+      "year": 2021,
+      "max_speed_kmh": 70,
+      "accel": 1.24,
+      "decel": 1.38,
+      "width": 2.65,
+      "default_sections": 5,
+      "section_len": 6.45,
+      "cap_per_section": 74,
+      "nose": "nanhu_swift",
+      "roof": "nanhu_supercap",
+      "panto": "supercap_charge",
+      "vintage": false,
+      "single_headlamp": false,
+      "body_color": [
+        0.97,
+        0.97,
+        0.98
+      ],
+      "accent_color": [
+        0.82,
+        0.10,
+        0.13
+      ],
+      "roof_color": [
+        0.93,
+        0.94,
+        0.96
+      ],
+      "seat_color": [
+        0.78,
+        0.16,
+        0.18
+      ]
+    },
+    {
       "key": "crrc-haizhu",
       "name_zh": "中车株机 · 海珠超级电容电车",
       "name_en": "CRRC Haizhu Supercap",

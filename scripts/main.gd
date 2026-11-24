@@ -5649,7 +5649,7 @@ func _refresh_stats_modal_ui() -> void:
 			var cap_sum := 0
 			var ob_sum := 0
 			var model_label := str(ln.get("model_key", "Tram"))
-			var sec_cnt := clampi(int(ln.get("sections", 2)), 1, 4)
+			var sec_cnt := clampi(int(ln.get("sections", 2)), 1, 5)
 			for tr_var in _transit_sim.trams:
 				var tr: Dictionary = tr_var
 				if int(tr.get("line_id", -1)) == lid:
@@ -6339,12 +6339,17 @@ func _refresh_build_buttons() -> void:
 
 
 func _max_sections_for_draft() -> int:
+	var sec_len := 10.0
+	if _plan_model_idx >= 0 and _plan_model_idx < _tram_models.size():
+		sec_len = float(_tram_models[_plan_model_idx].get("section_len", 10.0))
 	if _draft_station_ids.is_empty():
-		return 4
+		return 5 if sec_len < 7.5 else 4
 	var min_plat := 56.0
 	for sid: int in _draft_station_ids:
 		if _graph.stations.has(sid):
 			min_plat = minf(min_plat, float(_graph.stations[sid].get("platform_len", 27.0)))
+	if sec_len < 7.5:
+		return clampi(int(floor((min_plat + 3.0) / maxf(4.5, sec_len))), 2, 5)
 	if min_plat >= 48.0:
 		return 4
 	if min_plat >= 36.0:
@@ -6358,7 +6363,7 @@ func _set_era_filter(era: String) -> void:
 		if _era_matches(_tram_models[i]):
 			_plan_model_idx = i
 			break
-	_plan_sections = mini(2, int(_tram_models[_plan_model_idx].get("default_sections", 2)))
+	_plan_sections = mini(_max_sections_for_draft(), int(_tram_models[_plan_model_idx].get("default_sections", 2)))
 	_refresh_plan_ui()
 
 
@@ -6376,7 +6381,7 @@ func _step_plan_model(step_dir: int) -> void:
 		var cand := posmod(_plan_model_idx + step_dir * k, n)
 		if _era_matches(_tram_models[cand]):
 			_plan_model_idx = cand
-			_plan_sections = mini(2, int(_tram_models[cand].get("default_sections", 2)))
+			_plan_sections = mini(_max_sections_for_draft(), int(_tram_models[cand].get("default_sections", 2)))
 			break
 	_refresh_plan_ui()
 

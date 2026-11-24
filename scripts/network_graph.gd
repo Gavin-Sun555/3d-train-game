@@ -301,6 +301,9 @@ func load_from_map_data(map_data: Dictionary, use_starter: bool = true) -> void:
 	next_line_id = 1
 	monorail_seeded = false
 	global_signal_priority = false
+	var map_key := str(map_data.get("key", ""))
+	set_meta("map_key", map_key)
+	set_meta("is_chinese_city", map_key == "jiaxing" or str(map_data.get("name", "")).contains("嘉兴"))
 
 	for n_raw in map_data.get("graph_nodes", []):
 		var nid := int(n_raw["id"])
@@ -495,7 +498,7 @@ func import_state(state: Dictionary) -> void:
 			"color": Color(float(c_arr[0]), float(c_arr[1]), float(c_arr[2])),
 			"model_key": str(l_item.get("model_key", "siemens-s700")),
 			"trams_count": clampi(int(l_item.get("trams_count", 2)), 1, 15),
-			"sections": clampi(int(l_item.get("sections", 3)), 1, 4),
+			"sections": clampi(int(l_item.get("sections", 3)), 1, 5),
 			"station_ids": sids,
 			"express": bool(l_item.get("express", false)),
 			"signal_priority": bool(l_item.get("signal_priority", false)),
@@ -719,7 +722,7 @@ func create_line(
 		"color": col,
 		"model_key": model_key,
 		"trams_count": clampi(trams_count, 1, 15),
-		"sections": clampi(sections, 1, 4),
+		"sections": clampi(sections, 1, 5),
 		"station_ids": station_ids.duplicate(),
 		"express": express,
 		"signal_priority": signal_priority,
@@ -738,7 +741,7 @@ func update_line(lid: int, station_ids: Array[int], model_key: String, trams_cou
 	ln["station_ids"] = station_ids.duplicate()
 	ln["model_key"] = model_key
 	ln["trams_count"] = clampi(trams_count, 1, 15)
-	ln["sections"] = clampi(sections, 1, 4)
+	ln["sections"] = clampi(sections, 1, 5)
 	ln["express"] = express
 	ln["signal_priority"] = signal_priority
 	return true
