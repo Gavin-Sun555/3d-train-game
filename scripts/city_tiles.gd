@@ -36,6 +36,13 @@ const UNLOAD_RADIUS := 3300.0
 var _unload_tick := 0
 var _swap_cooldown := 0
 const SWAP_COOLDOWN_FRAMES := 4
+# A finished tile (thousands of nodes) entering or leaving the scene tree in one frame cost 20-35 ms of main-thread
+# time on its own and made the camera hitch; both now happen node by node under a per-frame time budget
+var _stage := {} # {"key", "node", "sig", "pairs": Array[[parent, child]], "i": int} while a tile is attached
+var _free_queue: Array[Node] = [] # hidden tiles being freed piecemeal
+const STAGE_BUDGET_MS := 2.5
+const FREE_BUDGET_MS := 1.5
+const LABELS_PER_FRAME := 24 # sign texts shaped per frame while a tile is attached
 
 
 static func has_tiles(map_data: Dictionary) -> bool:
@@ -441,6 +448,10 @@ func step() -> void:
 	if _unload_tick >= 45:
 		_unload_tick = 0
 		_unload_far()
+	_free_step(FREE_BUDGET_MS)
+	if not _stage.is_empty():
+		_stage_step(STAGE_BUDGET_MS)
+		return
 	if not _drape.is_empty():
 		_drape_step()
 		return
@@ -477,9 +488,11 @@ func _unload_far() -> void:
 			continue
 		if not _drape.is_empty() and _drape.get("key") == key:
 			continue
+		if not _stage.is_empty() and _stage.get("key") == key:
+			continue
 		var c := (Vector2(key) + Vector2(0.5, 0.5)) * TILE
 		if c.distance_squared_to(f) > r2:
-			(n as Node).queue_free()
+			_retire(n as Node)
 			t["node"] = null
 			t["built_sig"] = -1
 
@@ -557,16 +570,90 @@ func _swap_in(key: Vector2i, node: Node3D, sig: int) -> void:
 	if not _tiles.has(key):
 		node.queue_free()
 		return
+	if node.get_parent() != self:
+		# Attach node by node over the next frames (hidden; the old version of the tile stays up meanwhile)
+		var pairs: Array = []
+		_collect_pairs(node, pairs)
+		for pr: Array in pairs:
+			(pr[0] as Node).remove_child(pr[1])
+		node.visible = false
+		add_child(node)
+		_stage = {"key": key, "node": node, "sig": sig, "pairs": pairs, "i": 0}
+		return
+	_finish_swap(key, node, sig)
+
+
+static func _collect_pairs(parent: Node, pairs: Array) -> void:
+	for ch in parent.get_children():
+		pairs.append([parent, ch])
+		_collect_pairs(ch, pairs)
+
+
+func _stage_step(budget_ms: float) -> void:
+	var t0 := Time.get_ticks_usec()
+	var pairs: Array = _stage["pairs"]
+	var i := int(_stage["i"])
+	var labels := 0
+	var unlimited := budget_ms >= 1e8
+	while i < pairs.size() and float(Time.get_ticks_usec() - t0) < budget_ms * 1000.0:
+		var pr: Array = pairs[i]
+		var ch: Node = pr[1]
+		if ch is Label3D and ch.has_meta("pending_text"):
+			if labels >= LABELS_PER_FRAME and not unlimited:
+				break
+			(ch as Label3D).text = str(ch.get_meta("pending_text"))
+			ch.remove_meta("pending_text")
+			labels += 1
+		(pr[0] as Node).add_child(ch)
+		i += 1
+	_stage["i"] = i
+	if i >= pairs.size():
+		var st := _stage
+		_stage = {}
+		if is_instance_valid(st["node"]):
+			_finish_swap(st["key"], st["node"], st["sig"])
+
+
+func _finish_swap(key: Vector2i, node: Node3D, sig: int) -> void:
+	if not _tiles.has(key):
+		_retire(node)
+		return
 	node.visible = true
 	var t: Dictionary = _tiles[key]
-	if is_instance_valid(t.get("node")):
-		(t["node"] as Node).queue_free()
-	if node.get_parent() != self:
-		add_child(node)
+	if is_instance_valid(t.get("node")) and t["node"] != node:
+		_retire(t["node"] as Node)
 	t["node"] = node
 	t["built_sig"] = sig
 	if on_tile_built.is_valid():
 		on_tile_built.call(node)
+
+
+# Hides a tile at once and frees it a few nodes per frame
+func _retire(n: Node) -> void:
+	if n is Node3D:
+		(n as Node3D).visible = false
+	_free_queue.append(n)
+
+
+func _free_step(budget_ms: float) -> void:
+	var t0 := Time.get_ticks_usec()
+	while not _free_queue.is_empty() and float(Time.get_ticks_usec() - t0) < budget_ms * 1000.0:
+		var n: Node = _free_queue.back()
+		if not is_instance_valid(n):
+			_free_queue.pop_back()
+			continue
+		# free the deepest-first leaves so each call stays small
+		var cur := n
+		while cur.get_child_count() > 0:
+			cur = cur.get_child(cur.get_child_count() - 1)
+		if cur == n:
+			_free_queue.pop_back()
+		cur.free()
+
+
+func _flush_stage() -> void:
+	if not _stage.is_empty():
+		_stage_step(1e9)
 
 
 # Waits for the tile in flight (before the main thread touches shared builder caches, or for tests)
@@ -580,6 +667,7 @@ func finish_pending() -> void:
 		_task_result = null
 	if not _drape.is_empty():
 		_drape_step(1e9)
+	_flush_stage()
 
 
 # Builds every remaining tile right now on the calling thread (headless tests / screenshots)
@@ -594,6 +682,7 @@ func build_all_now() -> void:
 		_install(key, build_tile_node(t["data"], _mats, near_bays, _clear_idx, track_ctx_ver), int(t["sig"]))
 		if not _drape.is_empty():
 			_drape_step(1e9)
+		_flush_stage()
 
 
 func tile_count() -> int:
@@ -627,6 +716,10 @@ func near_unbuilt_count(center: Vector3, radius_m: float = 1450.0) -> int:
 func prewarm_step(center: Vector3, radius_m: float = 1450.0) -> bool:
 	focus = center
 	_swap_cooldown = 0
+	_free_step(4.0)
+	if not _stage.is_empty():
+		_stage_step(10.0)
+		return true
 	if not _drape.is_empty():
 		_drape_step(10.0)
 		return true
@@ -655,6 +748,15 @@ func prewarm_step(center: Vector3, radius_m: float = 1450.0) -> bool:
 
 
 func _exit_tree() -> void:
+	if not _stage.is_empty():
+		# children detached for staging and not yet re-attached are orphans: free them
+		var pairs: Array = _stage["pairs"]
+		for j in range(int(_stage["i"]), pairs.size()):
+			var ch: Node = pairs[j][1]
+			if is_instance_valid(ch) and ch.get_parent() == null:
+				ch.free()
+		_stage = {}
+	_free_queue.clear()
 	_drape = {}
 	if _task_id >= 0:
 		WorkerThreadPool.wait_for_task_completion(_task_id)

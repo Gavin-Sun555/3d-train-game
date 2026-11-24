@@ -1236,6 +1236,54 @@ func get_speed_limit_status(tr: Dictionary) -> Dictionary:
 	}
 
 
+# The next point (up to max_m ahead of the nose) where the posted limit changes from the one in force now.
+# A lower limit applies when the nose reaches it; a higher one only once the tail has cleared the slower section.
+# Returns {} when the limit stays the same over the whole window.
+func get_next_limit_change(tr: Dictionary, max_m: float = 600.0) -> Dictionary:
+	var limits: PackedFloat32Array = tr.get("speed_limits_kmh", PackedFloat32Array())
+	var zones: PackedByteArray = tr.get("zone_kinds", PackedByteArray())
+	var n := limits.size()
+	if n == 0:
+		return {}
+	var cur_lim := float(get_speed_limit_status(tr)["limit_kmh"])
+	var s_now := float(tr["s"])
+	var step_sign := int(signf(float(tr["dir"]) * float(tr.get("reverser", 1.0))))
+	if step_sign == 0:
+		step_sign = 1
+	var is_loop := bool(tr["is_loop"])
+	var idx_front := clampi(int(round(s_now / NetworkGraph.PROFILE_STEP_M)), 0, n - 1)
+	var c_len := _consist_length(tr)
+	var steps := int(max_m / NetworkGraph.PROFILE_STEP_M)
+	var run_lim := float(limits[idx_front])
+	var raise := {}
+	var best := {}
+	var best_env := 1e18
+	var a_plan := float((tr["spec"] as Dictionary).get("decel", 1.35)) * 0.75
+	for k in range(1, steps + 1):
+		var raw_idx := idx_front + k * step_sign
+		if not is_loop and (raw_idx < 0 or raw_idx >= n):
+			break
+		var ai := posmod(raw_idx, n) if is_loop else raw_idx
+		var lim := float(limits[ai])
+		var dist := float(k) * NetworkGraph.PROFILE_STEP_M
+		if lim < cur_lim - 1.0 and absf(lim - run_lim) > 1.0:
+			# start of a slower section: keep the one that needs braking first (smallest braking envelope)
+			var vt := lim / 3.6
+			var env := vt * vt + 2.0 * a_plan * dist
+			if env < best_env - 0.01:
+				best_env = env
+				best = {"dist_m": dist, "limit_kmh": lim, "zone_name": NetworkGraph.zone_label(int(zones[ai])), "lower": true}
+		elif raise.is_empty() and lim > cur_lim + 1.0 and absf(lim - run_lim) > 1.0:
+			# section ends ahead: the higher limit counts once the whole consist is past this point
+			raise = {"dist_m": dist + c_len, "limit_kmh": lim, "zone_name": NetworkGraph.zone_label(int(zones[ai])), "lower": false}
+		run_lim = lim
+	if not best.is_empty():
+		return best
+	if not raise.is_empty():
+		return raise
+	return {}
+
+
 static func _consist_length(tr: Dictionary) -> float:
 	var tinfo: Dictionary = tr.get("tram_info", {})
 	var sec_cnt := maxi(1, int(tinfo.get("sections_count", 1)))
@@ -2267,7 +2315,10 @@ func _step_tram_physics_and_doors(
 				acc_mul = 1.85
 			elif ai_style == AIStyle.SLOW:
 				acc_mul = 0.88
-		cmd_acc = max_accel * acc_mul * p_lvl * taper
+		# Traction also covers running resistance (rolling + aero, see `drag` below) so full power reaches the
+		# tram's rated top speed instead of balancing out ~10 km/h short of it
+		var run_res := 0.045 + 0.0012 * spd * spd
+		cmd_acc = max_accel * acc_mul * p_lvl * taper + run_res * p_lvl * (1.0 if spd < max_spd_mps else 0.0)
 		effort = p_lvl
 	elif notch < NOTCH_NEUTRAL:
 		if notch == 0:

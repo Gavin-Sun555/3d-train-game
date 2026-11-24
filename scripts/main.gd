@@ -336,6 +336,7 @@ var _btn_global_tsp: Button
 var _btn_stats_global_tsp: Button
 var _lbl_speed: Label
 var _lbl_speed_limit: Label
+var _lbl_limit_ahead: Label # manual driving: next speed-limit change and its distance
 var _lbl_notch: Label
 var _lbl_drv_status: Label
 var _btn_doors: Button
@@ -4894,6 +4895,11 @@ func _build_ui() -> void:
 	_lbl_notch.add_theme_font_size_override("font_size", 18)
 	spd_row.add_child(_lbl_notch)
 
+	_lbl_limit_ahead = Label.new()
+	_lbl_limit_ahead.add_theme_font_size_override("font_size", 17)
+	_lbl_limit_ahead.visible = false
+	drv_vbox.add_child(_lbl_limit_ahead)
+
 	_lbl_drv_status = Label.new()
 	_lbl_drv_status.add_theme_color_override("font_color", Color(0.80, 0.84, 0.88))
 	drv_vbox.add_child(_lbl_drv_status)
@@ -6726,6 +6732,42 @@ func _refresh_lines_list_ui() -> void:
 		_lines_list_vbox.add_child(row)
 
 
+# Upcoming speed-limit change for the player driving by hand: distance and new limit early enough to brake on
+# the service brake, turning amber when it is time to start braking and red when the service brake can no
+# longer make it
+func _update_limit_ahead(tr: Dictionary, kmh: float, lim_kmh: float) -> void:
+	if _lbl_limit_ahead == null:
+		return
+	var show := _transit_sim.manual_drive and is_same(tr, _transit_sim.get_active_tram())
+	var chg := _transit_sim.get_next_limit_change(tr, 600.0) if show else {}
+	if chg.is_empty():
+		_lbl_limit_ahead.visible = false
+		return
+	var dist := float(chg["dist_m"])
+	var new_lim := float(chg["limit_kmh"])
+	var lower := bool(chg["lower"])
+	_lbl_limit_ahead.visible = true
+	if not lower:
+		_lbl_limit_ahead.text = L10n.t("▲ 前方 %.0f m 限速提高到 %.0f km/h", "▲ In %.0f m: limit rises to %.0f km/h") % [dist, new_lim]
+		_lbl_limit_ahead.add_theme_color_override("font_color", Color(0.54, 0.92, 0.72))
+		return
+	var v := kmh / 3.6
+	var vt := new_lim / 3.6
+	var decel := float((tr["spec"] as Dictionary).get("decel", 1.35)) * 0.75 # B3: what a driver uses for a planned slow-down
+	var need := maxf(0.0, (v * v - vt * vt) / (2.0 * decel)) + v * 2.0 # plus ~2 s reaction
+	var txt := L10n.t("▼ 前方 %.0f m 限速 %.0f km/h（%s）", "▼ In %.0f m: limit %.0f km/h (%s)") % [dist, new_lim, str(chg["zone_name"])]
+	var col := Color(0.98, 0.84, 0.40)
+	if kmh > new_lim + 0.5:
+		if need >= dist:
+			txt += L10n.t(" · 立即制动！", " · BRAKE NOW!")
+			col = Color(1.0, 0.36, 0.30)
+		elif need >= dist * 0.7:
+			txt += L10n.t(" · 准备减速", " · start slowing")
+			col = Color(1.0, 0.66, 0.30)
+	_lbl_limit_ahead.text = txt
+	_lbl_limit_ahead.add_theme_color_override("font_color", col)
+
+
 func _update_run_hud() -> void:
 	var map_nm := _map_title(_current_map_key)
 	_lbl_net_stats.text = L10n.t(
@@ -6858,6 +6900,8 @@ func _update_run_hud() -> void:
 		_lbl_speed_limit.text = L10n.t("【%s限速 %.0f km/h】", "[%s Limit %.0f km/h]") % [z_name, lim_kmh]
 		var badge_c := Color(0.98, 0.78, 0.32) if int(lim_stat["zone_kind"]) >= 2 else Color(0.54, 0.92, 0.72)
 		_lbl_speed_limit.add_theme_color_override("font_color", badge_c)
+
+	_update_limit_ahead(tr, kmh, lim_kmh)
 
 	# Check upcoming Dedicated Tram Signal, traffic hazard, or curve/turnout speed limit!
 	var hazard_msg := ""

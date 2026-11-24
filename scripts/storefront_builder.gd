@@ -575,7 +575,12 @@ static func _face_basis(f: Vector3) -> Basis:
 
 static func _make_label(txt: String, col: Color, letters: bool) -> Label3D:
 	var l := Label3D.new()
-	l.text = txt
+	if OS.get_thread_caller_id() != OS.get_main_thread_id():
+		# On a tile worker: setting the text here queues its glyph shaping onto the main thread, where every sign
+		# of the tile was then shaped in one frame (a 50-90 ms hitch); CityTiles applies it a few labels per frame
+		l.set_meta("pending_text", txt)
+	else:
+		l.text = txt
 	l.font_size = 64
 	l.outline_size = 0
 	l.modulate = col
