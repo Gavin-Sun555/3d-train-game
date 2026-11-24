@@ -37,6 +37,8 @@ var _tsp_sig_cache: Dictionary = {} # tram_dict_id -> {"reach": float, "res": Di
 
 var _car_meshes: Array[ArrayMesh] = []
 var _zh_car_meshes: Array[ArrayMesh] = []
+var _car_lods: Array[Dictionary] = []
+var _zh_car_lods: Array[Dictionary] = []
 var _veh_mat: ShaderMaterial
 var _sig_pole_mat: StandardMaterial3D
 var _sig_box_mat: StandardMaterial3D
@@ -101,7 +103,7 @@ func rebuild_traffic(graph: NetworkGraph, focus_pos: Vector3) -> void:
 	_build_intersection_signals(graph, focus_pos)
 
 	var is_zh := bool(graph.get_meta("is_chinese_city", false))
-	var mesh_pool: Array[ArrayMesh] = _zh_car_meshes if (is_zh and not _zh_car_meshes.is_empty()) else _car_meshes
+	var lod_pool: Array[Dictionary] = _zh_car_lods if (is_zh and not _zh_car_lods.is_empty()) else _car_lods
 
 	var edge_ids := graph.edges.keys()
 	var target_count := mini(MAX_CARS, maxi(14, edge_ids.size() / 7))
@@ -122,14 +124,41 @@ func rebuild_traffic(graph: NetworkGraph, focus_pos: Vector3) -> void:
 		var s_init := lerpf(11.0, elen - 11.0, _rng.randf())
 		var base_lane := _compute_dynamic_lane_offset(graph, eid, s_init, elen, dir, lane_k)
 
-		var mi := MeshInstance3D.new()
-		mi.mesh = mesh_pool[i % mesh_pool.size()]
-		mi.material_override = _veh_mat
-		mi.visibility_range_end = 260.0
-		add_child(mi)
+		var bundle: Dictionary = lod_pool[i % lod_pool.size()]
+		var car_root := Node3D.new()
+		var mi_l0 := MeshInstance3D.new()
+		mi_l0.name = "LOD0"
+		mi_l0.mesh = bundle["lod0"]
+		mi_l0.material_override = _veh_mat
+		mi_l0.visibility_range_begin = 0.0
+		mi_l0.visibility_range_end = 65.0
+		car_root.add_child(mi_l0)
+
+		var mi_l1 := MeshInstance3D.new()
+		mi_l1.name = "LOD1"
+		mi_l1.mesh = bundle["lod1"]
+		mi_l1.material_override = _veh_mat
+		mi_l1.visibility_range_begin = 60.0
+		mi_l1.visibility_range_end = 145.0
+		mi_l1.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		car_root.add_child(mi_l1)
+
+		var mi_l2 := MeshInstance3D.new()
+		mi_l2.name = "LOD2"
+		mi_l2.mesh = bundle["lod2"]
+		mi_l2.material_override = _veh_mat
+		mi_l2.visibility_range_begin = 140.0
+		mi_l2.visibility_range_end = 280.0
+		mi_l2.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		car_root.add_child(mi_l2)
+		add_child(car_root)
 
 		var car_dict := {
-			"node": mi,
+			"node": car_root,
+			"lod0": mi_l0,
+			"lod1": mi_l1,
+			"brake_val": -1.0,
+			"turn_val": 0.0,
 			"edge_id": eid,
 			"dir": dir,
 			"s": s_init,
@@ -156,7 +185,7 @@ func rebuild_traffic(graph: NetworkGraph, focus_pos: Vector3) -> void:
 				overlap = true
 				break
 		if overlap:
-			mi.queue_free()
+			car_root.queue_free()
 			continue
 
 		cars.append(car_dict)
@@ -1246,6 +1275,15 @@ func step_traffic(
 
 		var cur_spd := float(c["speed"])
 		var acc_rate := 32.0 if emerg_stop else (9.5 if target_spd < cur_spd else 3.8)
+		var want_brake := 1.0 if (emerg_stop or target_spd < cur_spd - 0.55 or cur_spd < 0.45) else 0.0
+		c["want_brake"] = want_brake
+		var want_turn := 0.0
+		if bool(c.get("turning", false)):
+			var t_ch: Vector3 = (c["turn_p2"] as Vector3) - (c["turn_p0"] as Vector3)
+			var side_d := t_ch.dot(c_right)
+			if absf(side_d) > 2.2:
+				want_turn = signf(side_d)
+		c["want_turn"] = want_turn
 		cur_spd = move_toward(cur_spd, target_spd, acc_rate * dt)
 		if emerg_stop:
 			cur_spd = 0.0
@@ -1279,7 +1317,7 @@ func step_traffic(
 				c["turn_t"] = t_next
 				c["pos"] = b_pos
 				c["fwd"] = b_fwd
-				var mi_t: MeshInstance3D = c["node"]
+				var mi_t: Node3D = c["node"]
 				if is_instance_valid(mi_t):
 					mi_t.global_transform = Transform3D(Basis.looking_at(b_fwd, Vector3.UP), b_pos)
 				if t_next >= 1.0:
@@ -1319,9 +1357,27 @@ func step_traffic(
 	# residual discontinuity (edge hand-over, lane re-plan) is spread over a few frames instead of popping.
 	var k := 1.0 - exp(-dt * 14.0)
 	for c2: Dictionary in cars:
-		var mi2: MeshInstance3D = c2["node"]
+		var mi2: Node3D = c2["node"]
 		if not is_instance_valid(mi2):
 			continue
+		var wb := float(c2.get("want_brake", 0.0))
+		if absf(wb - float(c2.get("brake_val", -1.0))) > 0.1:
+			c2["brake_val"] = wb
+			var l0_b: MeshInstance3D = c2.get("lod0")
+			if is_instance_valid(l0_b):
+				l0_b.set_instance_shader_parameter("brake_on", wb)
+			var l1_b: MeshInstance3D = c2.get("lod1")
+			if is_instance_valid(l1_b):
+				l1_b.set_instance_shader_parameter("brake_on", wb)
+		var wt := float(c2.get("want_turn", 0.0))
+		if absf(wt - float(c2.get("turn_val", 0.0))) > 0.1:
+			c2["turn_val"] = wt
+			var l0_t: MeshInstance3D = c2.get("lod0")
+			if is_instance_valid(l0_t):
+				l0_t.set_instance_shader_parameter("turn_signal", wt)
+			var l1_t: MeshInstance3D = c2.get("lod1")
+			if is_instance_valid(l1_t):
+				l1_t.set_instance_shader_parameter("turn_signal", wt)
 		var tp: Vector3 = c2["pos"]
 		var tf_: Vector3 = c2["fwd"]
 		if not c2.has("vis_pos") or (c2["vis_pos"] as Vector3).distance_to(tp) > 12.0:
@@ -2169,119 +2225,32 @@ static func _update_car_transform(c: Dictionary, graph: NetworkGraph) -> void:
 	c["pos"] = world_pos
 	c["fwd"] = fwd
 
-	var mi: MeshInstance3D = c["node"]
+	var mi: Node3D = c["node"]
 	if is_instance_valid(mi):
 		mi.global_transform = Transform3D(Basis.looking_at(fwd, Vector3.UP), world_pos)
 
 
-# Builds sculpted Cities: Skylines II style 3D vehicles (sloped hood/windshield/fastback + round 5-spoke alloy wheels!)
+# Builds high-craft 3-level LOD (LOD0 8k-12k tris / LOD1 ~3.8k / LOD2 ~1.1k) vehicles via CarMeshGen!
 func _build_shared_car_meshes() -> void:
 	_veh_mat = ShaderMaterial.new()
 	_veh_mat.shader = load("res://shaders/vehicle_pbr.gdshader") as Shader
 
-	var palette: Array[Color] = [
-		Color(0.84, 0.86, 0.89), # Pearl Silver-White Sedan
-		Color(0.88, 0.66, 0.10), # City Yellow Cab
-		Color(0.14, 0.28, 0.48), # Sapphire Metallic SUV
-		Color(0.58, 0.12, 0.14), # Crimson Metallic Fastback
-		Color(0.46, 0.49, 0.53), # Gunmetal Grey Sedan
-		Color(0.14, 0.30, 0.22), # British Racing Green SUV
-		Color(0.16, 0.17, 0.19), # Obsidian Executive Sedan
-		Color(0.66, 0.58, 0.46), # Warm Champagne Crossover
+	var intl_specs: Array[Dictionary] = [
+		{"col": Color(0.84, 0.86, 0.89), "body": "sedan", "ev": false, "zh": false},
+		{"col": Color(0.88, 0.66, 0.10), "body": "sedan", "ev": false, "zh": false, "us_taxi": true},
+		{"col": Color(0.14, 0.28, 0.48), "body": "suv", "ev": false, "zh": false},
+		{"col": Color(0.58, 0.12, 0.14), "body": "fastback", "ev": true, "zh": false},
+		{"col": Color(0.46, 0.49, 0.53), "body": "sedan", "ev": false, "zh": false},
+		{"col": Color(0.14, 0.30, 0.22), "body": "suv", "ev": false, "zh": false},
+		{"col": Color(0.16, 0.17, 0.19), "body": "sedan", "ev": false, "zh": false},
+		{"col": Color(0.66, 0.58, 0.46), "body": "crossover", "ev": true, "zh": false},
 	]
-
 	_car_meshes.clear()
-	for idx in range(palette.size()):
-		var body_rgb := palette[idx]
-		var is_suv := (idx % 3 == 2)
-		var is_taxi := (idx == 1)
-
-		var c_paint := Color(body_rgb.r, body_rgb.g, body_rgb.b, 0.0) # mat_id = 0: Clearcoat Metallic Paint
-		var c_glass := Color(0.08, 0.12, 0.16, 0.1)                  # mat_id = 1: Fresnel Tinted Glass
-		var c_wheel := Color(0.10, 0.10, 0.11, 0.2)                  # mat_id = 2: Tire + 5-Spoke Alloy Rim
-		var c_trim := Color(0.13, 0.14, 0.16, 0.3)                   # mat_id = 3: Grille / Trim
-		var c_chrome := Color(0.76, 0.79, 0.83, 0.3)                 # mat_id = 3: Chrome Accent
-		var c_head := Color(1.0, 0.96, 0.86, 0.4)                    # mat_id = 4: Projector LED Headlight
-		var c_tail := Color(0.95, 0.10, 0.10, 0.5)                    # mat_id = 5: Ruby LED Taillight
-
-		var st := SurfaceTool.new()
-		st.begin(Mesh.PRIMITIVE_TRIANGLES)
-
-		# 1. Sculpted Aerodynamic Side-Profile Extrusion (Front -Z = -2.18 -> Rear +Z = +2.18)!
-		var roof_y := 1.48 if is_suv else 1.36
-		var rear_glass_z := 1.88 if is_suv else 1.46
-		var trunk_y := 1.02 if is_suv else 0.88
-		# Counter-clockwise profile in (z, y) extruded from x = -0.89 to +0.89:
-		var prof_zy: Array[Vector2] = [
-			Vector2(-2.16, 0.22),
-			Vector2(-2.20, 0.54), # Sculpted front bumper nose
-			Vector2(-2.05, 0.72), # Hood leading edge
-			Vector2(-0.88, 0.82), # Base of windshield
-			Vector2(-0.28, roof_y), # Sloped 32-deg A-pillar & windshield
-			Vector2(0.88 if not is_suv else 1.52, roof_y - 0.02), # Sleek roofline
-			Vector2(rear_glass_z, trunk_y), # Sloped C-pillar / tailgate
-			Vector2(2.14, trunk_y - 0.04), # Trunk deck
-			Vector2(2.18, 0.52), # Rear bumper
-			Vector2(2.08, 0.22), # Rear diffuser
-		]
-		_emit_car_hull_profile(st, prof_zy, 0.88, c_paint)
-
-		# 2. Flush Recessed Tinted Windshield, Rear Window & Side Windows (mat_id = 1)!
-		# Raked front windshield quad
-		_emit_sloped_quad(
-			st,
-			Vector3(-0.75, 0.83, -0.89), Vector3(0.75, 0.83, -0.89),
-			Vector3(0.69, roof_y - 0.03, -0.30), Vector3(-0.69, roof_y - 0.03, -0.30),
-			c_glass
-		)
-		# Sloped rear backlight window quad
-		var r_top_z := 0.89 if not is_suv else 1.53
-		_emit_sloped_quad(
-			st,
-			Vector3(0.69, roof_y - 0.05, r_top_z), Vector3(-0.69, roof_y - 0.05, r_top_z),
-			Vector3(-0.74, trunk_y + 0.02, rear_glass_z + 0.01), Vector3(0.74, trunk_y + 0.02, rear_glass_z + 0.01),
-			c_glass
-		)
-		# Left & right side greenhouse glass + B-pillar divider + side mirrors!
-		var win_len := (1.68 if is_suv else 1.38)
-		var win_cz := (0.48 if is_suv else 0.28)
-		for side: float in [-1.0, 1.0]:
-			var sx := side * 0.886
-			var out_n := Vector3(side, 0.0, 0.0)
-			_emit_uv_quad(
-				st,
-				Vector3(sx, 0.84, win_cz - win_len * 0.5),
-				Vector3(sx, 0.84, win_cz + win_len * 0.5),
-				Vector3(sx * 0.92, roof_y - 0.06, win_cz + win_len * 0.42),
-				Vector3(sx * 0.92, roof_y - 0.06, win_cz - win_len * 0.36),
-				out_n,
-				c_glass
-			)
-			# Matte black B-pillar & aerodynamic wing mirror
-			CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(side * 0.86, 1.08, 0.18)), Vector3(0.06, 0.44, 0.09), c_trim)
-			CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(side * 0.96, 0.90, -0.58)), Vector3(0.15, 0.09, 0.12), c_paint)
-
-		# 3. Front Honeycomb Grille, Lower Splitter, License Plates & LED Light Clusters!
-		CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(0.0, 0.48, -2.19)), Vector3(1.12, 0.22, 0.06), c_trim)
-		CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(0.0, 0.60, -2.20)), Vector3(1.16, 0.035, 0.06), c_chrome)
-		CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(0.0, 0.34, -2.21)), Vector3(0.38, 0.10, 0.03), Color(0.92, 0.92, 0.90, 0.3))
-		CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(0.0, 0.46, 2.18)), Vector3(0.38, 0.10, 0.03), Color(0.92, 0.92, 0.90, 0.3))
-
-		for lx: float in [-0.66, 0.66]:
-			CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(lx, 0.62, -2.17)), Vector3(0.34, 0.12, 0.08), c_head)
-			CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(lx, 0.68, 2.16)), Vector3(0.38, 0.13, 0.08), c_tail)
-		# Modern rear LED light-bar strip
-		CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(0.0, 0.71, 2.165)), Vector3(1.36, 0.04, 0.06), c_tail)
-
-		if is_taxi:
-			CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(0.0, roof_y + 0.08, 0.10)), Vector3(0.46, 0.14, 0.20), c_head)
-
-		# 4. Four Round 14-Segment Cylindrical Rubber Tires + 5-Spoke Alloy Rims!
-		for wx: float in [-0.84, 0.84]:
-			for wz: float in [-1.36, 1.34]:
-				_emit_round_wheel(st, Vector3(wx, 0.33, wz), 0.33, 0.22, signf(wx), c_wheel)
-
-		_car_meshes.append(st.commit())
+	_car_lods.clear()
+	for sp: Dictionary in intl_specs:
+		var bundle := CarMeshGen.build_lod_bundle(sp)
+		_car_lods.append(bundle)
+		_car_meshes.append(bundle["lod0"] as ArrayMesh)
 
 	_build_chinese_ev_meshes()
 
@@ -2291,182 +2260,29 @@ func _build_shared_car_meshes() -> void:
 # Wuling Hongguang MINIEV micro-EV, Jiaxing green/white EV taxis, plus blue-plate ICE sedans/SUVs).
 func _build_chinese_ev_meshes() -> void:
 	_zh_car_meshes.clear()
+	_zh_car_lods.clear()
 	var specs: Array[Dictionary] = [
-		# 0: 小米 SU7 海湾蓝 (Bay Blue Fastback EV)
-		{"col": Color(0.16, 0.64, 0.86), "body": "fastback", "ev": true, "star_ring": false, "lidar": true, "taxi": false},
-		# 1: 小米 SU7 橄榄绿 (Olive Metallic Fastback EV)
-		{"col": Color(0.32, 0.42, 0.30), "body": "fastback", "ev": true, "star_ring": false, "lidar": true, "taxi": false},
-		# 2: 比亚迪 汉 EV 赤帝红 (Crimson Flagship EV)
-		{"col": Color(0.68, 0.10, 0.14), "body": "sedan", "ev": true, "star_ring": false, "lidar": false, "taxi": false},
-		# 3: 比亚迪 秦 PLUS DM-i 雪域白 (White NEV Commuter)
-		{"col": Color(0.92, 0.93, 0.94), "body": "sedan", "ev": true, "star_ring": false, "lidar": false, "taxi": false},
-		# 4: 理想 L8/L9 银灰 (Flagship SUV + Star-Ring Front LED Bar + Roof LiDAR!)
-		{"col": Color(0.62, 0.65, 0.69), "body": "suv", "ev": true, "star_ring": true, "lidar": true, "taxi": false},
-		# 5: 理想 L7 珍珠白 (White Flagship SUV + Star-Ring LED Bar!)
-		{"col": Color(0.91, 0.92, 0.93), "body": "suv", "ev": true, "star_ring": true, "lidar": true, "taxi": false},
-		# 6: 蔚来 ET5 宇航蓝 (Sport EV Sedan + Twin Roof LiDAR Watchtower!)
-		{"col": Color(0.18, 0.32, 0.56), "body": "fastback", "ev": true, "star_ring": false, "lidar": true, "nio_ears": true, "taxi": false},
-		# 7: 蔚来 ES6 极光绿 (Mid-Size EV SUV + Roof LiDAR Watchtower!)
-		{"col": Color(0.16, 0.36, 0.32), "body": "suv", "ev": true, "star_ring": false, "lidar": true, "nio_ears": true, "taxi": false},
-		# 8: 特斯拉 Model Y 珍珠白 (Minimalist Crossover EV)
-		{"col": Color(0.93, 0.94, 0.95), "body": "crossover", "ev": true, "star_ring": false, "lidar": false, "taxi": false},
-		# 9: 特斯拉 Model 3 星空灰 (Minimalist EV Sedan)
-		{"col": Color(0.36, 0.39, 0.43), "body": "fastback", "ev": true, "star_ring": false, "lidar": false, "taxi": false},
-		# 10: 比亚迪 海豚 / 吉利星愿 冰莓粉 (Compact Urban Hatchback EV)
-		{"col": Color(0.88, 0.72, 0.78), "body": "hatch", "ev": true, "star_ring": false, "lidar": false, "taxi": false},
-		# 11: 五菱宏光 MINIEV 马卡龙薄荷绿 (Iconic Boxy Micro-EV + White Contrast Roof!)
-		{"col": Color(0.54, 0.84, 0.74), "body": "micro", "ev": true, "star_ring": false, "lidar": false, "taxi": false},
-		# 12: 嘉兴新能源出租车 (Mint-Green & White Electric Taxi + Roof Light)
-		{"col": Color(0.16, 0.68, 0.54), "body": "sedan", "ev": true, "star_ring": false, "lidar": false, "taxi": true},
-		# 13: 嘉兴新能源出租车 #2 (Sky-Teal & White Electric Taxi + Roof Light)
-		{"col": Color(0.10, 0.54, 0.72), "body": "sedan", "ev": true, "star_ring": false, "lidar": false, "taxi": true},
-		# 14: 黑色行政轿车 (Executive ICE Sedan — Blue Plate 蓝牌)
-		{"col": Color(0.14, 0.15, 0.17), "body": "sedan", "ev": false, "star_ring": false, "lidar": false, "taxi": false},
-		# 15: 银色家用SUV (Family ICE SUV — Blue Plate 蓝牌)
-		{"col": Color(0.74, 0.76, 0.79), "body": "suv", "ev": false, "star_ring": false, "lidar": false, "taxi": false},
+		{"col": Color(0.16, 0.64, 0.86), "body": "fastback", "ev": true, "zh": true, "lidar": true},
+		{"col": Color(0.32, 0.42, 0.30), "body": "fastback", "ev": true, "zh": true, "lidar": true},
+		{"col": Color(0.68, 0.10, 0.14), "body": "sedan", "ev": true, "zh": true},
+		{"col": Color(0.92, 0.93, 0.94), "body": "sedan", "ev": true, "zh": true},
+		{"col": Color(0.62, 0.65, 0.69), "body": "suv", "ev": true, "zh": true, "star_ring": true, "lidar": true},
+		{"col": Color(0.91, 0.92, 0.93), "body": "suv", "ev": true, "zh": true, "star_ring": true, "lidar": true},
+		{"col": Color(0.18, 0.32, 0.56), "body": "fastback", "ev": true, "zh": true, "lidar": true, "nio_ears": true},
+		{"col": Color(0.16, 0.36, 0.32), "body": "suv", "ev": true, "zh": true, "lidar": true, "nio_ears": true},
+		{"col": Color(0.93, 0.94, 0.95), "body": "crossover", "ev": true, "zh": true},
+		{"col": Color(0.36, 0.39, 0.43), "body": "fastback", "ev": true, "zh": true},
+		{"col": Color(0.88, 0.72, 0.78), "body": "hatch", "ev": true, "zh": true},
+		{"col": Color(0.54, 0.84, 0.74), "body": "micro", "ev": true, "zh": true},
+		{"col": Color(0.16, 0.68, 0.54), "body": "sedan", "ev": true, "zh": true, "taxi": true},
+		{"col": Color(0.10, 0.54, 0.72), "body": "sedan", "ev": true, "zh": true, "taxi": true},
+		{"col": Color(0.14, 0.15, 0.17), "body": "sedan", "ev": false, "zh": true},
+		{"col": Color(0.74, 0.76, 0.79), "body": "suv", "ev": false, "zh": true},
 	]
-
 	for sp: Dictionary in specs:
-		var body_rgb: Color = sp["col"]
-		var body_t: String = str(sp["body"])
-		var is_ev := bool(sp["ev"])
-		var is_micro := body_t == "micro"
-		var is_hatch := body_t == "hatch"
-		var is_suv := body_t == "suv"
-		var is_fast := body_t == "fastback"
-		var is_xover := body_t == "crossover"
-		var is_taxi := bool(sp["taxi"])
-
-		var c_paint := Color(body_rgb.r, body_rgb.g, body_rgb.b, 0.0)
-		var c_white := Color(0.94, 0.95, 0.96, 0.0)
-		var c_glass := Color(0.07, 0.11, 0.16, 0.1)
-		var c_wheel := Color(0.10, 0.10, 0.11, 0.2)
-		var c_trim := Color(0.12, 0.13, 0.15, 0.3)
-		var c_chrome := Color(0.76, 0.80, 0.84, 0.3)
-		var c_head := Color(1.0, 0.97, 0.90, 0.4)
-		var c_tail := Color(0.96, 0.10, 0.10, 0.5)
-		# Authentic Chinese Green NEV License Plate (渐变绿牌) vs Blue ICE Plate (蓝牌)!
-		var c_plate := Color(0.24, 0.88, 0.44, 0.3) if is_ev else Color(0.08, 0.30, 0.78, 0.3)
-
-		var st := SurfaceTool.new()
-		st.begin(Mesh.PRIMITIVE_TRIANGLES)
-
-		var hw := 0.74 if is_micro else (0.84 if is_hatch else (0.94 if is_suv else 0.89))
-		var roof_y := 1.54 if is_micro else (1.58 if is_suv else (1.46 if is_xover else (1.42 if is_hatch else (1.30 if is_fast else 1.36))))
-		var front_z := -1.48 if is_micro else (-1.92 if is_hatch else -2.22)
-		var rear_z := 1.48 if is_micro else (1.90 if is_hatch else 2.20)
-
-		var prof_zy: Array[Vector2] = []
-		var ws_z0 := -0.88
-		var ws_z1 := -0.26
-		var rw_z0 := 0.92
-		var rw_z1 := 1.54
-		var trunk_y := 0.90
-		if is_micro:
-			ws_z0 = -0.88; ws_z1 = -0.56; rw_z0 = 1.18; rw_z1 = 1.44; trunk_y = 0.92
-			prof_zy = [
-				Vector2(-1.46, 0.22), Vector2(-1.49, 0.56), Vector2(-1.38, 0.80),
-				Vector2(-0.88, 0.86), Vector2(-0.56, roof_y), Vector2(1.18, roof_y),
-				Vector2(1.44, 0.92), Vector2(1.48, 0.50), Vector2(1.40, 0.22),
-			]
-		elif is_suv:
-			ws_z0 = -0.94; ws_z1 = -0.34; rw_z0 = 1.66; rw_z1 = 2.02; trunk_y = 1.08
-			prof_zy = [
-				Vector2(-2.18, 0.25), Vector2(-2.24, 0.62), Vector2(-2.12, 0.90),
-				Vector2(-0.94, 0.96), Vector2(-0.34, roof_y), Vector2(1.66, roof_y - 0.02),
-				Vector2(2.02, 1.08), Vector2(2.18, 1.02), Vector2(2.22, 0.54), Vector2(2.12, 0.25),
-			]
-		elif is_hatch:
-			ws_z0 = -0.82; ws_z1 = -0.28; rw_z0 = 1.24; rw_z1 = 1.76; trunk_y = 0.98
-			prof_zy = [
-				Vector2(-1.88, 0.22), Vector2(-1.93, 0.54), Vector2(-1.78, 0.74),
-				Vector2(-0.82, 0.84), Vector2(-0.28, roof_y), Vector2(1.24, roof_y - 0.02),
-				Vector2(1.76, 0.98), Vector2(1.90, 0.54), Vector2(1.82, 0.22),
-			]
-		elif is_fast or is_xover:
-			ws_z0 = -0.90; ws_z1 = -0.22; rw_z0 = 0.78; rw_z1 = 1.88; trunk_y = 0.92 if is_fast else 1.00
-			prof_zy = [
-				Vector2(-2.18, 0.20), Vector2(-2.23, 0.50), Vector2(-2.06, 0.68),
-				Vector2(-0.90, 0.80), Vector2(-0.22, roof_y), Vector2(0.78, roof_y - 0.02),
-				Vector2(1.88, trunk_y), Vector2(2.18, trunk_y - 0.06), Vector2(2.20, 0.50), Vector2(2.10, 0.20),
-			]
-		else:
-			ws_z0 = -0.88; ws_z1 = -0.28; rw_z0 = 0.92; rw_z1 = 1.54; trunk_y = 0.88
-			prof_zy = [
-				Vector2(-2.16, 0.22), Vector2(-2.20, 0.54), Vector2(-2.05, 0.72),
-				Vector2(-0.88, 0.82), Vector2(-0.28, roof_y), Vector2(0.92, roof_y - 0.02),
-				Vector2(1.54, 0.88), Vector2(2.14, 0.84), Vector2(2.18, 0.52), Vector2(2.08, 0.22),
-			]
-		_emit_car_hull_profile(st, prof_zy, hw, c_paint)
-
-		# Two-tone white roof on Wuling MINIEV & Jiaxing EV Taxis!
-		if is_micro or is_taxi:
-			CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(0.0, roof_y + 0.01, (ws_z1 + rw_z0) * 0.5)),
-				Vector3(hw * 1.62, 0.05, maxf(0.9, rw_z0 - ws_z1)), c_white)
-
-		# Flush Windshield, Backlight & Side Windows
-		_emit_sloped_quad(st, Vector3(-hw * 0.84, 0.84, ws_z0 - 0.01), Vector3(hw * 0.84, 0.84, ws_z0 - 0.01),
-			Vector3(hw * 0.77, roof_y - 0.03, ws_z1 - 0.02), Vector3(-hw * 0.77, roof_y - 0.03, ws_z1 - 0.02), c_glass)
-		_emit_sloped_quad(st, Vector3(hw * 0.77, roof_y - 0.04, rw_z0 + 0.01), Vector3(-hw * 0.77, roof_y - 0.04, rw_z0 + 0.01),
-			Vector3(-hw * 0.82, trunk_y + 0.02, rw_z1 + 0.01), Vector3(hw * 0.82, trunk_y + 0.02, rw_z1 + 0.01), c_glass)
-		# Panoramic glass roof on modern EVs (Tesla / SU7 / NIO / Li Auto)
-		if is_ev and not is_micro and not is_taxi:
-			_emit_sloped_quad(st, Vector3(-hw * 0.72, roof_y + 0.006, ws_z1), Vector3(hw * 0.72, roof_y + 0.006, ws_z1),
-				Vector3(hw * 0.72, roof_y - 0.012, rw_z0), Vector3(-hw * 0.72, roof_y - 0.012, rw_z0), c_glass)
-		for side: float in [-1.0, 1.0]:
-			var sx := side * (hw + 0.006)
-			var out_n := Vector3(side, 0.0, 0.0)
-			_emit_uv_quad(st, Vector3(sx, 0.86, ws_z0 + 0.14), Vector3(sx, 0.86, rw_z1 - 0.14),
-				Vector3(sx * 0.92, roof_y - 0.06, rw_z0 - 0.05), Vector3(sx * 0.92, roof_y - 0.06, ws_z1 + 0.05), out_n, c_glass)
-			CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(side * (hw - 0.02), (0.86 + roof_y) * 0.5, (ws_z1 + rw_z0) * 0.35)),
-				Vector3(0.06, roof_y - 0.90, 0.09), c_trim)
-			CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(side * (hw + 0.08), 0.90, ws_z0 + 0.25)),
-				Vector3(0.14, 0.08, 0.11), c_paint)
-
-		# EV Smooth Closed Aero Nose vs ICE Honeycomb Grille + Chinese Green/Blue License Plates!
-		if is_ev:
-			CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(0.0, 0.30, front_z + 0.01)), Vector3(hw * 1.48, 0.11, 0.05), c_trim)
-		else:
-			CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(0.0, 0.48, front_z + 0.01)), Vector3(1.14, 0.24, 0.06), c_trim)
-			CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(0.0, 0.61, front_z)), Vector3(1.18, 0.035, 0.06), c_chrome)
-		# Front & rear license plates (Green NEV 渐变绿牌 on EVs, Blue 蓝牌 on ICE!)
-		CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(0.0, 0.36, front_z - 0.02)), Vector3(0.44, 0.12, 0.03), c_plate)
-		CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(0.0, 0.48, rear_z + 0.01)), Vector3(0.44, 0.12, 0.03), c_plate)
-
-		# Signature Lighting: Li Auto Star-Ring full-width white DRL bar vs standard LED headlights
-		if bool(sp.get("star_ring", false)):
-			CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(0.0, 0.84, front_z + 0.04)), Vector3(hw * 1.76, 0.055, 0.07), c_head)
-			for lx: float in [-hw * 0.72, hw * 0.72]:
-				CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(lx, 0.56, front_z + 0.02)), Vector3(0.26, 0.10, 0.06), c_head)
-		else:
-			for lx: float in [-hw * 0.74, hw * 0.74]:
-				CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(lx, 0.62, front_z + 0.04)), Vector3(0.32, 0.10, 0.08), c_head)
-		# Full-width modern Chinese EV ruby LED taillight bar (贯穿式尾灯!)
-		var tail_y := 0.84 if is_suv else 0.72
-		CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(0.0, tail_y, rear_z - 0.01)), Vector3(hw * 1.66, 0.055, 0.06), c_tail)
-		for lx: float in [-hw * 0.72, hw * 0.72]:
-			CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(lx, tail_y - 0.02, rear_z - 0.01)), Vector3(0.34, 0.11, 0.07), c_tail)
-
-		# Signature Chinese Smart-EV Roof LiDAR Sensor Pod (瞭望塔激光雷达 on SU7 / Li Auto / NIO!)
-		if bool(sp.get("lidar", false)):
-			CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(0.0, roof_y + 0.035, ws_z1 + 0.06)), Vector3(0.22, 0.07, 0.18), c_trim)
-			if bool(sp.get("nio_ears", false)):
-				for ex: float in [-0.36, 0.36]:
-					CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(ex, roof_y + 0.028, ws_z1 + 0.08)), Vector3(0.11, 0.055, 0.13), c_trim)
-
-		# Jiaxing EV Taxi glowing roof beacon
-		if is_taxi:
-			CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(0.0, roof_y + 0.09, 0.08)), Vector3(0.48, 0.13, 0.18), c_head)
-
-		# Four Round Tires + Alloy Rims
-		var wr := 0.27 if is_micro else (0.36 if is_suv else 0.33)
-		var wz_f := -0.96 if is_micro else (-1.22 if is_hatch else -1.38)
-		var wz_r := 0.96 if is_micro else (1.20 if is_hatch else 1.36)
-		for wx: float in [-(hw - 0.04), (hw - 0.04)]:
-			for wz: float in [wz_f, wz_r]:
-				_emit_round_wheel(st, Vector3(wx, wr, wz), wr, 0.20 if is_micro else 0.23, signf(wx), c_wheel)
-
-		_zh_car_meshes.append(st.commit())
+		var bundle := CarMeshGen.build_lod_bundle(sp)
+		_zh_car_lods.append(bundle)
+		_zh_car_meshes.append(bundle["lod0"] as ArrayMesh)
 
 
 static func _emit_car_hull_profile(st: SurfaceTool, prof: Array[Vector2], half_w: float, col: Color) -> void:

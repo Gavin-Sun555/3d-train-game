@@ -1304,8 +1304,9 @@ func _create_3d_person(world_pos: Vector3) -> Dictionary:
 		_inst(torso, HumanMeshGen.get_messenger_bag_mesh(), Vector3(hip_s * 0.205, -0.29, 0.015), bag_mat)
 		_inst(torso, HumanMeshGen.get_crossbody_strap_mesh(arch, hip_s), Vector3.ZERO, _strap_mat)
 
-	# Articulated Left & Right Arms (Rounded Deltoid Shoulder Cap + Elbow Hinge + Forearm + Sculpted Hand)
-	var hand_m := HumanMeshGen.get_hand_mesh()
+	# Articulated Left & Right Arms (Rounded Deltoid Shoulder Cap + Elbow Hinge + Forearm + Mitten-Topology Hand!)
+	var hand_l_m := HumanMeshGen.get_hand_mesh(-1.0)
+	var hand_r_m := HumanMeshGen.get_hand_mesh(1.0)
 	var sh_x := 0.166 if arch == 2 else 0.182
 	var arm_l := Node3D.new()
 	arm_l.position = Vector3(-sh_x, 0.175, 0.0)
@@ -1317,7 +1318,7 @@ func _create_3d_person(world_pos: Vector3) -> Dictionary:
 	elbow_l.rotation.x = deg_to_rad(-9.0)
 	arm_l.add_child(elbow_l)
 	_inst(elbow_l, farm_m, Vector3(0.0, -0.13, 0.0), coat_mat)
-	_inst(elbow_l, hand_m, Vector3(0.0, -0.275, 0.0), skin_mat)
+	_inst(elbow_l, hand_l_m, Vector3(0.0, -0.275, 0.0), skin_mat)
 
 	var arm_r := Node3D.new()
 	arm_r.position = Vector3(sh_x, 0.175, 0.0)
@@ -1329,7 +1330,7 @@ func _create_3d_person(world_pos: Vector3) -> Dictionary:
 	elbow_r.rotation.x = deg_to_rad(-9.0)
 	arm_r.add_child(elbow_r)
 	_inst(elbow_r, farm_m, Vector3(0.0, -0.13, 0.0), coat_mat)
-	_inst(elbow_r, hand_m, Vector3(0.0, -0.275, 0.0), skin_mat)
+	_inst(elbow_r, hand_r_m, Vector3(0.0, -0.275, 0.0), skin_mat)
 
 	# Sculpted Anatomical Neck + Layered Hair + Natural Non-Uncanny 3D Face + Optional Slim Glasses
 	_inst(torso, HumanMeshGen.get_neck_mesh(), Vector3(0.0, 0.300, 0.0), skin_mat)
@@ -1362,6 +1363,18 @@ func _create_3d_person(world_pos: Vector3) -> Dictionary:
 		_box(elbow_r, Vector3(0.068, 0.142, 0.009), Vector3(-0.015, -0.30, -0.028), _phone_mat)
 		_box(elbow_r, Vector3(0.060, 0.126, 0.004), Vector3(-0.015, -0.30, -0.034), _screen_mat)
 
+	# Distant Platform Crowd LOD1 (~1,800 tris single mesh at 36m..165m; all LOD0 articulated sub-parts swap out cleanly at 40m!)
+	var coat_tint: Color = (coat_mat as ShaderMaterial).get_shader_parameter("base_tint") if coat_mat is ShaderMaterial else Color(0.24, 0.30, 0.38)
+	var pants_tint: Color = (pants_mat as ShaderMaterial).get_shader_parameter("base_tint") if pants_mat is ShaderMaterial else Color(0.22, 0.28, 0.38)
+	var lod1_mi := MeshInstance3D.new()
+	lod1_mi.name = "NpcLOD1"
+	lod1_mi.mesh = HumanMeshGen.get_npc_lod1_mesh(arch, coat_tint, pants_tint, skin_pal_c[skin_idx % skin_pal_c.size()], hair_pal_c[hair_c_idx])
+	lod1_mi.material_override = HumanMeshGen.get_npc_lod1_mat()
+	lod1_mi.visibility_range_begin = 36.0
+	lod1_mi.visibility_range_end = 165.0
+	lod1_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(lod1_mi)
+
 	return {
 		"node": root,
 		"leg_l": leg_l,
@@ -1384,7 +1397,7 @@ static func _inst(parent: Node3D, m: Mesh, pos: Vector3, mat: Material, cast_sh:
 	mi.mesh = m
 	mi.material_override = mat
 	mi.position = pos
-	mi.visibility_range_end = 160.0
+	mi.visibility_range_end = 40.0
 	if not cast_sh:
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(mi)

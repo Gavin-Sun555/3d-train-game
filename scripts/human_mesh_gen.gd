@@ -431,7 +431,7 @@ static func get_torso_mesh(archetype: int) -> ArrayMesh:
 	var key := "torso_%d" % (archetype % 4)
 	if _cache.has(key):
 		return _cache[key]
-	var mesh := _loft_asymmetric_rings(_torso_rings_for_arch(archetype), 22, true)
+	var mesh := _loft_asymmetric_rings(_torso_rings_for_arch(archetype), 28, true)
 	_cache[key] = mesh
 	return mesh
 
@@ -484,13 +484,16 @@ static func get_skirt_mesh(is_long: bool = false) -> ArrayMesh:
 static func get_thigh_mesh() -> ArrayMesh:
 	if _cache.has("thigh"):
 		return _cache["thigh"]
+	# Includes 2-ring knee joint loops at bottom (-0.21, -0.175) for smooth articulation
 	var rings: Array = [
-		[-0.21, 0.050, 0.054, 0.053, 0.0],
-		[-0.08, 0.062, 0.066, 0.066, 0.0],
-		[0.08,  0.072, 0.076, 0.078, 0.0],
-		[0.21,  0.074, 0.075, 0.078, 0.0],
+		[-0.21,  0.049, 0.052, 0.051, 0.0],
+		[-0.175, 0.053, 0.057, 0.056, 0.0],
+		[-0.08,  0.063, 0.067, 0.067, 0.0],
+		[0.06,   0.072, 0.076, 0.078, 0.0],
+		[0.16,   0.075, 0.077, 0.079, 0.0],
+		[0.21,   0.073, 0.074, 0.077, 0.0],
 	]
-	var mesh := _loft_asymmetric_rings(rings, 14, true)
+	var mesh := _loft_asymmetric_rings(rings, 18, true)
 	_cache["thigh"] = mesh
 	return mesh
 
@@ -498,13 +501,16 @@ static func get_thigh_mesh() -> ArrayMesh:
 static func get_shin_mesh() -> ArrayMesh:
 	if _cache.has("shin"):
 		return _cache["shin"]
+	# Includes 2-ring knee joint loops at top (+0.165, +0.20) & sculpted calf taper
 	var rings: Array = [
-		[-0.20, 0.035, 0.039, 0.037, 0.0],
-		[-0.06, 0.046, 0.048, 0.055, 0.004],
-		[0.08,  0.051, 0.053, 0.057, 0.002],
-		[0.20,  0.049, 0.051, 0.049, 0.0],
+		[-0.20,  0.035, 0.039, 0.037, 0.0],
+		[-0.12,  0.041, 0.044, 0.046, 0.002],
+		[-0.03,  0.048, 0.050, 0.057, 0.005],
+		[0.08,   0.052, 0.054, 0.058, 0.003],
+		[0.165,  0.050, 0.052, 0.051, 0.0],
+		[0.20,   0.048, 0.050, 0.049, 0.0],
 	]
-	var mesh := _loft_asymmetric_rings(rings, 14, true)
+	var mesh := _loft_asymmetric_rings(rings, 18, true)
 	_cache["shin"] = mesh
 	return mesh
 
@@ -512,15 +518,16 @@ static func get_shin_mesh() -> ArrayMesh:
 static func get_upper_arm_mesh() -> ArrayMesh:
 	if _cache.has("upper_arm"):
 		return _cache["upper_arm"]
-	# Rounded deltoid shoulder cap at top blends organically into the sloping torso shoulder!
+	# Rounded deltoid shoulder cap + 2-ring elbow joint loops at bottom (-0.145, -0.115)
 	var rings: Array = [
 		[-0.145, 0.038, 0.040, 0.040, 0.0],
-		[-0.02,  0.045, 0.047, 0.047, 0.0],
-		[0.09,   0.052, 0.055, 0.054, 0.0],
+		[-0.115, 0.040, 0.042, 0.042, 0.0],
+		[-0.02,  0.046, 0.048, 0.048, 0.0],
+		[0.085,  0.053, 0.056, 0.055, 0.0],
 		[0.145,  0.050, 0.053, 0.052, 0.0],
 		[0.175,  0.034, 0.038, 0.038, 0.0],
 	]
-	var mesh := _loft_asymmetric_rings(rings, 14, true)
+	var mesh := _loft_asymmetric_rings(rings, 18, true)
 	_cache["upper_arm"] = mesh
 	return mesh
 
@@ -528,28 +535,68 @@ static func get_upper_arm_mesh() -> ArrayMesh:
 static func get_forearm_mesh() -> ArrayMesh:
 	if _cache.has("forearm"):
 		return _cache["forearm"]
+	# 2-ring elbow joint loops at top (+0.105, +0.135) tapering cleanly to wrist
 	var rings: Array = [
-		[-0.135, 0.027, 0.029, 0.029, 0.0],
-		[-0.04,  0.035, 0.037, 0.037, 0.0],
-		[0.07,   0.040, 0.042, 0.042, 0.0],
-		[0.135,  0.039, 0.041, 0.041, 0.0],
+		[-0.135, 0.026, 0.029, 0.029, 0.0],
+		[-0.06,  0.033, 0.035, 0.035, 0.0],
+		[0.04,   0.040, 0.042, 0.042, 0.0],
+		[0.105,  0.040, 0.042, 0.042, 0.0],
+		[0.135,  0.038, 0.040, 0.040, 0.0],
 	]
-	var mesh := _loft_asymmetric_rings(rings, 14, true)
+	var mesh := _loft_asymmetric_rings(rings, 18, true)
 	_cache["forearm"] = mesh
 	return mesh
 
 
-static func get_hand_mesh() -> ArrayMesh:
-	if _cache.has("hand"):
-		return _cache["hand"]
-	var rings: Array = [
-		[-0.050, 0.014, 0.024, 0.020, -0.002],
-		[-0.022, 0.020, 0.034, 0.028, -0.002],
-		[0.012,  0.021, 0.034, 0.030, 0.0],
-		[0.036,  0.022, 0.026, 0.026, 0.0],
+# Mitten-topology hand (大拇指 + 四指合并连指手套拓扑): sculpted palm + merged 4-finger blade + opposing thumb!
+static func get_hand_mesh(side: float = 1.0) -> ArrayMesh:
+	var key := "hand_l" if side < 0.0 else "hand_r"
+	if _cache.has(key):
+		return _cache[key]
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_smooth_group(0)
+	var s := -1.0 if side < 0.0 else 1.0
+	var skin_c := Color(1.0, 1.0, 1.0)
+	# 1. Palm + merged 4-finger curved mitten blade (wrist +0.04 -> palm -> knuckles -> curved fingertips -0.072)
+	var palm_rings: Array = [
+		[-0.072, 0.008, 0.022, 0.018, -0.006],
+		[-0.048, 0.012, 0.032, 0.026, -0.004],
+		[-0.016, 0.016, 0.036, 0.030, -0.001],
+		[0.016,  0.018, 0.034, 0.029, 0.0],
+		[0.038,  0.020, 0.025, 0.024, 0.0],
 	]
-	var mesh := _loft_asymmetric_rings(rings, 12, true)
-	_cache["hand"] = mesh
+	var p_pts: Array = []
+	for r: Array in palm_rings:
+		var y := float(r[0]); var rx := float(r[1]); var rzf := float(r[2]); var rzb := float(r[3]); var zsh := float(r[4])
+		var ring: Array[Vector3] = []
+		for i in range(14):
+			var a := float(i) * TAU / 14.0
+			var rz := rzf if sin(a) < 0.0 else rzb
+			ring.append(Vector3(cos(a) * rx, y, sin(a) * rz + zsh))
+		p_pts.append(ring)
+	_stitch_rings(st, p_pts, 14, true)
+	# 2. Separate sculpted opposing thumb angling forward & slightly inward (pure rings, matches _stitch_rings vertex format!)
+	var thumb_pts: Array = []
+	var t_p0 := Vector3(-s * 0.008, 0.010, -0.025)
+	var t_p1 := Vector3(-s * 0.019, -0.029, -0.049)
+	var t_axis := (t_p1 - t_p0).normalized()
+	var t_r := t_axis.cross(Vector3.UP).normalized()
+	var t_f := t_r.cross(t_axis).normalized()
+	var t_prof: Array = [[0.0, 0.0115], [0.35, 0.0105], [0.75, 0.0092], [1.0, 0.0055]]
+	for tp: Array in t_prof:
+		var tc := t_p0.lerp(t_p1, float(tp[0]))
+		var tr := float(tp[1])
+		var tring: Array[Vector3] = []
+		for i in range(10):
+			var a := float(i) * TAU / 10.0
+			tring.append(tc + (t_r * cos(a) + t_f * sin(a)) * tr)
+		thumb_pts.append(tring)
+	_stitch_rings(st, thumb_pts, 10, true)
+	st.index()
+	st.generate_normals()
+	var mesh := st.commit()
+	_cache[key] = mesh
 	return mesh
 
 
@@ -557,14 +604,63 @@ static func get_shoe_mesh() -> ArrayMesh:
 	if _cache.has("shoe"):
 		return _cache["shoe"]
 	var rings: Array = [
-		[0.0,   0.041, 0.142, 0.082, 0.0],
-		[0.024, 0.043, 0.140, 0.082, 0.0],
-		[0.048, 0.038, 0.104, 0.076, 0.005],
+		[0.0,   0.041, 0.144, 0.082, 0.0],
+		[0.024, 0.043, 0.142, 0.082, 0.0],
+		[0.048, 0.038, 0.106, 0.076, 0.005],
 		[0.072, 0.034, 0.056, 0.062, 0.012],
 		[0.088, 0.032, 0.042, 0.048, 0.014],
 	]
-	var mesh := _loft_asymmetric_rings(rings, 14, true)
+	var mesh := _loft_asymmetric_rings(rings, 18, true)
 	_cache["shoe"] = mesh
+	return mesh
+
+
+# Batched LOD1 (~1,800 tris) single-mesh standing commuter silhouette for distant platform crowds (36m..165m)!
+static func get_npc_lod1_mat() -> StandardMaterial3D:
+	if _cache.has("npc_lod1_mat"):
+		return _cache["npc_lod1_mat"]
+	var m := StandardMaterial3D.new()
+	m.vertex_color_use_as_albedo = true
+	m.roughness = 0.78
+	_cache["npc_lod1_mat"] = m
+	return m
+
+
+static func get_npc_lod1_mesh(arch: int, coat_col: Color, pants_col: Color, skin_col: Color, hair_col: Color) -> ArrayMesh:
+	var key := "lod1_%d_%02x%02x_%02x%02x_%02x" % [
+		arch % 4, int(coat_col.r * 255), int(coat_col.g * 255),
+		int(pants_col.r * 255), int(pants_col.b * 255), int(hair_col.r * 255)
+	]
+	if _cache.has(key):
+		return _cache[key]
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var shoe_c := Color(0.16, 0.16, 0.18)
+	# Legs + shoes (12-seg tapered tubes -> total NPC LOD1 ~1,950 tris!)
+	for sx: float in [-0.088, 0.088]:
+		MeshSculpt.add_tube(st, Vector3(sx, 0.06, 0.0), Vector3(sx, 0.44, 0.0), 0.040, 0.052, 12, pants_col, 3)
+		MeshSculpt.add_tube(st, Vector3(sx, 0.44, 0.0), Vector3(sx, 0.86, 0.0), 0.054, 0.072, 12, pants_col, 3)
+		MeshSculpt.add_ellipsoid(st, Vector3(sx, 0.045, -0.025), Vector3(0.046, 0.042, 0.115), 10, 5, shoe_c)
+	# Contoured torso (18-seg lofted jacket/coat)
+	var t_st: Array = []
+	for ring_p: Array in [[0.84, 0.16, 0.11], [0.98, 0.15, 0.105], [1.14, 0.17, 0.112], [1.28, 0.195, 0.12], [1.39, 0.10, 0.075]]:
+		var r: Array[Vector3] = []
+		for si in range(18):
+			var a := TAU * float(si) / 18.0
+			r.append(Vector3(cos(a) * float(ring_p[1]), float(ring_p[0]), sin(a) * float(ring_p[2])))
+		t_st.append(r)
+	MeshSculpt.add_lofted_hull(st, t_st, coat_col, true, true, true)
+	# Relaxed arms + hands
+	for sx: float in [-0.19, 0.19]:
+		MeshSculpt.add_capsule(st, Vector3(sx, 1.30, 0.0), Vector3(sx * 1.08, 1.04, 0.0), 0.048, 0.038, 10, 2, coat_col)
+		MeshSculpt.add_capsule(st, Vector3(sx * 1.08, 1.04, 0.0), Vector3(sx * 1.06, 0.79, -0.02), 0.036, 0.026, 10, 2, coat_col)
+		MeshSculpt.add_ellipsoid(st, Vector3(sx * 1.06, 0.75, -0.02), Vector3(0.024, 0.042, 0.032), 8, 4, skin_col)
+	# Neck + head + hair dome
+	MeshSculpt.add_tube(st, Vector3(0.0, 1.38, 0.0), Vector3(0.0, 1.46, 0.0), 0.048, 0.045, 10, skin_col, 1)
+	MeshSculpt.add_ellipsoid(st, Vector3(0.0, 1.54, -0.005), Vector3(0.078, 0.104, 0.088), 14, 10, skin_col)
+	MeshSculpt.add_ellipsoid(st, Vector3(0.0, 1.58, 0.012), Vector3(0.086, 0.088, 0.096), 14, 8, hair_col)
+	var mesh := st.commit()
+	_cache[key] = mesh
 	return mesh
 
 
@@ -1165,7 +1261,7 @@ static func _add_part(parent: Node3D, m: Mesh, pos: Vector3, rot_deg: Vector3, s
 	mi.position = pos
 	mi.rotation_degrees = rot_deg
 	mi.scale = sc
-	mi.visibility_range_end = 140.0 if sc.x >= 0.5 else 85.0
+	mi.visibility_range_end = 42.0 if sc.x >= 0.5 else 28.0
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(mi)
 	return mi

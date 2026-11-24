@@ -1355,6 +1355,7 @@ static func build_network_tracks_and_stations(
 	var bollard_tfs: Array[Transform3D] = []
 	var mast_tfs: Array[Transform3D] = []
 	var arm_tfs: Array[Transform3D] = []
+	var mast_pts: Array[Vector2] = []
 
 	var stone_prof: Array[Vector2] = [
 		Vector2(-1.38, 0.044), Vector2(-1.34, 0.068), Vector2(1.34, 0.068), Vector2(1.38, 0.044),
@@ -1708,7 +1709,11 @@ static func build_network_tracks_and_stations(
 				slp_s += 0.68
 				slp_idx += 1
 
-		# Catenary poles every 28m along each built edge (surface & viaduct; underground uses ceiling conductor rail)
+		# Catenary poles every 28m along each built edge (surface & viaduct; underground uses ceiling conductor rail).
+		# Place double-track surface masts on the center median (between tracks) or strictly on the sidewalk behind
+		# the curb (road_hw + 0.52m) so NO mast EVER stands inside a motor lane or non-motorized bike lane!
+		var road_hw := clampf(float(graph.edges[eid].get("width", 12.0)) * 0.5, 3.2, 13.5)
+		var has_xover_e := graph.crossovers.has(eid)
 		var pole_s := s_start + 6.0
 		while pole_s < s_end - 4.0:
 			var tf_p := sample_track_frame(curve, pole_s, clen, false)
@@ -1720,35 +1725,62 @@ static func build_network_tracks_and_stations(
 			var side := -1.0
 			var near_stn_pole := false
 			for st_d: Dictionary in st_positions:
-				if tf_p.origin.distance_to(st_d["pos"] as Vector3) < 16.5:
+				if tf_p.origin.distance_to(st_d["pos"] as Vector3) < 18.5:
 					side = -float(st_d.get("side", 1))
 					near_stn_pole = true
 					break
 			if is_double and near_stn_pole:
 				pole_s += 28.0
 				continue
+			if is_double and not on_viaduct and not has_xover_e and not graph.is_quad(eid) and sep >= 1.55:
+				# Authentic center-median twin-cantilever OCS mast right between the two tracks (0% bike/car conflict!)
+				var m_cen := tf_p
+				m_cen.origin += tf_p.basis.y * 2.65
+				if track_clearance_dist(clear_idx, Vector2(m_cen.origin.x, m_cen.origin.z)) >= 1.40:
+					mast_tfs.append(m_cen)
+					mast_pts.append(Vector2(m_cen.origin.x, m_cen.origin.z))
+					for t_off: float in geom_track_offsets(geom, pole_s):
+						var a_tf_c := tf_p
+						var span_c := absf(t_off) + 0.25
+						a_tf_c.basis.x *= (span_c / 2.45)
+						a_tf_c.origin += tf_p.basis.x * (t_off * 0.52) + tf_p.basis.y * (CATENARY_HEIGHT + 0.14)
+						arm_tfs.append(a_tf_c)
+				pole_s += 28.0
+				continue
+
+			var pole_off := (2.18 + sep) if on_viaduct else maxf(2.18 + sep, road_hw + 0.52)
 			var m_tf := tf_p
-			m_tf.origin += tf_p.basis.x * (side * (2.18 + sep)) + tf_p.basis.y * 2.65
+			m_tf.origin += tf_p.basis.x * (side * pole_off) + tf_p.basis.y * 2.65
 			var m_ok := on_viaduct or track_clearance_dist(clear_idx, Vector2(m_tf.origin.x, m_tf.origin.z)) >= MAST_CLEARANCE_M
 			if m_ok:
 				mast_tfs.append(m_tf)
+				if not on_viaduct:
+					mast_pts.append(Vector2(m_tf.origin.x, m_tf.origin.z))
 			if is_double:
-				# Opposite side mast + twin cantilever arms on double track!
+				# Opposite sidewalk mast + stretched cantilever arms on double track!
 				var m_tf2 := tf_p
-				m_tf2.origin += tf_p.basis.x * (-side * (2.18 + sep)) + tf_p.basis.y * 2.65
-				if on_viaduct or track_clearance_dist(clear_idx, Vector2(m_tf2.origin.x, m_tf2.origin.z)) >= MAST_CLEARANCE_M:
+				m_tf2.origin += tf_p.basis.x * (-side * pole_off) + tf_p.basis.y * 2.65
+				var m2_ok := on_viaduct or track_clearance_dist(clear_idx, Vector2(m_tf2.origin.x, m_tf2.origin.z)) >= MAST_CLEARANCE_M
+				if m2_ok:
 					mast_tfs.append(m_tf2)
+					if not on_viaduct:
+						mast_pts.append(Vector2(m_tf2.origin.x, m_tf2.origin.z))
 				elif not m_ok:
 					pole_s += 28.0
 					continue
 				for t_off: float in geom_track_offsets(geom, pole_s):
-					var a_tf_d := tf_p
 					var arm_s := signf(t_off)
-					a_tf_d.origin += tf_p.basis.x * (t_off + arm_s * 0.95) + tf_p.basis.y * (CATENARY_HEIGHT + 0.14)
+					var p_x := arm_s * pole_off
+					var arm_span := absf(p_x - t_off) + 0.35
+					var a_tf_d := tf_p
+					a_tf_d.basis.x *= (arm_span / 2.45)
+					a_tf_d.origin += tf_p.basis.x * ((p_x + t_off) * 0.5) + tf_p.basis.y * (CATENARY_HEIGHT + 0.14)
 					arm_tfs.append(a_tf_d)
 			elif m_ok:
+				var span_s := pole_off + 0.25
 				var a_tf := tf_p
-				a_tf.origin += tf_p.basis.x * (side * 1.02) + tf_p.basis.y * (CATENARY_HEIGHT + 0.14)
+				a_tf.basis.x *= (span_s / 2.45)
+				a_tf.origin += tf_p.basis.x * (side * pole_off * 0.5) + tf_p.basis.y * (CATENARY_HEIGHT + 0.14)
 				arm_tfs.append(a_tf)
 			pole_s += 28.0
 
@@ -2072,6 +2104,7 @@ static func build_network_tracks_and_stations(
 		led_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(led_mi)
 	graph.set_meta("portal_cutouts", portal_cutouts)
+	graph.set_meta("mast_positions", mast_pts)
 	_build_tram_switches(parent, graph, elev_tier_filter)
 
 	return {

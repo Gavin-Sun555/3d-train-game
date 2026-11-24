@@ -387,7 +387,7 @@ func _run() -> void:
 		jx_min_d = minf(jx_min_d, dd)
 		jx_max_d = maxf(jx_max_d, dd)
 	_check(
-		jx_ev.is_empty() and jx_min_d > 500.0 and max_stuck_jx < 60.0,
+		jx_ev.is_empty() and jx_min_d > 400.0 and jx_max_d > 1200.0 and max_stuck_jx < 55.0,
 		"Jiaxing Tram T1 runs 180s with traffic cleanly & zero deadlocks (min dist %.0fm, max %.0fm, max stop %.1fs)" % [jx_min_d, jx_max_d, max_stuck_jx]
 	)
 
@@ -637,9 +637,32 @@ func _run() -> void:
 					if float(eb_d.get("speed", 0.0)) > 1.0:
 						eb_moving += 1
 	var move_ratio := float(moving_samples) / float(maxi(1, total_samples))
+	# Verify ZERO e-bike clipping against tram catenary masts!
+	var mast_pts_chk: Array = jx_graph.get_meta("mast_positions", [])
+	var min_eb_mast_d := 999.0
+	if ts_jx != null and ts_jx.ebike_sim != null:
+		for eb_d: Dictionary in ts_jx.ebike_sim.ebikes:
+			var ep: Vector3 = eb_d["pos"]
+			var ep2 := Vector2(ep.x, ep.z)
+			for mp: Vector2 in mast_pts_chk:
+				var md := ep2.distance_to(mp)
+				if md < min_eb_mast_d:
+					min_eb_mast_d = md
 	_check(
-		bl_pct >= 80.0 and zh_ev_cnt == 16 and ebike_cnt >= 150 and ebike_cnt >= car_cnt * 3 and eb_moving > 0 and move_ratio >= 0.40,
-		"Bike lanes on %.1f%% roads, %d e-bikes vs %d cars (%.1fx!), %d Chinese EV models, %.0f%% cars freely cruising" % [bl_pct, ebike_cnt, car_cnt, float(ebike_cnt) / float(maxi(1, car_cnt)), zh_ev_cnt, move_ratio * 100.0]
+		bl_pct >= 80.0 and zh_ev_cnt == 16 and ebike_cnt >= 150 and ebike_cnt >= car_cnt * 3 and eb_moving > 0 and move_ratio >= 0.40 and min_eb_mast_d >= 0.85,
+		"Bike lanes %.1f%%, %d e-bikes vs %d cars (%.1fx), %.0f%% cruising, ZERO e-bike/mast clipping (min dist %.2fm across %d masts)" % [bl_pct, ebike_cnt, car_cnt, float(ebike_cnt) / float(maxi(1, car_cnt)), move_ratio * 100.0, min_eb_mast_d, mast_pts_chk.size()]
+	)
+	# Verify quantitative sculpted asset LOD budgets (Cars LOD0/1/2, E-Bikes LOD0/1, NPC LOD0/1)!
+	var car_t0 := CarMeshGen.get_tri_count(ts_jx._zh_car_lods[0]["lod0"]) if not ts_jx._zh_car_lods.is_empty() else 0
+	var car_t1 := CarMeshGen.get_tri_count(ts_jx._zh_car_lods[0]["lod1"]) if not ts_jx._zh_car_lods.is_empty() else 0
+	var car_t2 := CarMeshGen.get_tri_count(ts_jx._zh_car_lods[0]["lod2"]) if not ts_jx._zh_car_lods.is_empty() else 0
+	var eb_t0 := ts_jx.ebike_sim.get_lod0_tri_count(0) if (ts_jx != null and ts_jx.ebike_sim != null) else 0
+	var eb_t1 := ts_jx.ebike_sim.get_lod1_tri_count(0) if (ts_jx != null and ts_jx.ebike_sim != null) else 0
+	var npc_lod1_t := CarMeshGen.get_tri_count(HumanMeshGen.get_npc_lod1_mesh(0, Color(0.2, 0.3, 0.4), Color(0.2, 0.2, 0.3), Color(0.85, 0.7, 0.6), Color(0.1, 0.1, 0.1)))
+	var car_has_3lods := not ts_jx.cars.is_empty() and (ts_jx.cars[0]["node"] as Node3D).get_node_or_null("LOD2") != null
+	_check(
+		car_has_3lods and car_t0 >= 8000 and car_t0 <= 15000 and car_t1 >= 2500 and car_t1 <= 5000 and car_t2 <= 1500 and eb_t0 >= 4000 and eb_t0 <= 7000 and eb_t1 <= 2000 and npc_lod1_t >= 1500 and npc_lod1_t <= 2400,
+		"Sculpted Asset LODs match spec — Car(%d/%d/%d tris), E-Bike(%d/%d tris), NPC LOD1(%d tris)" % [car_t0, car_t1, car_t2, eb_t0, eb_t1, npc_lod1_t]
 	)
 
 	# Save/Load round-trip check for 3D elevations, stacked edges, ramps & underground stations

@@ -1,6 +1,9 @@
 shader_type spatial;
 render_mode diffuse_burley, specular_schlick_ggx;
 
+instance uniform float brake_on = 0.0;
+instance uniform float turn_signal = 0.0;
+
 varying vec4 v_col;
 varying vec2 v_uv;
 varying vec3 v_world;
@@ -102,9 +105,17 @@ void fragment() {
 		emit = vec3(1.0, 0.95, 0.82) * 2.3;
 		rough = 0.10;
 	} else if (mat_id == 5) {
-		// === Ruby LED Taillight / Brake Bar ===
-		col = vec3(0.88, 0.10, 0.10);
-		emit = vec3(1.0, 0.12, 0.08) * 2.1;
+		// === Ruby LED Taillight / Dynamic Brake Bar (brightens strongly when braking/stopped!) ===
+		float brk = clamp(brake_on, 0.0, 1.0);
+		col = mix(vec3(0.76, 0.08, 0.08), vec3(1.0, 0.14, 0.10), brk);
+		emit = vec3(1.0, 0.11, 0.07) * mix(1.35, 4.6, brk);
+		rough = 0.10;
+	} else if (mat_id == 6) {
+		// === Dynamic Amber LED Turn Indicator (blinks on left/right side when turning!) ===
+		float side_match = step(0.5, turn_signal * sign(v_local_pos.x));
+		float blink = step(0.45, fract(TIME * 1.65)) * side_match;
+		col = mix(vec3(0.55, 0.34, 0.06), vec3(1.0, 0.68, 0.08), blink);
+		emit = vec3(1.0, 0.62, 0.06) * (blink * 4.2);
 		rough = 0.12;
 	}
 
