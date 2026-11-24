@@ -530,6 +530,31 @@ func _run() -> void:
 		cols_clear_of_road and ng_clear,
 		"Freeway piers auto-straddle streets/tracks as Portal Bents (cols=%s) & Nanhu Gate sits clear of T1" % [str(resolved_cols)]
 	)
+	# Verify Operations Board Line Metrics column alignment + Route Len & Avg Trip columns!
+	var smodal: Control = m._stats_modal as Control
+	smodal.visible = true
+	m.call("_refresh_stats_modal_ui")
+	await process_frame
+	await process_frame
+	var lvbox: VBoxContainer = m._stats_lines_vbox as VBoxContainer
+	var cols_aligned := false
+	var t1_route_km := jx_tsim.get_line_route_len_m(1) / 1000.0
+	if lvbox != null and lvbox.get_child_count() >= 2:
+		var h_hb := lvbox.get_child(0).get_child(0) as HBoxContainer
+		var d_hb := lvbox.get_child(1).get_child(0) as HBoxContainer
+		if h_hb.get_child_count() == 13 and d_hb.get_child_count() == 13:
+			cols_aligned = true
+			for ci in range(13):
+				var hx := (h_hb.get_child(ci) as Control).position.x
+				var dx := (d_hb.get_child(ci) as Control).position.x
+				if absf(hx - dx) > 1.5:
+					cols_aligned = false
+					break
+	smodal.visible = false
+	_check(
+		cols_aligned and t1_route_km > 8.0,
+		"Operations Board Line Metrics columns align pixel-perfectly (13 cols) & show Route Len (%.2f km) + Avg Trip" % t1_route_km
+	)
 
 	# Simulate 3D Light Rail & 3D Monorail trains traversing elevated, ramps & underground tunnels!
 	var lr_min_y := 1e9; var lr_max_y := -1e9

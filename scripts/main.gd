@@ -5368,7 +5368,7 @@ func _build_stats_modal_ui(parent: Control) -> void:
 	_stats_modal.add_child(center)
 
 	var box := _make_panel(Color(0.06, 0.09, 0.13, 0.97))
-	box.custom_minimum_size = Vector2(1060, 760)
+	box.custom_minimum_size = Vector2(1160, 760)
 	center.add_child(box)
 
 	var vbox := VBoxContainer.new()
@@ -5408,7 +5408,8 @@ func _build_stats_modal_ui(parent: Control) -> void:
 	vbox.add_child(l_hdr)
 
 	var l_scroll := ScrollContainer.new()
-	l_scroll.custom_minimum_size = Vector2(1020, 130)
+	l_scroll.custom_minimum_size = Vector2(1120, 140)
+	l_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	vbox.add_child(l_scroll)
 
 	_stats_lines_vbox = VBoxContainer.new()
@@ -5425,7 +5426,7 @@ func _build_stats_modal_ui(parent: Control) -> void:
 	vbox.add_child(t_hdr)
 
 	var t_scroll := ScrollContainer.new()
-	t_scroll.custom_minimum_size = Vector2(1020, 250)
+	t_scroll.custom_minimum_size = Vector2(1120, 240)
 	t_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	vbox.add_child(t_scroll)
 
@@ -5443,7 +5444,7 @@ func _build_stats_modal_ui(parent: Control) -> void:
 	vbox.add_child(s_hdr)
 
 	var s_scroll := ScrollContainer.new()
-	s_scroll.custom_minimum_size = Vector2(1020, 150)
+	s_scroll.custom_minimum_size = Vector2(1120, 150)
 	s_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	vbox.add_child(s_scroll)
 
@@ -5463,8 +5464,13 @@ func _make_stat_row(cols: Array[String], widths: Array[int], text_color: Color, 
 		lbl.text = cols[i]
 		lbl.add_theme_font_size_override("font_size", 12)
 		lbl.add_theme_color_override("font_color", text_color)
+		lbl.clip_text = true
+		lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		lbl.mouse_filter = Control.MOUSE_FILTER_PASS
 		if i < widths.size() and widths[i] > 0:
 			lbl.custom_minimum_size = Vector2(widths[i], 0)
+			lbl.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+			lbl.tooltip_text = cols[i]
 		else:
 			lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		hb.add_child(lbl)
@@ -5482,7 +5488,7 @@ func _fmt_hms(sec: float) -> String:
 func _refresh_stats_trams() -> void:
 	for c in _stats_trams_vbox.get_children():
 		c.queue_free()
-	var t_widths: Array[int] = [148, 0, 58, 60, 62, 62, 42, 46, 46, 66, 44, 58, 58]
+	var t_widths: Array[int] = [184, 0, 58, 62, 64, 64, 42, 46, 46, 66, 44, 58, 58]
 	_stats_trams_vbox.add_child(_make_stat_row(
 		[
 			L10n.t("列车", "Tram"),
@@ -5603,11 +5609,13 @@ func _refresh_stats_modal_ui() -> void:
 		_btn_stats_global_tsp.text = L10n.t("全局信号优先：开", "Global TSP: ON") if _graph.global_signal_priority else L10n.t("全局信号优先：关", "Global TSP: OFF")
 		_highlight_active_btn(_btn_stats_global_tsp, _graph.global_signal_priority)
 
-	var l_widths: Array[int] = [88, 138, 46, 52, 68, 52, 52, 50, 52, 168, 98]
+	var l_widths: Array[int] = [132, 128, 66, 66, 42, 46, 66, 52, 48, 46, 44, 162, 92]
 	_stats_lines_vbox.add_child(_make_stat_row(
 		[
 			L10n.t("线路", "Line"),
 			L10n.t("车型 / 编组", "Model / Cars"),
+			L10n.t("全程里程", "Route"),
+			L10n.t("平均全程", "Avg Trip"),
 			L10n.t("配车", "Fleet"),
 			L10n.t("总定员", "Cap"),
 			L10n.t("运营均速", "Avg Spd"),
@@ -5653,6 +5661,19 @@ func _refresh_stats_modal_ui() -> void:
 						model_label = L10n.model_name(sp)
 			var dist_km := float(_transit_sim.line_dist_m.get(lid, 0.0)) / 1000.0
 			var avg_kmh := (dist_km / maxf(float(maxi(1, tr_cnt)) * op_hrs, 0.0001)) if _transit_sim.operating_seconds > 1.0 else 0.0
+			var route_m := _transit_sim.get_line_route_len_m(lid)
+			var route_txt := "%.2f km" % (route_m / 1000.0) if route_m > 1.0 else "—"
+			var avg_trip_s := _transit_sim.get_line_avg_trip_seconds(lid)
+			var trip_cnt := int(_transit_sim.line_trip_count.get(lid, 0))
+			var trip_txt := "—"
+			var trip_tip := L10n.t("暂无全程计时数据", "No trip time data yet")
+			if trip_cnt > 0 and avg_trip_s > 0.0:
+				trip_txt = _fmt_hms(avg_trip_s)
+				trip_tip = L10n.t("已完成 %d 次全程 · 实测平均单程用时 %s", "%d completed trips · Measured avg full trip %s") % [trip_cnt, trip_txt]
+			elif route_m > 1.0 and avg_kmh > 1.0:
+				var est_s := route_m / (avg_kmh / 3.6)
+				trip_txt = "~" + _fmt_hms(est_s)
+				trip_tip = L10n.t("首班全程运行中 · 按当前均速估算单程约 %s", "First full trip in progress · Estimated from avg speed: %s") % _fmt_hms(est_s)
 			var boarded := int(_pax_sim.line_boarded.get(lid, 0))
 			var delivered := int(_pax_sim.line_delivered.get(lid, 0))
 			var load_pct := (float(ob_sum) / float(maxi(1, cap_sum)) * 100.0) if cap_sum > 0 else 0.0
@@ -5661,6 +5682,8 @@ func _refresh_stats_modal_ui() -> void:
 				[
 					L10n.line_display_name(str(ln.get("name", L10n.t("线路 %d", "Line %d") % lid))),
 					L10n.t("%s · %d节", "%s · %dc") % [model_label, sec_cnt],
+					route_txt,
+					trip_txt,
 					L10n.t("%d 辆", "%d") % tr_cnt,
 					L10n.t("%d 人", "%d") % cap_sum,
 					"%.1f km/h" % avg_kmh,
@@ -5669,18 +5692,21 @@ func _refresh_stats_modal_ui() -> void:
 					"%d" % ob_sum,
 					"%.0f%%" % load_pct,
 				],
-				l_widths.slice(0, 9),
+				l_widths.slice(0, 11),
 				l_col.lerp(Color.WHITE, 0.55),
 				Color(0.10, 0.13, 0.19, 0.90)
 			)
 			var row_hb := row_pc.get_child(0) as HBoxContainer
+			if row_hb.get_child_count() > 3:
+				(row_hb.get_child(3) as Control).tooltip_text = trip_tip
 			var ai_grp_box := HBoxContainer.new()
-			ai_grp_box.custom_minimum_size = Vector2(168, 0)
+			ai_grp_box.custom_minimum_size = Vector2(l_widths[11], 0)
+			ai_grp_box.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 			ai_grp_box.add_theme_constant_override("separation", 3)
 			var cur_line_style := _transit_sim.get_line_ai_style(lid)
 			var lid_ai := lid
 			var line_ai_opts := [
-				[TransitSim.LINE_AI_NONE, L10n.t("无默认", "None"), 52],
+				[TransitSim.LINE_AI_NONE, L10n.t("无默认", "None"), 48],
 				[TransitSim.AIStyle.SLOW, L10n.t("慢", "S"), 32],
 				[TransitSim.AIStyle.NORMAL, L10n.t("常", "N"), 32],
 				[TransitSim.AIStyle.FURIOUS, L10n.t("狂", "F"), 32],
@@ -5709,7 +5735,8 @@ func _refresh_stats_modal_ui() -> void:
 					_on_toggle_line_tsp(lid_tsp)
 					_refresh_stats_modal_ui()
 			)
-			tsp_btn.custom_minimum_size = Vector2(96, 0)
+			tsp_btn.custom_minimum_size = Vector2(l_widths[12], 0)
+			tsp_btn.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 			_highlight_active_btn(tsp_btn, eff_tsp_on)
 			row_hb.add_child(tsp_btn)
 			_stats_lines_vbox.add_child(row_pc)

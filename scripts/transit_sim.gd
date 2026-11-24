@@ -29,6 +29,9 @@ var _anim_time := 0.0
 var _step_frame := 0
 var operating_seconds := 0.0
 var line_dist_m: Dictionary = {} # line_id -> float (total distance traveled by trams on this line)
+var line_route_len_m: Dictionary = {} # line_id -> float (one-way full route length in meters; full circuit for pure loops)
+var line_trip_time_sum_s: Dictionary = {} # line_id -> float (sum of completed full end-to-end trip durations)
+var line_trip_count: Dictionary = {} # line_id -> int (count of completed full end-to-end trips)
 var _switch_timer := 0.0
 var _last_tram_of_line: Dictionary = {} # line_id -> tram index last watched on that line
 var auto_switches := true # false: the dispatcher never moves a switch; only the player (G) does
@@ -60,6 +63,9 @@ func rebuild_fleet(
 	active_tram_idx = 0
 	operating_seconds = 0.0
 	line_dist_m.clear()
+	line_route_len_m.clear()
+	line_trip_time_sum_s.clear()
+	line_trip_count.clear()
 	line_variants.clear()
 	_graph_ref = graph
 	var placed_pts := PackedVector3Array() # every spawned train's footprint (any line) so new ones never overlap
@@ -79,6 +85,8 @@ func rebuild_fleet(
 		var stops: Array = compiled["stops"]
 		var cap := sec_cnt * int(spec.get("cap_per_section", 58))
 		var rev_cusps: Array = compiled.get("turnbacks", [])
+		# Full one-way route length: half of out-and-back loop when terminal turnbacks exist, else full route length
+		line_route_len_m[lid] = route_len * 0.5 if (is_loop and not rev_cusps.is_empty()) else route_len
 		# The Seattle Center Monorail runs one red and one blue Alweg train
 		var spec_line := spec
 		var spec_alt: Dictionary = {}
@@ -271,11 +279,19 @@ func export_run_state() -> Dictionary:
 		var lv := int(line_ai_styles[lid_k])
 		if lv >= 0 and lv <= 2:
 			line_styles_out[str(lid_k)] = lv
+	var trip_sum_out := {}
+	for lid_k in line_trip_time_sum_s:
+		trip_sum_out[str(lid_k)] = float(line_trip_time_sum_s[lid_k])
+	var trip_cnt_out := {}
+	for lid_k in line_trip_count:
+		trip_cnt_out[str(lid_k)] = int(line_trip_count[lid_k])
 	return {
 		"active_tram_idx": active_tram_idx,
 		"manual_drive": manual_drive,
 		"auto_switches": auto_switches,
 		"line_ai_styles": line_styles_out,
+		"line_trip_time_sum_s": trip_sum_out,
+		"line_trip_count": trip_cnt_out,
 		"trams": tr_states,
 	}
 
@@ -350,6 +366,16 @@ func import_run_state(run_state: Dictionary, graph: NetworkGraph) -> void:
 			var lv := int((saved_ls as Dictionary)[lid_k])
 			if lv >= 0 and lv <= 2:
 				line_ai_styles[int(lid_k)] = lv
+	line_trip_time_sum_s.clear()
+	var saved_ts = run_state.get("line_trip_time_sum_s", {})
+	if typeof(saved_ts) == TYPE_DICTIONARY:
+		for lid_k in (saved_ts as Dictionary):
+			line_trip_time_sum_s[int(lid_k)] = float((saved_ts as Dictionary)[lid_k])
+	line_trip_count.clear()
+	var saved_tc = run_state.get("line_trip_count", {})
+	if typeof(saved_tc) == TYPE_DICTIONARY:
+		for lid_k in (saved_tc as Dictionary):
+			line_trip_count[int(lid_k)] = int((saved_tc as Dictionary)[lid_k])
 	active_tram_idx = clampi(int(run_state.get("active_tram_idx", 0)), 0, maxi(0, trams.size() - 1))
 	manual_drive = bool(run_state.get("manual_drive", false))
 	auto_switches = bool(run_state.get("auto_switches", true))
@@ -604,6 +630,17 @@ func line_ids_in_service() -> Array:
 const TRAM_STAT_KEYS := ["st_dist_m", "st_move_s", "st_stand_s", "st_dwell_s", "st_stops", "st_max_kmh", "st_boarded", "st_alighted", "st_peak_load", "st_hold_s"]
 
 
+func get_line_route_len_m(lid: int) -> float:
+	return float(line_route_len_m.get(lid, 0.0))
+
+
+func get_line_avg_trip_seconds(lid: int) -> float:
+	var cnt := int(line_trip_count.get(lid, 0))
+	if cnt > 0:
+		return float(line_trip_time_sum_s.get(lid, 0.0)) / float(cnt)
+	return -1.0
+
+
 func _accumulate_tram_stats(tr: Dictionary, dt: float) -> void:
 	var spd := float(tr["speed_mps"])
 	var door_r := float(tr["door_ratio"])
@@ -621,6 +658,39 @@ func _accumulate_tram_stats(tr: Dictionary, dt: float) -> void:
 	tr["st_peak_load"] = maxi(int(tr.get("st_peak_load", 0)), (tr["pax_dests"] as Array).size())
 	if spd <= 0.3 and (float(tr.get("express_hold_t", 0.0)) > 0.0 or float(tr.get("merge_hold_s", -1.0)) >= 0.0):
 		tr["st_hold_s"] = float(tr.get("st_hold_s", 0.0)) + dt
+
+	# Track real end-to-end terminal-to-terminal trip duration (or full circuit for pure circular loops)
+	var lid := int(tr.get("line_id", -1))
+	var is_pure_loop := bool(tr.get("is_loop", false)) and (tr.get("reversal_offsets", []) as Array).is_empty()
+	if is_pure_loop:
+		var rlen := float(tr.get("route_len", 0.0))
+		if rlen > 10.0:
+			var ldist := float(tr.get("trip_loop_dist_m", 0.0)) + spd * dt
+			var lel := float(tr.get("trip_elapsed_s", 0.0)) + dt
+			if ldist >= rlen:
+				line_trip_time_sum_s[lid] = float(line_trip_time_sum_s.get(lid, 0.0)) + lel
+				line_trip_count[lid] = int(line_trip_count.get(lid, 0)) + 1
+				ldist -= rlen
+				lel = 0.0
+			tr["trip_loop_dist_m"] = ldist
+			tr["trip_elapsed_s"] = lel
+	else:
+		var t_stage := str(tr.get("term_stage", ""))
+		var t_sid := int(tr.get("term_sid", -1))
+		if bool(tr.get("trip_active", false)):
+			tr["trip_elapsed_s"] = float(tr.get("trip_elapsed_s", 0.0)) + dt
+		if t_stage == "board_only" and t_sid >= 0:
+			# Armed at departure terminus; starts fresh timer as it departs
+			tr["trip_origin_sid"] = t_sid
+			tr["trip_elapsed_s"] = 0.0
+			tr["trip_active"] = true
+		elif t_stage == "alight_only" and t_sid >= 0 and bool(tr.get("trip_active", false)):
+			var orig_sid := int(tr.get("trip_origin_sid", -1))
+			var el := float(tr.get("trip_elapsed_s", 0.0))
+			if orig_sid >= 0 and t_sid != orig_sid and el >= 15.0:
+				line_trip_time_sum_s[lid] = float(line_trip_time_sum_s.get(lid, 0.0)) + el
+				line_trip_count[lid] = int(line_trip_count.get(lid, 0)) + 1
+			tr["trip_active"] = false
 
 
 # Where a train is and what it is doing, for the operations board
