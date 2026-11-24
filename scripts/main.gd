@@ -1458,6 +1458,7 @@ func _rebuild_tracks_and_operations(seed_pax: bool = false, defer_ops: bool = fa
 		_track_root.remove_child(c)
 		c.queue_free()
 
+	StationBuilder.jx_style = _current_map_key == "jiaxing"
 	var built := TrackBuilder.build_network_tracks_and_stations(
 		_track_root,
 		_graph,
@@ -3465,6 +3466,7 @@ func _rebuild_tracks_only_visual() -> void:
 	for c in _track_root.get_children():
 		_track_root.remove_child(c)
 		c.queue_free()
+	StationBuilder.jx_style = _current_map_key == "jiaxing"
 	var built := TrackBuilder.build_network_tracks_and_stations(
 		_track_root,
 		_graph,

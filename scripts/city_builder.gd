@@ -92,6 +92,7 @@ static func build_city(
 
 	# 6. Vintage Seattle streetlamps (with real warm night light pools)
 	var lamp_lights := _build_streetlamps(parent, map_data.get("streetlamps", []), globe_mat)
+	RoadSignBuilder.build(parent, map_data.get("road_signs", []))
 	for ll in lamp_lights:
 		lm_info["lights"].append(ll)
 
@@ -829,7 +830,13 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 		if not lm_o.is_empty():
 			base_c = lm_o["color"]
 			trim_c = base_c.lightened(0.10) if style != 0 else trim_c
-		if is_zh and style in [1, 2] and str(b.get("lm", "")) == "":
+		if is_zh and style in [1, 2] and str(b.get("lm", "")) == "" and b.has("cpd") and str(b.get("trim", "")) != "":
+			# One developer scheme per compound (wall + line colour), a hair of per-building weathering
+			base_c = Color.from_string(str(b["colour"]), Color(0.9, 0.88, 0.84))
+			var jt := (float(b_hash % 9) - 4.0) * 0.006
+			base_c = Color(clampf(base_c.r + jt, 0.0, 1.0), clampf(base_c.g + jt, 0.0, 1.0), clampf(base_c.b + jt, 0.0, 1.0))
+			trim_c = Color.from_string(str(b["trim"]), Color(0.35, 0.36, 0.38))
+		elif is_zh and style in [1, 2] and str(b.get("lm", "")) == "":
 			# Real Chinese residential colour schemes instead of six near-identical pale greys: neighbouring
 			# blocks (one compound) share a colour family, each building varies a little
 			base_c = _zh_facade_colour(Vector2(poly[0].x, poly[0].y), b_hash)
@@ -881,7 +888,8 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 		var kind_s := str(b.get("kind", ""))
 		var resid := kind_s in ["apartments", "residential", "dormitory"]
 		# Plain buildings (a recorded facade colour is fine; named landmarks keep their own modelling)
-		var generic := (b.get("roof", {}) as Dictionary).is_empty() and str(b.get("lm", "")) == ""
+		var yang := bool(b.get("yangfang", false))
+		var generic := ((b.get("roof", {}) as Dictionary).is_empty() or yang) and str(b.get("lm", "")) == ""
 		# Balconies line up with the facade shader's floor / bay grid (Chinese slab towers: balcony bays
 		# alternate; Seattle apartment blocks: every other window bay)
 		var balc := {}
@@ -897,7 +905,11 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 		var top_piece := poly
 		var top_h := h
 		var pitched := {}
-		if is_zh and generic and resid and style == 2 and h >= 9.0 and h <= 25.0 and (b_hash % 10) < 5:
+		if yang:
+			# 洋房: 6-11 storeys under a dark grey hipped tile roof
+			pitched = (b["roof"] as Dictionary).duplicate()
+			pitched["col"] = Color.from_string(str(b.get("roof_colour", "#3c4148")), Color(0.24, 0.26, 0.29))
+		elif is_zh and generic and resid and style == 2 and h >= 9.0 and h <= 25.0 and (b_hash % 10) < 5:
 			var obr := _obb2d(poly)
 			if not obr.is_empty() and absf(_poly_area(poly)) > 0.82 * 4.0 * float(obr[2]) * float(obr[3]):
 				var ou: Vector2 = obr[1]
@@ -919,6 +931,8 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 			var pieces: Array = _massing_pieces(poly, h, fh_m) if generic and poly.size() >= 4 and pitched.is_empty() else [[poly, 0.0, h]]
 			for pc: Array in pieces:
 				_extrude_tier_with_3d_relief(st, frame_st, pc[0], float(pc[1]), float(pc[2]), style, vcol, trim_c, float(pc[1]) < 0.5, balc)
+				if is_zh and generic and resid and style == 2 and not yang and h >= 40.0:
+					_emit_zh_tower_lines(frame_st, pc[0], float(pc[2]), trim_c, base_c, float(pc[2]) >= h - 0.01)
 				if float(pc[2]) >= top_h - 0.01:
 					top_piece = pc[0]
 			has_frames = true
@@ -929,7 +943,7 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 			# Pitched tile roof of an older 6-8 storey residential block (老小区坡屋顶)
 			_emit_roof(st, roof_st, pitched, h + 0.3, vcol, pitched["col"])
 			has_roofs = true
-		if generic and resid and style == 2 and h >= 24.0 and span.x > 14.0 and span.y > 14.0:
+		if generic and resid and style == 2 and h >= 24.0 and span.x > 14.0 and span.y > 14.0 and pitched.is_empty():
 			_emit_roof_core(frame_st, top_piece, top_h, base_c, trim_c, seed_i)
 			has_frames = true
 
@@ -937,7 +951,7 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 		# King Street Station's campanile
 		var lm_k := str(b.get("lm", ""))
 		var roof_d: Dictionary = b.get("roof", {})
-		if not roof_d.is_empty():
+		if not roof_d.is_empty() and not yang:
 			var rcol := Color.from_string(str(b.get("roof_colour", "#4a5552")), Color(0.29, 0.33, 0.32))
 			_emit_roof(st, roof_st, roof_d, h + 0.3, vcol, rcol)
 			has_roofs = true
@@ -1717,8 +1731,9 @@ static func _emit_balconies(balc: Dictionary, p0: Vector2, dir2: Vector2, nrm2: 
 				_emit_colored_box(bst, Transform3D(basis, Vector3(mid.x, yk - 0.09, mid.y) + basis.z * (depth * 0.5)), Vector3(w + 0.10, 0.18, depth), slab_c)
 				# front parapet
 				_emit_colored_box(bst, Transform3D(basis, Vector3(mid.x, yk + 0.52, mid.y) + basis.z * (depth - 0.06)), Vector3(w + 0.10, 1.04, 0.12), rail_c)
-				# side returns
-				for sx: float in [-0.5, 0.5]:
+				# side returns (Seattle's deep open balconies; Jiaxing's glazed balconies read fine without, and the
+				# 18-33 storey towers there would otherwise double the balcony triangle count)
+				for sx: float in ([] if zh else [-0.5, 0.5]):
 					_emit_colored_box(bst, Transform3D(basis, Vector3(mid.x, yk + 0.52, mid.y) + basis.x * (sx * (w + 0.10) - signf(sx) * 0.05) + basis.z * (depth * 0.5)), Vector3(0.10, 1.04, depth - 0.02), rail_c)
 				any = true
 				k += 1
@@ -1780,18 +1795,53 @@ static func _massing_pieces(poly: PackedVector2Array, h: float, fh: float) -> Ar
 	return one
 
 
+# Contemporary Chinese high-rise residential facade (2010s-2020s 高层住宅): continuous vertical lines (竖向线条)
+# at every unit pair, a two-storey crown band and the lines rising past the roof as a decorative top frame
+static func _emit_zh_tower_lines(fst: SurfaceTool, poly: PackedVector2Array, top: float, line_c: Color, wall_c: Color, crown: bool) -> void:
+	var bw := 4.2 * 2.0
+	var y0 := 4.6
+	var rise := 2.6 if crown else 0.0
+	var band_c := wall_c.lerp(Color(0.95, 0.94, 0.91), 0.55)
+	for i in range(poly.size()):
+		var p0 := poly[i]
+		var p1 := poly[(i + 1) % poly.size()]
+		var elen := p0.distance_to(p1)
+		if elen < 10.0:
+			continue
+		var dir2 := (p1 - p0) / elen
+		var nrm2 := Vector2(-dir2.y, dir2.x)
+		var basis := Basis(Vector3(dir2.x, 0.0, dir2.y), Vector3.UP, Vector3(nrm2.x, 0.0, nrm2.y))
+		var n_seg := int(floor(elen / bw))
+		var lead := (elen - float(n_seg) * bw) * 0.5
+		for k in range(n_seg + 1):
+			var u := lead + float(k) * bw
+			if u < 0.6 or u > elen - 0.6:
+				continue
+			var hgt := top + rise - y0
+			var pos := p0 + dir2 * u + nrm2 * 0.20
+			_emit_colored_box(fst, Transform3D(basis, Vector3(pos.x, y0 + hgt * 0.5, pos.y)), Vector3(0.36, hgt, 0.40), line_c)
+		if crown:
+			# crown band over the top two floors + the open frame beam tying the risen lines together
+			var mid := (p0 + p1) * 0.5 + nrm2 * 0.12
+			_emit_colored_box(fst, Transform3D(basis, Vector3(mid.x, top - 2.4, mid.y)), Vector3(elen - 0.2, 0.55, 0.26), band_c)
+			_emit_colored_box(fst, Transform3D(basis, Vector3(mid.x, top + rise - 0.25, mid.y + 0.0) + basis.z * 0.08), Vector3(elen - 0.6, 0.5, 0.40), line_c)
+		# corner pilasters in the wall colour, slightly proud of the wall, full height
+		var c0 := p0 + dir2 * 0.30 + nrm2 * 0.16
+		_emit_colored_box(fst, Transform3D(basis, Vector3(c0.x, (top + rise) * 0.5, c0.y)), Vector3(0.60, top + rise, 0.34), band_c)
+
+
 # Facade colour of a Chinese residential / mixed-use block: a colour family per ~180 m cell (one compound or
 # street block shares it), per-building variation inside the family
 static func _zh_facade_colour(p: Vector2, b_hash: int) -> Color:
 	var fams: Array = [
-		[Color(0.88, 0.80, 0.62), Color(0.84, 0.76, 0.58)], # cream
-		[Color(0.80, 0.68, 0.52), Color(0.76, 0.64, 0.48)], # warm beige 真石漆
-		[Color(0.77, 0.53, 0.41), Color(0.72, 0.49, 0.38)], # light terracotta
-		[Color(0.87, 0.67, 0.55), Color(0.83, 0.63, 0.51)], # peach
-		[Color(0.88, 0.88, 0.86), Color(0.82, 0.82, 0.80)], # grey-white
-		[Color(0.63, 0.69, 0.76), Color(0.58, 0.64, 0.71)], # grey-blue
-		[Color(0.79, 0.73, 0.58), Color(0.74, 0.68, 0.54)], # sand
-		[Color(0.62, 0.37, 0.29), Color(0.57, 0.34, 0.27)], # brick (older blocks)
+		[Color(0.91, 0.89, 0.84), Color(0.88, 0.86, 0.81)], # warm white 真石漆
+		[Color(0.94, 0.91, 0.86), Color(0.90, 0.87, 0.81)], # ivory
+		[Color(0.86, 0.84, 0.79), Color(0.82, 0.80, 0.75)], # light warm grey
+		[Color(0.85, 0.79, 0.70), Color(0.81, 0.75, 0.66)], # light coffee stone
+		[Color(0.84, 0.83, 0.80), Color(0.79, 0.78, 0.76)], # grey-white
+		[Color(0.89, 0.86, 0.80), Color(0.85, 0.82, 0.75)], # champagne beige
+		[Color(0.80, 0.79, 0.77), Color(0.75, 0.74, 0.72)], # mid grey
+		[Color(0.66, 0.44, 0.36), Color(0.62, 0.41, 0.33)], # brick (older blocks)
 	]
 	var cx := int(floor(p.x / 180.0))
 	var cy := int(floor(p.y / 180.0))
@@ -1956,6 +2006,8 @@ static func _build_streetlamps(
 	var night_lights: Array[OmniLight3D] = []
 	if lamps.is_empty():
 		return night_lights
+	if (lamps[0] as Array).size() >= 4:
+		return _build_led_streetlamps(parent, lamps, globe_mat)
 	var count := lamps.size()
 
 	var post_mm := MultiMesh.new()
@@ -2035,6 +2087,99 @@ static func _build_streetlamps(
 		g_inst.set_meta("on_terrain", true)
 	parent.add_child(g_inst)
 
+	return night_lights
+
+
+# Chinese urban road lighting (嘉兴城市道路照明): 10 m tapered grey steel pole, a single upswept arm reaching
+# over the carriageway and a flat LED luminaire. Lamps carry [x, z, arm_dir_x, arm_dir_z].
+static func _build_led_streetlamps(parent: Node3D, lamps: Array, head_mat: StandardMaterial3D) -> Array[OmniLight3D]:
+	var night_lights: Array[OmniLight3D] = []
+	var count := lamps.size()
+	const POLE_H := 10.0
+	const ARM_L := 2.3
+	var steel := StandardMaterial3D.new()
+	steel.albedo_color = Color(0.56, 0.58, 0.60)
+	steel.metallic = 0.55
+	steel.roughness = 0.40
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = 0.075
+	cyl.bottom_radius = 0.14
+	cyl.height = POLE_H
+	cyl.radial_segments = 8
+	cyl.rings = 1
+	cyl.material = steel
+	var arm := BoxMesh.new()
+	arm.size = Vector3(0.07, 0.07, ARM_L)
+	arm.material = steel
+	var head := BoxMesh.new()
+	head.size = Vector3(0.34, 0.11, 0.78)
+	var housing := StandardMaterial3D.new()
+	housing.albedo_color = Color(0.40, 0.42, 0.45)
+	housing.metallic = 0.5
+	housing.roughness = 0.45
+	head.material = housing
+	# the lens under the housing glows at night (shared street-globe material toggles its emission)
+	var lens := BoxMesh.new()
+	lens.size = Vector3(0.26, 0.02, 0.64)
+	lens.material = head_mat
+	var mms: Array[MultiMesh] = []
+	for m: Mesh in [cyl, arm, head, lens]:
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.mesh = m
+		mm.instance_count = count
+		mms.append(mm)
+	var light_holder := Node3D.new()
+	light_holder.name = "StreetlampPools"
+	if Terrain.active:
+		light_holder.set_meta("on_terrain", true)
+	parent.add_child(light_holder)
+	var tf_lists: Array = [[], [], [], []]
+	for i in range(count):
+		var la: Array = lamps[i]
+		var lx := float(la[0])
+		var lz := float(la[1])
+		var ad := Vector3(float(la[2]), 0.0, float(la[3]))
+		if ad.length_squared() < 0.01:
+			ad = Vector3.RIGHT
+		ad = ad.normalized()
+		var dy := Terrain.surface(lx, lz) if Terrain.active else 0.0
+		var yaw := Basis(Vector3.UP, atan2(ad.x, ad.z)) # local +Z along the arm
+		var tfs: Array[Transform3D] = [
+			Transform3D(Basis.IDENTITY, Vector3(lx, POLE_H * 0.5 + dy, lz)),
+			Transform3D(yaw * Basis(Vector3.RIGHT, deg_to_rad(-12.0)), Vector3(lx, POLE_H - 0.15 + dy, lz) + ad * (ARM_L * 0.5)),
+			Transform3D(yaw * Basis(Vector3.RIGHT, deg_to_rad(-6.0)), Vector3(lx, POLE_H + 0.12 + dy, lz) + ad * (ARM_L + 0.30)),
+			Transform3D(yaw * Basis(Vector3.RIGHT, deg_to_rad(-6.0)), Vector3(lx, POLE_H + 0.055 + dy, lz) + ad * (ARM_L + 0.32)),
+		]
+		for k in range(4):
+			mms[k].set_instance_transform(i, tfs[k])
+			(tf_lists[k] as Array).append(tfs[k])
+		if i % 14 == 0:
+			var ol := OmniLight3D.new()
+			ol.light_color = Color(1.0, 0.90, 0.74)
+			ol.light_energy = 0.0
+			ol.visible = false
+			ol.omni_range = 24.0
+			ol.omni_attenuation = 1.35
+			ol.distance_fade_enabled = true
+			ol.distance_fade_begin = 95.0
+			ol.distance_fade_length = 35.0
+			ol.position = Vector3(lx, POLE_H - 0.4 + dy, lz) + ad * (ARM_L + 0.3)
+			light_holder.add_child(ol)
+			night_lights.append(ol)
+	var names := ["StreetlampPosts", "StreetlampArms", "StreetlampHeads", "StreetlampGlobes"]
+	for k in range(4):
+		var inst := MultiMeshInstance3D.new()
+		inst.name = names[k]
+		inst.multimesh = mms[k]
+		var typed: Array[Transform3D] = []
+		typed.assign(tf_lists[k])
+		inst.set_meta("base_tfs", typed)
+		if k == 3:
+			inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		if Terrain.active:
+			inst.set_meta("on_terrain", true)
+		parent.add_child(inst)
 	return night_lights
 
 
@@ -2383,7 +2528,8 @@ static func apply_track_clearance(city_root: Node3D, clear_idx: Dictionary, bays
 	var lamp_posts := city_root.get_node_or_null("StreetlampPosts") as MultiMeshInstance3D
 	var lamp_hidden := _clearance_hidden_set(lamp_posts, clear_idx, TrackBuilder.LAMP_CLEARANCE_M, bays)
 	_apply_hidden(lamp_posts, lamp_hidden, 1)
-	_apply_hidden(city_root.get_node_or_null("StreetlampGlobes") as MultiMeshInstance3D, lamp_hidden, 1)
+	for lnm: String in ["StreetlampGlobes", "StreetlampArms", "StreetlampHeads"]:
+		_apply_hidden(city_root.get_node_or_null(lnm) as MultiMeshInstance3D, lamp_hidden, 1)
 	var pools := city_root.get_node_or_null("StreetlampPools")
 	if pools != null:
 		for ol: Node in pools.get_children():

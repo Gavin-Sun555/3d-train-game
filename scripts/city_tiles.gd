@@ -108,6 +108,11 @@ static func core_subset(map_data: Dictionary) -> Dictionary:
 			if cr.has_point(_pt(it["pos"])):
 				lst.append(it)
 		d[key] = lst
+	var rs_core: Array = []
+	for sg: Dictionary in map_data.get("road_signs", []):
+		if cr.has_point(_pt(sg["p"])):
+			rs_core.append(sg)
+	d["road_signs"] = rs_core
 	for key: String in ["streetlamps", "trees"]:
 		var lst2: Array = []
 		for p in map_data.get(key, []):
@@ -196,7 +201,7 @@ func _cut_tiles(map_data: Dictionary) -> Dictionary:
 	var cuts := {}
 	var get_t := func(key: Vector2i) -> Dictionary:
 		if not cuts.has(key):
-			cuts[key] = {"key": key, "buildings": [], "storefronts": [], "roads": [], "context": [], "crosswalks": [],
+			cuts[key] = {"key": key, "buildings": [], "storefronts": [], "roads": [], "context": [], "crosswalks": [], "road_signs": [],
 				"streetlamps": [], "trees": [], "areas": [], "piers": [], "fills": [], "freeways": []}
 		return cuts[key]
 	# Buildings (local indices; storefronts follow their building)
@@ -287,6 +292,10 @@ func _cut_tiles(map_data: Dictionary) -> Dictionary:
 			var p2 := _pt(it["pos"])
 			if not cr.has_point(p2):
 				(get_t.call(_tile_of(p2))[key2] as Array).append(it)
+	for sg2: Dictionary in map_data.get("road_signs", []):
+		var p5 := _pt(sg2["p"])
+		if not cr.has_point(p5):
+			(get_t.call(_tile_of(p5))["road_signs"] as Array).append(sg2)
 	for key3: String in ["streetlamps", "trees"]:
 		for p3 in map_data.get(key3, []):
 			var v := _pt(p3)
@@ -343,7 +352,7 @@ static func _data_sig(td: Dictionary) -> int:
 		h = hash([h, _road_key(r), int(r.get("lanes_f", 1)), int(r.get("lanes_b", 1)), int(r.get("lv", 0))])
 	for r2: Dictionary in td["context"]:
 		h = hash([h, _road_key(r2)])
-	h = hash([h, Terrain._graded_sig, (td["crosswalks"] as Array).size(), (td["storefronts"] as Array).size(), (td["streetlamps"] as Array).size(), (td["piers"] as Array).size(), (td["fills"] as Array).size(), (td["freeways"] as Array).size()])
+	h = hash([h, Terrain._graded_sig, (td["crosswalks"] as Array).size(), (td["storefronts"] as Array).size(), (td["streetlamps"] as Array).size(), (td.get("road_signs", []) as Array).size(), (td["piers"] as Array).size(), (td["fills"] as Array).size(), (td["freeways"] as Array).size()])
 	return h
 
 
@@ -382,6 +391,8 @@ static func build_tile_node(
 	if not (td["freeways"] as Array).is_empty():
 		FreewayBuilder.build(root, td["freeways"], mats["road"], roads + (td["context"] as Array), clear_idx)
 	var lights: Array = []
+	if not (td.get("road_signs", []) as Array).is_empty():
+		RoadSignBuilder.build(root, td["road_signs"])
 	if not (td["streetlamps"] as Array).is_empty():
 		for l in CityBuilder._build_streetlamps(root, td["streetlamps"], mats["globe"]):
 			lights.append(l)

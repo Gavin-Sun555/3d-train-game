@@ -2,6 +2,11 @@ class_name StationBuilder
 extends RefCounted
 
 
+# Jiaxing: street-level tram stops in the local 新中式 idiom (white columns, dark tile-grey pitched roof with
+# upturned corners, timber-slat ceiling, red-and-white tram identity). Set by main before stations are built.
+static var jx_style := false
+
+
 static func build_detailed_station(
 	parent: Node3D,
 	st_data: Dictionary,
@@ -147,27 +152,31 @@ static func build_detailed_station(
 	var roof_w := 2.6 if is_island else 2.55
 	var roof_cx := 0.0 if is_island else (outer_edge_x - side * (roof_w * 0.5 - 0.05))
 	var col_x := 0.0 if is_island else (outer_edge_x - side * 0.42)
-	var n_cols := maxi(4, int(round((sh_half * 2.0) / 5.2)) + 1)
-	var col_span := sh_half - 1.0
-	for ci_ in range(n_cols):
-		var cz := lerpf(-col_span, col_span, float(ci_) / float(n_cols - 1))
-		_cyl(st_node, 0.085, 2.95, Vector3(col_x, plat_top + 1.475, cz), mats["steel_dark"])
-		_box(st_node, Vector3(0.34, 0.025, 0.34), Vector3(col_x, plat_top + 0.012, cz), mats["steel_dark"])
-		_box(st_node, Vector3(roof_w - 0.3, 0.10, 0.12), Vector3(roof_cx, roof_y - 0.14, cz), mats["steel_dark"])
-	_box(st_node, Vector3(roof_w, 0.16, sh_half * 2.0 + 0.4), Vector3(roof_cx, roof_y, 0.0), mats["roof_top"])
-	_box(st_node, Vector3(roof_w - 0.06, 0.02, sh_half * 2.0 + 0.3), Vector3(roof_cx, roof_y - 0.085, 0.0), mats["soffit"])
-	var fascia_xs: Array[float] = []
-	if is_island:
-		fascia_xs = [-roof_w * 0.5, roof_w * 0.5]
+	var jx_stop := jx_style and not elevated and not underground
+	if jx_stop:
+		_build_jx_canopy(st_node, mats, plat_top, roof_y, roof_w, roof_cx, col_x, sh_half, is_island, side)
 	else:
-		fascia_xs = [roof_cx - side * roof_w * 0.5, roof_cx + side * roof_w * 0.5]
-	for fx: float in fascia_xs:
-		_box(st_node, Vector3(0.06, 0.34, sh_half * 2.0 + 0.4), Vector3(fx, roof_y - 0.02, 0.0), mats["accent"])
-		_box(st_node, Vector3(0.065, 0.045, sh_half * 2.0 + 0.4), Vector3(fx, roof_y + 0.09, 0.0), mats["fascia_white"])
-	for lx_off: float in ([-0.55, 0.55] if is_island else [0.0]):
-		_box(st_node, Vector3(0.10, 0.02, sh_half * 2.0 - 1.0), Vector3(roof_cx + lx_off, roof_y - 0.10, 0.0), mats["led"])
-	_box(st_node, Vector3(roof_w + 0.04, 0.05, 0.08), Vector3(roof_cx, roof_y - 0.02, -sh_half - 0.2), mats["accent"])
-	_box(st_node, Vector3(roof_w + 0.04, 0.05, 0.08), Vector3(roof_cx, roof_y - 0.02, sh_half + 0.2), mats["accent"])
+		var n_cols := maxi(4, int(round((sh_half * 2.0) / 5.2)) + 1)
+		var col_span := sh_half - 1.0
+		for ci_ in range(n_cols):
+			var cz := lerpf(-col_span, col_span, float(ci_) / float(n_cols - 1))
+			_cyl(st_node, 0.085, 2.95, Vector3(col_x, plat_top + 1.475, cz), mats["steel_dark"])
+			_box(st_node, Vector3(0.34, 0.025, 0.34), Vector3(col_x, plat_top + 0.012, cz), mats["steel_dark"])
+			_box(st_node, Vector3(roof_w - 0.3, 0.10, 0.12), Vector3(roof_cx, roof_y - 0.14, cz), mats["steel_dark"])
+		_box(st_node, Vector3(roof_w, 0.16, sh_half * 2.0 + 0.4), Vector3(roof_cx, roof_y, 0.0), mats["roof_top"])
+		_box(st_node, Vector3(roof_w - 0.06, 0.02, sh_half * 2.0 + 0.3), Vector3(roof_cx, roof_y - 0.085, 0.0), mats["soffit"])
+		var fascia_xs: Array[float] = []
+		if is_island:
+			fascia_xs = [-roof_w * 0.5, roof_w * 0.5]
+		else:
+			fascia_xs = [roof_cx - side * roof_w * 0.5, roof_cx + side * roof_w * 0.5]
+		for fx: float in fascia_xs:
+			_box(st_node, Vector3(0.06, 0.34, sh_half * 2.0 + 0.4), Vector3(fx, roof_y - 0.02, 0.0), mats["accent"])
+			_box(st_node, Vector3(0.065, 0.045, sh_half * 2.0 + 0.4), Vector3(fx, roof_y + 0.09, 0.0), mats["fascia_white"])
+		for lx_off: float in ([-0.55, 0.55] if is_island else [0.0]):
+			_box(st_node, Vector3(0.10, 0.02, sh_half * 2.0 - 1.0), Vector3(roof_cx + lx_off, roof_y - 0.10, 0.0), mats["led"])
+		_box(st_node, Vector3(roof_w + 0.04, 0.05, 0.08), Vector3(roof_cx, roof_y - 0.02, -sh_half - 0.2), mats["accent"])
+		_box(st_node, Vector3(roof_w + 0.04, 0.05, 0.08), Vector3(roof_cx, roof_y - 0.02, sh_half + 0.2), mats["accent"])
 
 	# Framed glass windscreen (back wall on side platforms / spine on islands) with frit band
 	var wall_x := 0.0 if is_island else (outer_edge_x - side * 0.22)
@@ -198,7 +207,7 @@ static func build_detailed_station(
 		var toward_track := e_s if is_island else -side
 		var bx := (e_s * 1.0) if is_island else (inner_edge_x + side * 0.85)
 		var rot_face := toward_track * 90.0
-		_box(st_node, Vector3(0.05, 0.46, 3.6), Vector3(bx, roof_y - 0.42, 4.6), mats["sign_blue"])
+		_box(st_node, Vector3(0.05, 0.46, 3.6), Vector3(bx, roof_y - 0.42, 4.6), _jx_mats()["red"] if jx_stop else mats["sign_blue"])
 		for hz: float in [3.2, 6.0]:
 			_cyl(st_node, 0.012, 0.3, Vector3(bx, roof_y - 0.2, hz), mats["steel_dark"])
 		_label(st_node, name_short, Vector3(bx + toward_track * 0.03, roof_y - 0.42, 4.6), rot_face, 64, 0.0052, Color(1, 1, 1), cjk_font)
@@ -263,10 +272,21 @@ static func build_detailed_station(
 	# Station totem with lit "T" roundel
 	var pylon_x := 0.0 if is_island else (outer_edge_x - side * 0.4)
 	var pylon_z := sh_half + 2.5
-	_box(st_node, Vector3(0.24, 3.4, 0.6), Vector3(pylon_x, plat_top + 1.7, pylon_z), mats["sign_blue"])
-	_box(st_node, Vector3(0.26, 0.56, 0.5), Vector3(pylon_x, plat_top + 2.95, pylon_z), mats["fascia_white"])
-	_label(st_node, "T", Vector3(pylon_x + 0.14, plat_top + 2.95, pylon_z), 90.0, 120, 0.004, Color(0.08, 0.3, 0.6), null)
-	_label(st_node, "T", Vector3(pylon_x - 0.14, plat_top + 2.95, pylon_z), -90.0, 120, 0.004, Color(0.08, 0.3, 0.6), null)
+	if jx_stop:
+		# 嘉兴有轨电车 station totem: white pylon, red band with the line number, station name in hanzi
+		_box(st_node, Vector3(0.26, 3.6, 0.62), Vector3(pylon_x, plat_top + 1.8, pylon_z), _jx_mats()["white"])
+		_box(st_node, Vector3(0.28, 0.62, 0.64), Vector3(pylon_x, plat_top + 3.25, pylon_z), _jx_mats()["red"])
+		for fs: float in [1.0, -1.0]:
+			_label(st_node, "T1", Vector3(pylon_x + fs * 0.145, plat_top + 3.25, pylon_z), fs * 90.0, 110, 0.004, Color(1, 1, 1), null)
+			var tl := _label(st_node, name_short, Vector3(pylon_x + fs * 0.135, plat_top + 2.1, pylon_z), fs * 90.0, 64, 0.0036, Color(0.20, 0.21, 0.23), cjk_font)
+			tl.autowrap_mode = TextServer.AUTOWRAP_ARBITRARY
+			tl.width = 140.0
+			tl.outline_size = 0
+	else:
+		_box(st_node, Vector3(0.24, 3.4, 0.6), Vector3(pylon_x, plat_top + 1.7, pylon_z), mats["sign_blue"])
+		_box(st_node, Vector3(0.26, 0.56, 0.5), Vector3(pylon_x, plat_top + 2.95, pylon_z), mats["fascia_white"])
+		_label(st_node, "T", Vector3(pylon_x + 0.14, plat_top + 2.95, pylon_z), 90.0, 120, 0.004, Color(0.08, 0.3, 0.6), null)
+		_label(st_node, "T", Vector3(pylon_x - 0.14, plat_top + 2.95, pylon_z), -90.0, 120, 0.004, Color(0.08, 0.3, 0.6), null)
 	# Platform lamp posts at both ends
 	var lp_end := plat_half - 0.9
 	for lpz: float in [-lp_end, lp_end]:
@@ -384,6 +404,69 @@ static func build_detailed_station(
 
 # Evaluates the track centerline frame, lateral platform center offset, local curvature throw padding,
 # and available island half-width at station-local longitudinal coordinate `z_local` (-Z = +s along edge).
+static var _jx_mat_cache := {}
+
+
+static func _jx_mats() -> Dictionary:
+	if _jx_mat_cache.is_empty():
+		_jx_mat_cache = {
+			"white": _mat(Color(0.93, 0.93, 0.91), 0.55, 0.05),
+			"tile": _mat(Color(0.20, 0.22, 0.25), 0.55, 0.35),
+			"ridge": _mat(Color(0.15, 0.16, 0.18), 0.5, 0.4),
+			"wood": _mat(Color(0.58, 0.40, 0.25), 0.6, 0.0),
+			"red": _mat(Color(0.72, 0.08, 0.09), 0.45, 0.1),
+			"grey": _mat(Color(0.36, 0.38, 0.41), 0.45, 0.5),
+		}
+	return _jx_mat_cache
+
+
+# 新中式 canopy: square white columns, timber cross beams and slatted ceiling, dark grey double-pitched roof
+# with a ridge, white bargeboards and upturned corners (飞檐), red line under the white fascia
+static func _build_jx_canopy(st_node: Node3D, mats: Dictionary, plat_top: float, roof_y: float, roof_w: float, roof_cx: float, col_x: float, sh_half: float, is_island: bool, side: float) -> void:
+	var jm := _jx_mats()
+	var len_z := sh_half * 2.0 + 0.4
+	var n_cols := maxi(4, int(round((sh_half * 2.0) / 5.2)) + 1)
+	var col_span := sh_half - 1.0
+	var col_h := roof_y - plat_top
+	for ci_ in range(n_cols):
+		var cz := lerpf(-col_span, col_span, float(ci_) / float(n_cols - 1))
+		_box(st_node, Vector3(0.22, col_h, 0.22), Vector3(col_x, plat_top + col_h * 0.5, cz), jm["white"])
+		_box(st_node, Vector3(0.30, 0.14, 0.30), Vector3(col_x, plat_top + 0.07, cz), jm["grey"])
+		_box(st_node, Vector3(roof_w - 0.2, 0.16, 0.14), Vector3(roof_cx, roof_y - 0.10, cz), jm["wood"])
+	# white fascia beams along both long edges with a thin red line
+	for fe: float in [-0.5, 0.5]:
+		var fx := roof_cx + fe * (roof_w - 0.06)
+		_box(st_node, Vector3(0.10, 0.30, len_z), Vector3(fx, roof_y + 0.02, 0.0), jm["white"])
+		_box(st_node, Vector3(0.11, 0.05, len_z), Vector3(fx, roof_y - 0.10, 0.0), jm["red"])
+	# timber slat ceiling
+	var n_sl := maxi(4, int(roof_w / 0.24))
+	for k in range(n_sl):
+		var sx := roof_cx - roof_w * 0.5 + 0.15 + (roof_w - 0.3) * float(k) / float(n_sl - 1)
+		_box(st_node, Vector3(0.06, 0.07, len_z - 0.3), Vector3(sx, roof_y + 0.10, 0.0), jm["wood"])
+	_box(st_node, Vector3(0.10, 0.02, len_z - 1.2), Vector3(roof_cx, roof_y + 0.05, 0.0), mats["led"])
+	# double-pitched roof
+	var half := roof_w * 0.5 + 0.38
+	var rise := 0.62
+	var base_y := roof_y + 0.20
+	var ang := atan2(rise, half)
+	var slope_len := sqrt(half * half + rise * rise) + 0.05
+	for sd: float in [-1.0, 1.0]:
+		var slab := _box(st_node, Vector3(slope_len, 0.09, len_z + 1.0), Vector3(roof_cx + sd * half * 0.5, base_y + rise * 0.5, 0.0), jm["tile"])
+		slab.rotation.z = -sd * ang
+		# white bargeboards on the gable ends
+		for ge: float in [-1.0, 1.0]:
+			var bb := _box(st_node, Vector3(slope_len, 0.16, 0.06), Vector3(roof_cx + sd * half * 0.5, base_y + rise * 0.5 - 0.04, ge * (len_z * 0.5 + 0.5)), jm["white"])
+			bb.rotation.z = -sd * ang
+			# upturned eave corner
+			var fe2 := _box(st_node, Vector3(0.55, 0.09, 0.30), Vector3(roof_cx + sd * (half + 0.12), base_y + 0.08, ge * (len_z * 0.5 + 0.42)), jm["ridge"])
+			fe2.rotation.z = sd * deg_to_rad(24.0)
+	# ridge with raised ends
+	_box(st_node, Vector3(0.18, 0.16, len_z + 1.1), Vector3(roof_cx, base_y + rise + 0.04, 0.0), jm["ridge"])
+	for re: float in [-1.0, 1.0]:
+		var rend := _box(st_node, Vector3(0.18, 0.34, 0.30), Vector3(roof_cx, base_y + rise + 0.14, re * (len_z * 0.5 + 0.55)), jm["ridge"])
+		rend.rotation.x = re * deg_to_rad(18.0)
+
+
 static func _eval_curve_station_slice(curve_spec: Dictionary, z_local: float, is_island: bool, plat_w: float) -> Dictionary:
 	var geom: Dictionary = curve_spec["geom"]
 	var curve: Curve3D = geom["curve"]

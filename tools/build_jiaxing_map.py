@@ -1732,6 +1732,41 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
     PALETTE_RES = ["#dfd7c8", "#d6c8b6", "#e4ded3", "#c9bfb2", "#d8cfc2", "#c8b9a6"]
     PALETTE_JIANGNAN = ["#eae6de", "#e3dfd5", "#ece9e2", "#ded9ce"]
     PALETTE_TOWER = ["#7c95ab", "#8ca3b8", "#6d8499", "#98aab8", "#b4bec6"]
+    # Facade schemes of Jiaxing compounds completed 2012-2025 (wall, trim): warm white / ivory / light warm grey
+    # 真石漆 and stone with dark grey or champagne lines; a few light-coffee and grey-white towers
+    PALETTE_ZH2026 = [
+        ("#e8e2d6", "#5b5e63"), ("#efe9dd", "#8a7a62"), ("#ddd6c9", "#4f5257"), ("#e4dccd", "#a08a68"),
+        ("#d6d3cc", "#44484e"), ("#ece8e1", "#6b6f75"), ("#d9cbb5", "#5a4c3c"), ("#e6ddd0", "#7d6a52"),
+        ("#cfcac2", "#3e4247"), ("#f1ede6", "#9a8d7a"),
+    ]
+
+    def zone_profile(px, py):
+        """Development profile of the ~220 m block a point lies in (one compound / developer design):
+        (type, tower floors, 洋房 floors, (wall, trim) scheme, compound id)."""
+        cx_i, cy_i = int(math.floor(px / 220.0)), int(math.floor(py / 220.0))
+        hsh = (cx_i * 73856093) ^ (cy_i * 19349663) ^ 0x5bd1e995
+        hsh &= 0x7FFFFFFF
+        r_t = (hsh % 1000) / 1000.0
+        ctype = "tower" if r_t < 0.62 else ("yangfang" if r_t < 0.84 else "mixed")
+        tfl = [18, 22, 24, 26, 28, 30, 32, 33][(hsh // 1000) % 8]
+        yfl = [6, 7, 8, 9, 11][(hsh // 8000) % 5]
+        sch = PALETTE_ZH2026[(hsh // 40000) % len(PALETTE_ZH2026)]
+        return ctype, tfl, yfl, sch, 900000 + (hsh % 899999)
+
+    def profile_building(poly, px, py, row_hint, b_ang, hl, hw):
+        ctype, tfl, yfl, sch, cid = zone_profile(px, py)
+        # mixed compounds: towers on the north half of the cell (+y is south), 洋房 on the south half
+        tower = ctype == "tower" or (ctype == "mixed" and (py / 220.0 - math.floor(py / 220.0)) < 0.5)
+        if tower:
+            fl = max(11, tfl + rng.choice([0, 0, 0, -1, 1, -2, 2]))
+            b = {"pts": [rnd(p) for p in poly], "h": fl * 3.0 + 1.5, "kind": "apartments", "style": 2,
+                 "colour": sch[0], "trim": sch[1], "cpd": cid}
+        else:
+            b = {"pts": [rnd(p) for p in poly], "h": yfl * 3.0 + 1.2, "kind": "apartments", "style": 2,
+                 "colour": sch[0], "trim": sch[1], "cpd": cid, "yangfang": True,
+                 "roof": pitched_roof_dict(px, py, b_ang, hl, hw, "hipped"),
+                 "roof_colour": ["#3c4148", "#454a52", "#353a40"][cid % 3]}
+        return b
 
     # --- B. Authentic Chinese Residential Compounds (小区) & Commercial Zones from OSM landuse ---
     lu_cnt = 0
@@ -1745,37 +1780,87 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
         if lu == "residential":
             # Chinese 小区: neat east-west oriented parallel south-facing slab apartment buildings (板楼)!
             is_old = dist_old < 1450.0
-            step_x = 34.0 if is_old else 46.0
-            step_y = 28.0 if is_old else 38.0
-            y = min(ys) + step_y * 0.5
+            if is_old:
+                # 1990s-2000s 老小区: 5-7 storey walk-up slabs with pitched tile roofs
+                step_x, step_y = 34.0, 28.0
+                y = min(ys) + step_y * 0.5
+                while y < max(ys) - 8.0:
+                    x = min(xs) + step_x * 0.5
+                    while x < max(xs) - 8.0:
+                        if point_in_poly(x, y, ring):
+                            hl = rng.uniform(11.0, 14.5)
+                            hw = rng.uniform(5.5, 7.2)
+                            ang = rng.uniform(-0.04, 0.04)  # South-facing!
+                            pts = make_rect_poly(x, y, ang, hl, hw)
+                            pxs = [p[0] for p in pts]
+                            pys = [p[1] for p in pts]
+                            bb = (min(pxs), min(pys), max(pxs), max(pys))
+                            if can_place(pts, bb):
+                                h = rng.choice([15.0, 18.0, 21.0])
+                                out.append({"pts": [rnd(p) for p in pts], "h": h, "kind": "apartments", "style": 3,
+                                            "colour": rng.choice(PALETTE_RES),
+                                            "roof": pitched_roof_dict(x, y, ang, hl, hw, "gabled"),
+                                            "roof_colour": rng.choice(["#40464e", "#6e4236", "#3a4048"])})
+                                taken.add((bb[0], bb[1], bb[2], bb[3], pts), *bb)
+                                lu_cnt += 1
+                        x += step_x
+                    y += step_y
+                continue
+            # 2010s-2020s 新小区 as built around Jiaxing today: one developer design per compound — 18-33 storey
+            # high-rise slabs (高层), 6-11 storey 洋房 with grey hipped roofs, or both (towers to the north, 洋房 to
+            # the south); one facade scheme for the whole compound; row spacing follows the sunlight rule
+            cid = lu_cnt * 7919 + int(cx0 * 3.1 + cy0 * 1.7)
+            r_t = rng.random()
+            ctype = "tower" if r_t < 0.56 else ("yangfang" if r_t < 0.80 else "mixed")
+            tower_fl = rng.choice([18, 22, 24, 26, 28, 30, 32, 33])
+            yang_fl = rng.choice([6, 7, 8, 9, 11])
+            scheme = rng.choice(PALETTE_ZH2026)
+            span_y = max(1.0, max(ys) - min(ys))
+            y = min(ys) + 13.0
+            row = 0
             while y < max(ys) - 8.0:
-                x = min(xs) + step_x * 0.5
+                frac = (y - min(ys)) / span_y  # 0 = north edge (+y is south)
+                tower_row = ctype == "tower" or (ctype == "mixed" and frac < 0.5)
+                if tower_row:
+                    fl_row = tower_fl
+                    h_row = fl_row * 3.0 + 1.5
+                    step_x = rng.uniform(52.0, 60.0)
+                    step_y = min(74.0, max(42.0, 0.56 * h_row + 16.0))
+                else:
+                    fl_row = yang_fl
+                    h_row = fl_row * 3.0 + 1.2
+                    step_x = rng.uniform(38.0, 44.0)
+                    step_y = 30.0 + fl_row * 0.9
+                x = min(xs) + step_x * 0.5 + (step_x * 0.25 if row % 2 else 0.0)
                 while x < max(xs) - 8.0:
                     if point_in_poly(x, y, ring):
-                        hl = rng.uniform(11.0, 14.5) if is_old else rng.uniform(14.5, 20.0)
-                        hw = rng.uniform(5.5, 7.2) if is_old else rng.uniform(6.8, 8.8)
-                        ang = rng.uniform(-0.04, 0.04)  # South-facing!
+                        if tower_row:
+                            hl = rng.uniform(15.5, 21.0)
+                            hw = rng.uniform(7.2, 8.6)
+                            fl = max(11, fl_row + rng.choice([0, 0, 0, -1, 1, -2, 2]))
+                            h = fl * 3.0 + 1.5
+                        else:
+                            hl = rng.uniform(12.0, 15.5)
+                            hw = rng.uniform(6.8, 7.8)
+                            h = fl_row * 3.0 + 1.2
+                        ang = rng.uniform(-0.03, 0.03)
                         pts = make_rect_poly(x, y, ang, hl, hw)
                         pxs = [p[0] for p in pts]
                         pys = [p[1] for p in pts]
                         bb = (min(pxs), min(pys), max(pxs), max(pys))
                         if can_place(pts, bb):
-                            if is_old:
-                                h = rng.choice([15.0, 18.0, 21.0])
-                                b = {"pts": [rnd(p) for p in pts], "h": h, "kind": "apartments", "style": 3,
-                                     "colour": rng.choice(PALETTE_RES),
-                                     "roof": pitched_roof_dict(x, y, ang, hl, hw, "gabled"),
-                                     "roof_colour": rng.choice(["#40464e", "#6e4236", "#3a4048"])}
-                            else:
-                                h = rng.choice([28.0, 34.0, 42.0, 50.0, 58.0])
-                                b = {"pts": [rnd(p) for p in pts], "h": h, "kind": "apartments",
-                                     "style": 2 if h < 48.0 else 0,
-                                     "colour": rng.choice(PALETTE_MODERN)}
+                            b = {"pts": [rnd(p) for p in pts], "h": h, "kind": "apartments", "style": 2,
+                                 "colour": scheme[0], "trim": scheme[1], "cpd": cid}
+                            if not tower_row:
+                                b["roof"] = pitched_roof_dict(x, y, ang, hl, hw, "hipped")
+                                b["roof_colour"] = rng.choice(["#3c4148", "#454a52", "#353a40"])
+                                b["yangfang"] = True
                             out.append(b)
                             taken.add((bb[0], bb[1], bb[2], bb[3], pts), *bb)
                             lu_cnt += 1
                     x += step_x
                 y += step_y
+                row += 1
         elif lu in ("commercial", "retail", "governmental"):
             step = 44.0
             y = min(ys) + 20.0
@@ -1977,12 +2062,9 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
                                     b["roof"] = pitched_roof_dict(cx, cy, b_ang, hl, hw, "hipped" if hl < hw * 1.35 else "gabled")
                                     b["roof_colour"] = rng.choice(["#3b4149", "#693e32"])
                             else:
-                                h = rng.choice([24.0, 32.0, 42.0, 52.0, 60.0])
-                                b = {
-                                    "pts": [rnd(p) for p in poly], "h": h, "kind": "apartments",
-                                    "style": 0 if h >= 50.0 else 2,
-                                    "colour": rng.choice(PALETTE_MODERN),
-                                }
+                                if row == 1 and zone_profile(cx, cy)[0] == "tower" and rng.random() < 0.6:
+                                    continue  # high-rise rows need their sunlight spacing
+                                b = profile_building(poly, cx, cy, row, b_ang, hl, hw)
                         out.append(b)
                         taken.add((bb[0], bb[1], bb[2], bb[3], poly), *bb)
                         street_cnt += 1
@@ -2014,13 +2096,10 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
                         pxs = [p[0] for p in poly]
                         pys = [p[1] for p in poly]
                         bb = (min(pxs), min(pys), max(pxs), max(pys))
-                        if can_place(poly, bb, allow_in_park=False, water_margin=3.0):
-                            h = rng.choice([24.0, 30.0, 38.0, 46.0, 54.0])
-                            out.append({
-                                "pts": [rnd(p) for p in poly], "h": h, "kind": "apartments",
-                                "style": 0 if h >= 48.0 else 2,
-                                "colour": rng.choice(PALETTE_MODERN if h >= 36.0 else PALETTE_RES),
-                            })
+                        zt = zone_profile(ex, ey)[0]
+                        sparse_row = zt == "tower" and int(math.floor(ey / 40.0)) % 2 == 1
+                        if not sparse_row and can_place(poly, bb, allow_in_park=False, water_margin=3.0):
+                            out.append(profile_building(poly, ex, ey, 1, ang, hl, hw))
                             taken.add((bb[0], bb[1], bb[2], bb[3], poly), *bb)
                             east_cnt += 1
                 ex += 48.0
@@ -2033,6 +2112,135 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
 # ---------------------------------------------------------------------------------------------
 # 5. Roads, Crosswalks, Streetlamps, Avenue Trees, Storefronts
 # ---------------------------------------------------------------------------------------------
+# Hanyu Pinyin of every character used in Jiaxing street names (road name plates carry it under the hanzi)
+PINYIN = dict(zip(
+    "一万丈三下业东中丰乐九云仁会俭元光公兴军农凌凯出创前力务勤北区升华南博历原友双吉同周和商嘉园国園地场坡城塔塘墅声大安宜宝宾小少展山川州工带常平年广庆府建引御德心快怡拥拳振支放文斜新方旋昌明春景曲望机杨松林柳树格桐桥梧楼横橋正殷民气水永汇江沭河波泾洪洲浜海清渡港湖湾溪火烟玉环甪由百益盐盛禾秀租站章紫红纵纺络绣羊翔翠联舟航船花茶莲蚕街西谊象贸越路车辅迎速道里锦长门阳隧雨顺高鸣鹤龙",
+    ("yi wan zhang san xia ye dong zhong feng le jiu yun ren hui jian yuan guang gong xing jun nong ling kai chu chuang "
+     "qian li wu qin bei qu sheng hua nan bo li yuan you shuang ji tong zhou he shang jia yuan guo yuan di chang po cheng "
+     "ta tang shu sheng da an yi bao bin xiao shao zhan shan chuan zhou gong dai chang ping nian guang qing fu jian yin yu "
+     "de xin kuai yi yong quan zhen zhi fang wen xie xin fang xuan chang ming chun jing qu wang ji yang song lin liu shu "
+     "ge tong qiao wu lou heng qiao zheng yin min qi shui yong hui jiang shu he bo jing hong zhou bang hai qing du gang hu "
+     "wan xi huo yan yu huan lu you bai yi yan sheng he xiu zu zhan zhang zi hong zong fang luo xiu yang xiang cui lian "
+     "zhou hang chuan hua cha lian can jie xi yi xiang mao yue lu che fu ying su dao li jin chang men yang sui yu shun gao "
+     "ming he long").split()))
+SIGN_SKIP = ("支路", "隧道", "坡道", "引道", "出租车", "辅道", "辅路")
+
+
+def road_pinyin(name):
+    """'中山西路' -> 'ZHONGSHAN XILU', '南湖大道' -> 'NANHU DADAO' (GB 17733 style street-plate romanisation)."""
+    gen_len = 1
+    if name.endswith("大道"):
+        gen_len = 2
+    elif len(name) >= 3 and name[-1] in "路街" and name[-2] in "东西南北":
+        gen_len = 2
+    proper, generic = name[:-gen_len], name[-gen_len:]
+    py = lambda t: "".join(PINYIN.get(ch, "") for ch in t)
+    return (py(proper) + " " + py(generic)).upper().strip()
+
+
+def build_road_signs(edges, nodes_list):
+    """Chinese street signage: 路名牌 (blue street-name plates with pinyin) at junction corners, and 指路标志
+    (blue overhead lane-guidance signs naming the roads left / ahead / right) on main-road approaches."""
+    npos = {n["id"]: n["pos"] for n in nodes_list}
+    deg = defaultdict(int)
+    for e in edges:
+        deg[e["a"]] += 1
+        deg[e["b"]] += 1
+
+    def along(pts, dist):
+        acc = 0.0
+        for i in range(len(pts) - 1):
+            ax, ay = pts[i]
+            bx, by = pts[i + 1]
+            L = math.hypot(bx - ax, by - ay)
+            if acc + L >= dist and L > 1e-6:
+                t = (dist - acc) / L
+                return (ax + (bx - ax) * t, ay + (by - ay) * t), ((bx - ax) / L, (by - ay) / L)
+            acc += L
+        ax, ay = pts[-2]
+        bx, by = pts[-1]
+        L = max(1e-6, math.hypot(bx - ax, by - ay))
+        return (bx, by), ((bx - ax) / L, (by - ay) / L)
+
+    def plen(pts):
+        return sum(math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]) for i in range(len(pts) - 1))
+
+    # leaving directions of every edge at each junction (sampled 15 m out so short kinks do not mislead)
+    legs = defaultdict(list)  # node -> [(edge, out_dir, pts_from_node)]
+    for e in edges:
+        if e.get("underground") or e.get("hide_road"):
+            continue
+        pts = e["pts"]
+        if len(pts) < 2:
+            continue
+        L = plen(pts)
+        if L < 4.0:
+            continue
+        rev = list(reversed(pts))
+        for node, seq in ((e["a"], pts), (e["b"], rev)):
+            p, _ = along(seq, min(15.0, L * 0.5))
+            o = seq[0]
+            dx, dy = p[0] - o[0], p[1] - o[1]
+            d = math.hypot(dx, dy)
+            if d > 1e-6:
+                legs[node].append((e, (dx / d, dy / d), seq, L))
+
+    def nice(nm):
+        return nm and not any(k in nm for k in SIGN_SKIP)
+
+    signs = []
+    plate_seen = set()
+    for node, lg in legs.items():
+        if deg[node] < 3 or node not in npos:
+            continue
+        nx0, ny0 = npos[node]
+        if not in_active((nx0, ny0)):
+            continue
+        for (e, od, seq, L) in lg:
+            w = e["width"]
+            nm = e["name"]
+            # --- street-name plate on the corner, parallel to its road, one per road per junction ---
+            if nice(nm) and (node, nm) not in plate_seen and L >= 20.0:
+                plate_seen.add((node, nm))
+                p, d = along(seq, 11.0)
+                rx, ry = -d[1], d[0]
+                side = 1.0 if (node % 2 == 0) else -1.0
+                signs.append({"k": "name", "p": [round(p[0] + rx * side * (w * 0.5 + 1.3), 2), round(p[1] + ry * side * (w * 0.5 + 1.3), 2)],
+                              "d": [round(d[0], 4), round(d[1], 4)], "t": nm, "py": road_pinyin(nm)})
+            # --- overhead guide sign on a main-road approach (traffic drives toward this node) ---
+            if w < 15.0 or L < 110.0 or not nice(nm):
+                continue
+            din = (-od[0], -od[1])  # travel direction arriving at the junction
+            names = {"L": "", "S": "", "R": ""}
+            best = {"L": 1e9, "S": 1e9, "R": 1e9}
+            for (e2, od2, _seq2, _L2) in lg:
+                if e2 is e:
+                    continue
+                cr = din[0] * od2[1] - din[1] * od2[0]
+                dt = din[0] * od2[0] + din[1] * od2[1]
+                ang = math.degrees(math.atan2(cr, dt))
+                if abs(ang) > 150.0:
+                    continue
+                key = "S" if abs(ang) < 35.0 else ("R" if ang > 0 else "L")
+                score = abs(ang) if key == "S" else abs(abs(ang) - 90.0)
+                if nice(e2["name"]) and score < best[key]:
+                    best[key] = score
+                    names[key] = e2["name"]
+            if not names["S"] and any(nice(e2["name"]) and e2["name"] == nm for (e2, *_r) in lg if e2 is not e):
+                names["S"] = nm
+            if sum(1 for v in names.values() if v) < 2:
+                continue
+            dist = min(75.0, L * 0.45)
+            p, d = along(seq, dist)
+            # traffic on this side drives toward the node, i.e. along -d; its right-hand kerb is right of -d
+            tdx, tdy = -d[0], -d[1]
+            rx, ry = -tdy, tdx
+            signs.append({"k": "guide", "p": [round(p[0] + rx * (w * 0.5 + 0.9), 2), round(p[1] + ry * (w * 0.5 + 0.9), 2)],
+                          "d": [round(tdx, 4), round(tdy, 4)], "w": round(w, 1), "tram": bool(e.get("tram_median")),
+                          "L": names["L"], "S": names["S"], "R": names["R"]})
+    return signs
+
+
 def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_grid, water_grid, rail_grid, bld_grid, freeway_grid=None, island_rings=None):
     deg = defaultdict(int)
     for e in edges:
@@ -2075,7 +2283,8 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
         while s < L - 12.0:
             for side in (-1.0, 1.0):
                 lamps.append([round(p0[0] + dx * s + nx * side * (w * 0.5 + 1.4), 2),
-                              round(p0[1] + dz * s + nz * side * (w * 0.5 + 1.4), 2)])
+                              round(p0[1] + dz * s + nz * side * (w * 0.5 + 1.4), 2),
+                              round(-nx * side, 3), round(-nz * side, 3)])
             s += 48.0
 
         if not ed.get("bridge"):
@@ -3438,6 +3647,7 @@ def main():
         "roads": roads,
         "crosswalks": cws,
         "streetlamps": lamps,
+        "road_signs": build_road_signs(graph_edges, graph_nodes),
         "traffic_signals": [],
         "trees": trees,
         "landmarks": landmarks,
