@@ -1568,9 +1568,12 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
         (AIRPORT_TERM_POS, 260.0, "jiaxing_airport"),
     ]
 
-    def can_place(pts, bb, allow_in_park=False, water_margin=0.0, tight=False):
+    def can_place(pts, bb, allow_in_park=False, water_margin=0.0, tight=False, allow_yuehe=False):
         cen = centroid(pts)
         if not in_active(cen):
+            return False
+        # Preserve Yuehe Historic Quarter (月河历史街区) strictly for authentic 1-2 story Jiangnan heritage houses (zero modern towers!)
+        if not allow_yuehe and -898.0 <= cen[0] <= -382.0 and -2272.0 <= cen[1] <= -1848.0:
             return False
         # Never place synthetic residential/commercial blocks inside the Airport airside precinct
         if not allow_in_park and in_airport_precinct(cen):
@@ -1852,7 +1855,7 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
                 pxs = [p[0] for p in poly]
                 pys = [p[1] for p in poly]
                 bb = (min(pxs), min(pys), max(pxs), max(pys))
-                if can_place(poly, bb, allow_in_park=False, water_margin=1.4, tight=True):
+                if can_place(poly, bb, allow_in_park=False, water_margin=1.4, tight=True, allow_yuehe=True):
                     h = rng.choice([4.4, 5.2, 6.0, 6.6, 7.2])
                     out.append({
                         "pts": [rnd(p) for p in poly], "h": h, "kind": "house", "style": 3,
@@ -1879,7 +1882,7 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
                 pxs = [p[0] for p in poly]
                 pys = [p[1] for p in poly]
                 bb = (min(pxs), min(pys), max(pxs), max(pys))
-                if can_place(poly, bb, allow_in_park=False, water_margin=1.5, tight=True):
+                if can_place(poly, bb, allow_in_park=False, water_margin=1.5, tight=True, allow_yuehe=True):
                     h = rng.choice([4.2, 5.0, 5.8, 6.4, 7.0])
                     out.append({
                         "pts": [rnd(p) for p in poly], "h": h, "kind": "house", "style": 3,
@@ -2030,7 +2033,7 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
 # ---------------------------------------------------------------------------------------------
 # 5. Roads, Crosswalks, Streetlamps, Avenue Trees, Storefronts
 # ---------------------------------------------------------------------------------------------
-def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_grid, water_grid, rail_grid, bld_grid, freeway_grid=None):
+def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_grid, water_grid, rail_grid, bld_grid, freeway_grid=None, island_rings=None):
     deg = defaultdict(int)
     for e in edges:
         deg[e["a"]] += 1
@@ -2117,6 +2120,25 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
             if rng_tr.random() < 0.76:
                 trees.append((tx, ty))
 
+    # Populate lush scenic trees directly on lake islands (especially North Lake Island #353 around 399,-634!)
+    if island_rings:
+        for ir in island_rings:
+            ic = centroid(ir)
+            if math.hypot(ic[0] - YANYU_POS[0], ic[1] - YANYU_POS[1]) < 95.0:
+                continue  # Yanyu Tower Lake Heart Island has its own bespoke landscaping
+            ixs = [p[0] for p in ir]
+            iys = [p[1] for p in ir]
+            ix0, ix1, iy0, iy1 = int(min(ixs)) + 3, int(max(ixs)) - 3, int(min(iys)) + 3, int(max(iys)) - 3
+            for gx in range(ix0, ix1 + 1, 9):
+                for gy in range(iy0, iy1 + 1, 9):
+                    tx = gx + rng_tr.uniform(-3.0, 3.0)
+                    ty = gy + rng_tr.uniform(-3.0, 3.0)
+                    # Keep island pavilions clear
+                    if math.hypot(tx - 386.0, ty + 672.0) < 8.5 or math.hypot(tx - 414.0, ty + 592.0) < 8.5:
+                        continue
+                    if point_in_poly(tx, ty, ir) and rng_tr.random() < 0.85:
+                        trees.append((tx, ty))
+
     # Deduplicate lamps, crosswalks, and clearance-check trees
     seen_l, d_lamps = set(), []
     for lp in lamps:
@@ -2143,10 +2165,26 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
                 ok = False
                 break
         if ok:
-            for wp in water_grid.query(tx - 2, ty - 2, tx + 2, ty + 2):
-                if point_in_poly(tx, ty, wp):
-                    ok = False
-                    break
+            # Lake islands are dry land; everywhere else require a 2.2m dry shoreline buffer from water!
+            on_island = False
+            if island_rings:
+                for ir in island_rings:
+                    if point_in_poly(tx, ty, ir):
+                        # Must be at least 2.6m inside island edge so canopy never overhangs water
+                        if all(seg_dist(tx, ty, ir[k][0], ir[k][1], ir[(k + 1) % len(ir)][0], ir[(k + 1) % len(ir)][1])[0] >= 2.6 for k in range(len(ir))):
+                            on_island = True
+                            break
+            if not on_island:
+                for wp in water_grid.query(tx - 3.5, ty - 3.5, tx + 3.5, ty + 3.5):
+                    if point_in_poly(tx, ty, wp):
+                        ok = False
+                        break
+                    for k in range(len(wp)):
+                        if seg_dist(tx, ty, wp[k][0], wp[k][1], wp[(k + 1) % len(wp)][0], wp[(k + 1) % len(wp)][1])[0] < 2.2:
+                            ok = False
+                            break
+                    if not ok:
+                        break
         if ok:
             for (ax, ay, bx, by, rw) in rail_grid.query(tx - 14, ty - 14, tx + 14, ty + 14):
                 if seg_dist(tx, ty, ax, ay, bx, by)[0] < rw - 2.5:
@@ -3138,7 +3176,7 @@ def main():
             bld_grid.add((min(xs), min(ys), max(xs), max(ys), bpts), min(xs), min(ys), max(xs), max(ys))
 
     roads, cws, lamps, trees, storefronts = build_street_furniture(
-        graph_edges, graph_nodes, blds, poi_nodes, nodes, road_grid, water_grid, rail_grid, bld_grid, freeway_grid
+        graph_edges, graph_nodes, blds, poi_nodes, nodes, road_grid, water_grid, rail_grid, bld_grid, freeway_grid, raw_islands
     )
     gated_compounds = build_gated_compounds(landuse_zones, ways, nodes, road_grid, water_grid, rail_grid, bld_grid)
 
@@ -3188,6 +3226,8 @@ def main():
         {"pos": rnd(proj(30.7495, 120.7465)), "angle": 0.80, "span": 28.0},   # 西南湖步桥
         {"pos": rnd(proj(30.7662, 120.7396)), "angle": 1.45, "span": 32.0},   # 环城西路桥
         {"pos": rnd(proj(30.7730, 120.7495)), "angle": 0.12, "span": 32.0},   # 环城北路桥
+        {"pos": rnd((437.0, -680.0)), "angle": 0.0, "span": 62.0},            # 北湖小岛东连岸人行步桥
+        {"pos": rnd((380.0, -740.0)), "angle": 1.5708, "span": 68.0},         # 北湖小岛北连岸人行步桥
     ] + yuehe_bridges
 
     # Extract real OSM Jiaxing Nanhu Airport (嘉兴南湖机场) runway 12/30 & main taxiways
@@ -3220,6 +3260,9 @@ def main():
                 a_rad = ka * math.pi / 4.0
                 pts_chk.append((x + math.cos(a_rad) * margin, y + math.sin(a_rad) * margin))
         for px, py in pts_chk:
+            # Lake islands are dry land strictly inside water polygons!
+            if any(point_in_poly(px, py, ir) for ir in raw_islands):
+                continue
             for wp in water_grid.query(px - 2, py - 2, px + 2, py + 2):
                 if point_in_poly(px, py, wp):
                     return True
@@ -3258,6 +3301,11 @@ def main():
         # Nanhu South & East Scenic Park promenade linking Main Gate -> Huijingyuan -> Nanhu Tiandi
         ("greenway", 3.8, [(786, 486), (824, 320), (830, 160), (830, 56), (822, -140), (798, -347)]),
         ("stone", 3.4, [(842, 498), (786, 486), (680, 460), (540, 440), (410, 470)]),
+        # North Lake Scenic Island (#353, center ~399,-634): twin footbridge approaches + complete 环岛步道 loop + spine path!
+        ("timber", 3.6, [(380, -778), (380, -706)]),
+        ("timber", 3.6, [(468, -680), (402, -680)]),
+        ("stone", 3.0, [(380, -706), (395, -688), (408, -634), (425, -595), (424, -568), (412, -571), (386, -619), (368, -677), (371, -698), (380, -706)]),
+        ("stone", 2.8, [(380, -706), (386, -672), (398, -634), (414, -592), (420, -569)]),
         # Xiangjiadang Wetland Park lush dry-shore circular walking trails & lakefront greenway!
         ("greenway", 4.0, [(4520, -5620), (4640, -5420), (4710, -5180), (4700, -4920), (4640, -4680), (4820, -4480)]),
         ("stone", 3.2, [(4710, -5180), (4560, -5180), (4560, -4960), (4700, -4920)]),
@@ -3280,6 +3328,8 @@ def main():
         (420.0, 475.0),    # 南湖革命广场亭
         (105.0, -1385.0),  # 人民公园翠湖亭
         (120.0, -1455.0),  # 人民公园林荫亭
+        (386.0, -672.0),   # 北湖小岛北观景凉亭
+        (414.0, -592.0),   # 北湖小岛南水岸凉亭
         (985.0, 2980.0),   # 中央公园东亭
         (1165.0, 3110.0),  # 中央公园南亭
         (1020.0, 3150.0),  # 中央公园西亭

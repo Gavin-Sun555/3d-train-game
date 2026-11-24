@@ -113,6 +113,7 @@ static func _build_clearance_data(roads: Array, buildings: Array, areas: Array) 
 				(bldg_grid[ck] as Array).append(rec)
 
 	var water_polys: Array = []
+	var island_polys: Array = []
 	var park_polys: Array = []
 	for a in areas:
 		var kind := str(a.get("kind", ""))
@@ -138,6 +139,12 @@ static func _build_clearance_data(roads: Array, buildings: Array, areas: Array) 
 					wmin = Vector2(minf(wmin.x, v.x), minf(wmin.y, v.y))
 					wmax = Vector2(maxf(wmax.x, v.x), maxf(wmax.y, v.y))
 				water_polys.append([wmin, wmax, wp])
+		elif kind == "island":
+			island_polys.append([amin, amax, poly])
+			# Lake islands (except Yanyu Tower Lake Heart Island which has bespoke landmarks) also grow lush island groves!
+			var ic := (amin + amax) * 0.5
+			if ic.distance_to(Vector2(368.0, -276.0)) > 90.0:
+				park_polys.append([amin, amax, poly, "park"])
 		elif kind in ["park", "grass", "wood", "meadow", "garden"]:
 			park_polys.append([amin, amax, poly, kind])
 
@@ -145,6 +152,7 @@ static func _build_clearance_data(roads: Array, buildings: Array, areas: Array) 
 		"road_grid": road_grid,
 		"bldg_grid": bldg_grid,
 		"water_polys": water_polys,
+		"island_polys": island_polys,
 		"park_polys": park_polys,
 	}
 
@@ -179,6 +187,23 @@ static func _inside_any_building(clear: Dictionary, p: Vector2, pad: float = 2.0
 
 
 static func _inside_any_water(clear: Dictionary, p: Vector2, pad: float = 0.0) -> bool:
+	# Lake islands are dry land strictly inside water polygons — check islands first (inset by pad from shoreline)!
+	for irec in clear.get("island_polys", []):
+		var imin: Vector2 = irec[0]
+		var imax: Vector2 = irec[1]
+		if p.x < imin.x or p.x > imax.x or p.y < imin.y or p.y > imax.y:
+			continue
+		var ipoly: PackedVector2Array = irec[2]
+		if Geometry2D.is_point_in_polygon(p, ipoly):
+			var near_edge := false
+			var edge_pad := maxf(2.2, pad)
+			for i in range(ipoly.size()):
+				var q := Geometry2D.get_closest_point_to_segment(p, ipoly[i], ipoly[(i + 1) % ipoly.size()])
+				if p.distance_squared_to(q) < edge_pad * edge_pad:
+					near_edge = true
+					break
+			if not near_edge:
+				return false
 	for rec in clear["water_polys"]:
 		var amin: Vector2 = rec[0]
 		var amax: Vector2 = rec[1]
