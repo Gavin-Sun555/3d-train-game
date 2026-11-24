@@ -2535,35 +2535,36 @@ static func _build_wayside_speed_signs(
 
 			var ring_mi := MeshInstance3D.new()
 			var rcyl := CylinderMesh.new()
-			rcyl.top_radius = 0.34; rcyl.bottom_radius = 0.34; rcyl.height = 0.04; rcyl.radial_segments = 14
+			rcyl.top_radius = 0.40; rcyl.bottom_radius = 0.40; rcyl.height = 0.04; rcyl.radial_segments = 16
 			rcyl.material = red_mat
 			ring_mi.mesh = rcyl
-			ring_mi.position = Vector3(0.0, 2.38, 0.0)
+			ring_mi.position = Vector3(0.0, 2.40, 0.0)
 			ring_mi.rotation_degrees = Vector3(90.0, 0.0, 0.0)
-			ring_mi.visibility_range_end = 160.0
+			ring_mi.visibility_range_end = 185.0
 			sign_root.add_child(ring_mi)
 
 			var disc_mi := MeshInstance3D.new()
 			var dcyl := CylinderMesh.new()
-			dcyl.top_radius = 0.26; dcyl.bottom_radius = 0.26; dcyl.height = 0.05; dcyl.radial_segments = 14
+			dcyl.top_radius = 0.31; dcyl.bottom_radius = 0.31; dcyl.height = 0.05; dcyl.radial_segments = 16
 			dcyl.material = white_mat
 			disc_mi.mesh = dcyl
-			disc_mi.position = Vector3(0.0, 2.38, 0.0)
+			disc_mi.position = Vector3(0.0, 2.40, 0.0)
 			disc_mi.rotation_degrees = Vector3(90.0, 0.0, 0.0)
-			disc_mi.visibility_range_end = 160.0
+			disc_mi.visibility_range_end = 185.0
 			sign_root.add_child(disc_mi)
 
 			var spd_lbl := Label3D.new()
 			spd_lbl.text = "18/30" if is_turnout else "20"
 			if cjk_font != null:
 				spd_lbl.font = cjk_font
-			spd_lbl.font_size = 44 if is_turnout else 62
-			spd_lbl.pixel_size = 0.0038
-			spd_lbl.modulate = Color(0.08, 0.09, 0.11)
-			spd_lbl.outline_size = 4
-			spd_lbl.outline_modulate = Color(0.95, 0.95, 0.95)
-			spd_lbl.position = Vector3(0.0, 2.38, 0.032)
-			spd_lbl.visibility_range_end = 145.0
+			# Thick same-color outline boldens the numerals cleanly for high-legibility wayside reading from 120m+
+			spd_lbl.font_size = 58 if is_turnout else 80
+			spd_lbl.pixel_size = 0.0044
+			spd_lbl.modulate = Color(0.05, 0.06, 0.08)
+			spd_lbl.outline_size = 14 if is_turnout else 20
+			spd_lbl.outline_modulate = Color(0.05, 0.06, 0.08)
+			spd_lbl.position = Vector3(0.0, 2.40, 0.034)
+			spd_lbl.visibility_range_end = 175.0
 			sign_root.add_child(spd_lbl)
 
 

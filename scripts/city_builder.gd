@@ -22,8 +22,9 @@ static func build_city(
 	var sx: float = span_x + pad_margin
 	var sz: float = span_z + pad_margin
 
-	# 1. Brushed expansion-joint concrete sidewalk ground slab (the real terrain where there is elevation data)
-	if Terrain.active:
+	# 1. Brushed expansion-joint concrete sidewalk ground slab (the real terrain where there is DEM elevation data)
+	var use_dem_ground := Terrain.has_dem()
+	if use_dem_ground:
 		Terrain.build_ground(parent, bounds, sidewalk_mat)
 	var ground_mi := MeshInstance3D.new()
 	ground_mi.name = "UrbanSidewalkBase"
@@ -37,7 +38,8 @@ static func build_city(
 	ground_mi.position = Vector3(cx, -0.01, cz)
 	ground_mi.material_override = sidewalk_mat
 	ground_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	if not Terrain.active:
+	if not use_dem_ground:
+		ground_mi.set_meta("on_terrain", true)
 		parent.add_child(ground_mi)
 	else:
 		ground_mi.free()

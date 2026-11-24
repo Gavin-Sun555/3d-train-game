@@ -24,6 +24,14 @@ static var _hs_raw := PackedFloat32Array()
 static var _lf_raw := PackedFloat32Array()
 static var _graded_sig := 0
 static var _rigid_max := 60.0
+# Analytical river-bridge arch terrain for flat-city maps without a binary DEM (e.g. Jiaxing canals & bridges)
+static var _bridge_arches: Array[Dictionary] = []
+static var _bridge_grid: Dictionary = {} # Vector2i -> Array[int]
+const _BRIDGE_CELL := 96.0
+
+
+static func has_dem() -> bool:
+	return active and not _hs.is_empty()
 
 
 static func load_for(map_key: String, areas: Array, edges: Array = []) -> void:
@@ -35,8 +43,14 @@ static func load_for(map_key: String, areas: Array, edges: Array = []) -> void:
 	_hs_raw = PackedFloat32Array()
 	_lf_raw = PackedFloat32Array()
 	_graded_sig = 0
+	_bridge_arches.clear()
+	_bridge_grid.clear()
 	var base := "res://data/%s_terrain" % map_key
 	if not FileAccess.file_exists(base + ".bin") or not FileAccess.file_exists(base + ".json"):
+		if not edges.is_empty():
+			_load_bridge_arches(edges)
+			if not _bridge_arches.is_empty():
+				active = true
 		return
 	var meta = JSON.parse_string(FileAccess.get_file_as_string(base + ".json"))
 	if typeof(meta) != TYPE_DICTIONARY:
@@ -490,11 +504,15 @@ static func ground(x: float, z: float) -> float:
 
 # Height things stand on: the ground, or the water surface where there is water
 static func surface(x: float, z: float) -> float:
+	if not active:
+		return 0.0
 	var hs := _hs
+	if hs.is_empty():
+		return _bridge_surface(x, z)
 	var lf := _lf
 	var w := _w
 	var h := _h
-	if not active or w < 2 or h < 2 or hs.size() < w * h or lf.size() < w * h:
+	if w < 2 or h < 2 or hs.size() < w * h or lf.size() < w * h:
 		return 0.0
 	var fx := clampf((x - _x0) / _cell, 0.0, float(w) - 1.001)
 	var fz := clampf((z - _z0) / _cell, 0.0, float(h) - 1.001)
@@ -507,13 +525,145 @@ static func surface(x: float, z: float) -> float:
 	return g + lerpf(lerpf(lf[k], lf[k + 1], ux), lerpf(lf[k + w], lf[k + w + 1], ux), uz)
 
 
+# Analytical river-bridge arch elevation layer (for flat canal cities like Jiaxing without a DEM):
+# Smooth C1 sin^2(pi*u) bridge deck rises over each surface bridge=true edge and blends cleanly back to y=0.
+static func _load_bridge_arches(edges: Array) -> void:
+	_bridge_arches.clear()
+	_bridge_grid.clear()
+	for e_raw in edges:
+		if not (e_raw is Dictionary):
+			continue
+		var e: Dictionary = e_raw
+		if not bool(e.get("bridge", false)) or bool(e.get("underground", false)):
+			continue
+		var raw_pts: Array = e.get("pts", [])
+		if raw_pts.size() < 2:
+			continue
+		var poly: Array[Vector2] = []
+		for p in raw_pts:
+			var v := Vector2(float(p[0]), float(p[1]))
+			if poly.is_empty() or poly[poly.size() - 1].distance_squared_to(v) > 0.04:
+				poly.append(v)
+		if poly.size() < 2:
+			continue
+		var raw_len := 0.0
+		for i in range(poly.size() - 1):
+			raw_len += poly[i].distance_to(poly[i + 1])
+		if raw_len < 26.0:
+			continue
+
+		var hw := clampf(float(e.get("width", 10.0)) * 0.5, 4.0, 14.0)
+		var arch_pts: Array[Vector2] = []
+		var inner_margin := 0.0
+		var h_peak := 2.6
+		if raw_len < 110.0:
+			# Extend smooth approach ramps along start/end tangents (<= 34m keeps nearby stations 100% flat)
+			var ramp_ext := clampf(25.0 + (raw_len - 28.0) * 0.12, 24.0, 34.0)
+			var t0 := (poly[1] - poly[0]).normalized()
+			var t1 := (poly[poly.size() - 1] - poly[poly.size() - 2]).normalized()
+			arch_pts.append(poly[0] - t0 * ramp_ext)
+			arch_pts.append_array(poly)
+			arch_pts.append(poly[poly.size() - 1] + t1 * ramp_ext)
+			var tot := raw_len + ramp_ext * 2.0
+			h_peak = clampf(minf(2.35 + (raw_len - 28.0) * 0.016, tot * 0.0185), 2.15, 3.25)
+		else:
+			# Long bridge-tagged avenues arch cleanly within their interior so junction ends remain at y = 0.0m
+			arch_pts = poly
+			inner_margin = clampf(raw_len * 0.07, 10.0, 28.0)
+			h_peak = clampf(2.65 + (raw_len - 110.0) * 0.0055, 2.65, 3.55)
+
+		var cum: Array[float] = [0.0]
+		var mn := arch_pts[0]
+		var mx := arch_pts[0]
+		for i in range(1, arch_pts.size()):
+			cum.append(cum[i - 1] + arch_pts[i].distance_to(arch_pts[i - 1]))
+			mn = mn.min(arch_pts[i])
+			mx = mx.max(arch_pts[i])
+		var total_l := maxf(cum[cum.size() - 1], 1.0)
+		var flat_hw := hw + 2.2
+		var outer_hw := flat_hw + 5.5
+		var idx := _bridge_arches.size()
+		_bridge_arches.append({
+			"pts": arch_pts,
+			"cum": cum,
+			"total_l": total_l,
+			"inner_margin": inner_margin,
+			"h_peak": h_peak,
+			"flat_hw": flat_hw,
+			"outer_hw": outer_hw,
+			"outer_hw2": outer_hw * outer_hw,
+			"minx": mn.x - outer_hw,
+			"maxx": mx.x + outer_hw,
+			"minz": mn.y - outer_hw,
+			"maxz": mx.y + outer_hw,
+		})
+		var gx0 := int(floor((mn.x - outer_hw) / _BRIDGE_CELL))
+		var gx1 := int(floor((mx.x + outer_hw) / _BRIDGE_CELL))
+		var gz0 := int(floor((mn.y - outer_hw) / _BRIDGE_CELL))
+		var gz1 := int(floor((mx.y + outer_hw) / _BRIDGE_CELL))
+		for gz in range(gz0, gz1 + 1):
+			for gx in range(gx0, gx1 + 1):
+				var key := Vector2i(gx, gz)
+				if not _bridge_grid.has(key):
+					_bridge_grid[key] = [idx]
+				else:
+					(_bridge_grid[key] as Array).append(idx)
+
+
+static func _bridge_surface(x: float, z: float) -> float:
+	if _bridge_grid.is_empty():
+		return 0.0
+	var key := Vector2i(int(floor(x / _BRIDGE_CELL)), int(floor(z / _BRIDGE_CELL)))
+	if not _bridge_grid.has(key):
+		return 0.0
+	var pt := Vector2(x, z)
+	var best_h := 0.0
+	var bucket: Array = _bridge_grid[key]
+	for idx_raw in bucket:
+		var arch: Dictionary = _bridge_arches[int(idx_raw)]
+		if x < float(arch["minx"]) or x > float(arch["maxx"]) or z < float(arch["minz"]) or z > float(arch["maxz"]):
+			continue
+		var pts: Array = arch["pts"]
+		var cum: Array = arch["cum"]
+		var best_d2 := float(arch["outer_hw2"])
+		var best_s := -1.0
+		for i in range(pts.size() - 1):
+			var a: Vector2 = pts[i]
+			var b: Vector2 = pts[i + 1]
+			var ab := b - a
+			var l2 := ab.length_squared()
+			var t := 0.0 if l2 < 1e-6 else clampf((pt - a).dot(ab) / l2, 0.0, 1.0)
+			var q := a + ab * t
+			var d2 := pt.distance_squared_to(q)
+			if d2 < best_d2:
+				best_d2 = d2
+				best_s = float(cum[i]) + (float(cum[i + 1]) - float(cum[i])) * t
+		if best_s < 0.0:
+			continue
+		var im := float(arch["inner_margin"])
+		var tl := float(arch["total_l"])
+		var span := maxf(1.0, tl - 2.0 * im)
+		var u := (best_s - im) / span
+		if u <= 0.0001 or u >= 0.9999:
+			continue
+		var h_long := float(arch["h_peak"]) * 0.5 * (1.0 - cos(TAU * u))
+		var d := sqrt(best_d2)
+		var flat_hw := float(arch["flat_hw"])
+		var lat := 1.0
+		if d > flat_hw:
+			var tf := clampf((d - flat_hw) / maxf(0.1, float(arch["outer_hw"]) - flat_hw), 0.0, 1.0)
+			lat = 0.5 * (1.0 + cos(PI * tf))
+		best_h = maxf(best_h, h_long * lat)
+	return best_h
+
+
 static func surface_v(p: Vector3) -> float:
 	return surface(p.x, p.z)
 
 
 # Base for something rigid with this footprint: its lowest corner (walls then reach down into the slope)
 static func base_under(poly: PackedVector2Array) -> float:
-	if not active or poly.is_empty():
+	if not active or _hs.is_empty() or poly.is_empty():
 		return 0.0
 	var lo := 1e9
 	var c := Vector2.ZERO
@@ -682,6 +832,16 @@ static func drape_mesh(mesh: Mesh, xf: Transform3D = Transform3D.IDENTITY) -> Me
 # Raise world-space vertices onto surface() (inlined bilinear lookup: this runs over millions of vertices)
 static func _lift_verts(verts: PackedVector3Array) -> PackedVector3Array:
 	var hs := _hs
+	if hs.is_empty():
+		if _bridge_grid.is_empty():
+			return verts
+		for i in range(verts.size()):
+			var v := verts[i]
+			var bh := _bridge_surface(v.x, v.z)
+			if bh > 0.0:
+				v.y += bh
+				verts[i] = v
+		return verts
 	var lf := _lf
 	var w := _w
 	var x0 := _x0
@@ -761,7 +921,7 @@ static func _split_span(a: Vector2, b: Vector2, ha: float, hb: float, min_step: 
 # Ground mesh: the terrain itself, in 512 m chunks (one node each, for culling), full 8 m detail up close and a
 # 32 m version far away
 static func build_ground(parent: Node3D, bounds: Array, mat: Material, step_cells: int = 1) -> void:
-	if not active:
+	if not has_dem():
 		return
 	var old := parent.get_node_or_null("TerrainGround")
 	if old != null:

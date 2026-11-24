@@ -1651,7 +1651,10 @@ func _step_ai_driver(
 	var spec: Dictionary = tr["spec"]
 	var max_decel := maxf(0.6, float(spec.get("decel", 1.35)))
 	var eff_decel := max_decel * (1.75 if ai_style == AIStyle.FURIOUS else 1.0)
-	var drag_est := 0.045 + 0.0012 * spd * spd
+	# Include longitudinal grade gravity in AI's estimated passive deceleration:
+	# uphill (+grade) assists braking; downhill (-grade) reduces passive drag so AI brakes earlier and holds speed!
+	var ai_grade := float(tr.get("grade_pct", 0.0)) * 0.01
+	var drag_est := 0.045 + 0.0012 * spd * spd + 9.81 * ai_grade
 	var cur_notch := int(tr["notch"])
 
 	# Unified forward-constraint evaluation (never falls through from braking to cruise acceleration!)
@@ -2030,16 +2033,18 @@ func _step_ai_driver(
 					else:
 						desired_notch = 9 if dv > 2.2 else 8
 				elif ai_style == AIStyle.SLOW:
-					# Slow mode: gentle P1 / P2 acceleration
-					desired_notch = 7 if dv > 1.8 else 6
+					# Slow mode: gentle P1 / P2 acceleration (extra notch when climbing steep bridge/hill grades)
+					desired_notch = 7 if (dv > 1.8 or ai_grade > 0.022) else 6
+					if ai_grade > 0.042:
+						desired_notch = 8
 				elif cur_notch >= 6 and cur_notch <= 8:
 					# Normal mode: Power-notch hysteresis so P3 -> P2 -> P1 steps down smoothly as speed approaches cruise
 					if cur_notch == 8:
-						desired_notch = 8 if dv > 2.2 else 7
+						desired_notch = 8 if (dv > 2.2 or ai_grade > 0.032) else 7
 					elif cur_notch == 7:
-						if dv > 3.5:
+						if dv > 3.5 or ai_grade > 0.040:
 							desired_notch = 8
-						elif dv < 0.9:
+						elif dv < 0.9 and ai_grade < 0.015:
 							desired_notch = 6
 						else:
 							desired_notch = 7
@@ -2274,18 +2279,31 @@ func _step_tram_physics_and_doors(
 			cmd_acc = -max_decel * dec_mul * b_lvl
 			effort = -b_lvl
 
+	# Longitudinal track gradient physics (bridges, tunnel ramps, and hilly terrain):
+	# grade = (y_front - y_rear) / span along current travel direction (+ uphill, - downhill)
+	var dir := float(tr["dir"])
+	var rlen := float(tr["route_len"])
+	var mv := dir * rev # actual travel direction along s (reverse gear: backwards)
+	var s_prev := float(tr["s"])
+	var grade := _sample_tram_grade(tr, s_prev, mv)
+	tr["grade_pct"] = grade * 100.0
+	var grade_acc := -9.81 * grade # gravity component along track slope (m/s^2)
+
 	var drag := 0.045 + 0.0012 * spd * spd
-	spd = maxf(0.0, minf(spd + (cmd_acc - drag) * dt, max_spd_mps * 1.08))
-	if spd < 0.02 and notch <= NOTCH_NEUTRAL:
+	var net_acc := cmd_acc + grade_acc - (drag if spd > 0.02 else 0.0)
+	# Holding brake / neutral zero-speed latch prevents stopped trams from sliding backward on hills or bridge grades
+	if spd < 0.04 and (notch < NOTCH_NEUTRAL or door_r > 0.03):
+		spd = 0.0
+	elif spd < 0.04 and notch == NOTCH_NEUTRAL and net_acc <= 0.12:
+		spd = 0.0
+	else:
+		spd = maxf(0.0, minf(spd + net_acc * dt, max_spd_mps * 1.12))
+	if spd < 0.02 and notch <= NOTCH_NEUTRAL and grade_acc <= 0.15:
 		spd = 0.0
 
 	tr["accel_mps2"] = lerpf(float(tr.get("accel_mps2", 0.0)), (spd - prev_spd) / maxf(dt, 0.001), minf(1.0, dt * 8.0))
 
-	var dir := float(tr["dir"])
-	var rlen := float(tr["route_len"])
-	var mv := dir * rev # actual travel direction along s (reverse gear: backwards)
 	var ds := spd * mv * dt
-	var s_prev := float(tr["s"])
 	var s_new := s_prev + ds
 	var lid_dist := int(tr["line_id"])
 	line_dist_m[lid_dist] = float(line_dist_m.get(lid_dist, 0.0)) + absf(ds)
@@ -2564,6 +2582,27 @@ func _find_station_at_current_pos(tr: Dictionary, allow_unscheduled: bool = fals
 			return {"station_id": best_sid, "stop_idx": -1, "unscheduled": true}
 
 	return {"station_id": -1, "stop_idx": -1, "unscheduled": false}
+
+
+# Sample longitudinal track slope (dy/ds) over the consist length along travel direction mv (+1/-1).
+# Positive = climbing uphill, negative = descending downhill. Covers river bridges, tunnel ramps & hills!
+static func _sample_tram_grade(tr: Dictionary, s_head: float, mv: float) -> float:
+	var curve: Curve3D = tr.get("curve")
+	if curve == null:
+		return 0.0
+	var rlen := maxf(1.0, float(tr.get("route_len", 1.0)))
+	var is_loop := bool(tr.get("is_loop", false))
+	var span := clampf(_consist_length(tr), 12.0, 34.0)
+	var s_f := fposmod(s_head, rlen) if is_loop else clampf(s_head, 0.0, rlen)
+	var s_r := fposmod(s_head - mv * span, rlen) if is_loop else clampf(s_head - mv * span, 0.0, rlen)
+	var actual_span := absf(s_f - s_r)
+	if is_loop:
+		actual_span = minf(actual_span, rlen - actual_span)
+	if actual_span < 1.5:
+		return 0.0
+	var y_f := curve.sample_baked(s_f, false).y + _sample_rail_height(tr, s_f)
+	var y_r := curve.sample_baked(s_r, false).y + _sample_rail_height(tr, s_r)
+	return clampf((y_f - y_r) / actual_span, -0.10, 0.10)
 
 
 # O(1) rail height lookup from pre-baked array (replaces 576-edge scan!)

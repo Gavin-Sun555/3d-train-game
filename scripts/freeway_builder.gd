@@ -312,23 +312,30 @@ static func build_street_bridges(parent: Node3D, roads: Array) -> void:
 			if d.length_squared() < 0.01:
 				continue
 			var rv := Vector3(-d.z, 0.0, d.x).normalized()
-			var ca := a.y - Terrain.ground(a.x, a.z)
-			var cb := b.y - Terrain.ground(b.x, b.z)
-			if ca < 1.5 and cb < 1.5:
+			var ga := Terrain.ground(a.x, a.z)
+			var gb := Terrain.ground(b.x, b.z)
+			var ca := a.y - ga
+			var cb := b.y - gb
+			if ca < 0.35 and cb < 0.35:
 				acc += d.length()
 				continue
 			any = true
-			var sl := Vector3(0.0, -1.1, 0.0)
+			var sl := Vector3(0.0, -1.05, 0.0)
+			var rail_h := 1.05 if maxf(ca, cb) >= 1.25 else clampf(maxf(ca, cb) * 0.72, 0.32, 1.05)
 			for side: float in [-1.0, 1.0]:
 				var ea := a + rv * (hw * side)
 				var eb := b + rv * (hw * side)
-				_quad_c(conc, ea + Vector3(0.0, 1.05, 0.0), eb + Vector3(0.0, 1.05, 0.0), eb + sl, ea + sl, CONCRETE_DARK) # railing + fascia
-			_quad_c(conc, b - rv * hw + sl, b + rv * hw + sl, a + rv * hw + sl, a - rv * hw + sl, CONCRETE_DARK.darkened(0.15))
+				# Solid concrete abutment wall along rising approaches (<1.75m clearance), open fascia girder over water/river span
+				var bot_a := Vector3(ea.x, minf(ea.y - 1.05, ga - 0.18), ea.z) if ca < 1.75 else (ea + sl)
+				var bot_b := Vector3(eb.x, minf(eb.y - 1.05, gb - 0.18), eb.z) if cb < 1.75 else (eb + sl)
+				_quad_c(conc, ea + Vector3(0.0, rail_h, 0.0), eb + Vector3(0.0, rail_h, 0.0), bot_b, bot_a, CONCRETE_DARK) # railing + fascia / approach abutment
+			if minf(ca, cb) >= 1.15:
+				_quad_c(conc, b - rv * hw + sl, b + rv * hw + sl, a + rv * hw + sl, a - rv * hw + sl, CONCRETE_DARK.darkened(0.15))
 			acc += d.length()
-			if fmod(acc, 24.0) < d.length() and minf(ca, cb) > 3.0:
-				var g := Terrain.ground(a.x, a.z) - 0.4
-				var top := a.y - 1.1
-				_box(conc, Vector3(a.x, (g + top) * 0.5, a.z), rv, Vector3(hw * 1.4, top - g, 1.2), CONCRETE)
+			if fmod(acc, 22.0) < d.length() and minf(ca, cb) >= 1.8:
+				var g := ga - 0.45
+				var top := a.y - 1.0
+				_box(conc, Vector3(a.x, (g + top) * 0.5, a.z), rv, Vector3(hw * 1.45, maxf(0.6, top - g), 1.25), CONCRETE)
 	if any:
 		var cm := StandardMaterial3D.new()
 		cm.vertex_color_use_as_albedo = true

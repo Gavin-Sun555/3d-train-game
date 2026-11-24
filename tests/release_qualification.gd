@@ -280,6 +280,10 @@ func _run() -> void:
 	var jx_wanda: Node = jx_lm.get_node_or_null("JiaxingNanhuWandaPlaza") if jx_lm != null else null
 	var jx_sams: Node = jx_lm.get_node_or_null("JiaxingSamsClub") if jx_lm != null else null
 	var jx_xjd: Node = jx_lm.get_node_or_null("XiangjiadangWetlandPark") if jx_lm != null else null
+	var jx_pingshan: Node = jx_lm.get_node_or_null("PingshanPark") if jx_lm != null else null
+	var jx_jiangnan: Node = jx_lm.get_node_or_null("JiangnanDepartmentStore") if jx_lm != null else null
+	var jx_diamond: Node = jx_lm.get_node_or_null("DiamondPlazaTower") if jx_lm != null else null
+	var jx_cifi: Node = jx_lm.get_node_or_null("JiaxingCIFIPlaza") if jx_lm != null else null
 	var jx_ap: Node = jx_lm.get_node_or_null("JiaxingNanhuAirport") if jx_lm != null else null
 	var jx_b1_root: Node = m._underground_landmarks_root
 	var jx_b1_hall: Node = jx_b1_root.get_node_or_null("JiaxingStationB1Hall") if jx_b1_root != null else null
@@ -288,8 +292,8 @@ func _run() -> void:
 		"All iconic Jiaxing civic/scenic landmarks, B1 Station Hall, Nanhu Gate & Airport built"
 	)
 	_check(
-		jx_church != null and jx_h1 != null and jx_h2 != null and jx_h3 != null and jx_yaohan != null and jx_ybr != null and jx_hilton != null and jx_wanda != null and jx_sams != null and jx_xjd != null,
-		"All urban & eastern expansion landmarks built (Church, 3 Hospitals, Yaohan + Ring Bridge, Hilton, Wanda, Sam's Club, Xiangjiadang Wetland Park)"
+		jx_church != null and jx_h1 != null and jx_h2 != null and jx_h3 != null and jx_yaohan != null and jx_ybr != null and jx_hilton != null and jx_wanda != null and jx_sams != null and jx_xjd != null and jx_pingshan != null and jx_jiangnan != null and jx_diamond != null and jx_cifi != null,
+		"All urban, old-town & eastern landmarks built (Pingshan, Zicheng, Jiangnan, Diamond, CIFI, Church, Hospitals, Yaohan, Hilton, Wanda, Sam's, Xiangjiadang)"
 	)
 	# Verify 360-degree closed Inner Ring Expressway across all 36 angular sectors + Yuehe pedestrian bridges
 	var ir_sec := {}
@@ -363,6 +367,7 @@ func _run() -> void:
 	var jx_ev := {}
 	var last_s_jx: Array[float] = []
 	var max_stuck_jx := 0.0
+	var max_abs_grade_jx := 0.0
 	var cur_stuck_jx: Array[float] = []
 	for tr_i: Dictionary in jx_tsim.trams:
 		last_s_jx.append(float(tr_i.get("s", 0.0)))
@@ -375,6 +380,7 @@ func _run() -> void:
 		if not jx_ev.is_empty():
 			break
 		for ti in range(jx_tsim.trams.size()):
+			max_abs_grade_jx = maxf(max_abs_grade_jx, absf(float(jx_tsim.trams[ti].get("grade_pct", 0.0))))
 			var cs := float(jx_tsim.trams[ti].get("s", 0.0))
 			if absf(cs - last_s_jx[ti]) < 0.05:
 				cur_stuck_jx[ti] += 0.1
@@ -388,9 +394,16 @@ func _run() -> void:
 		var dd := float(tr.get("st_dist_m", 0.0))
 		jx_min_d = minf(jx_min_d, dd)
 		jx_max_d = maxf(jx_max_d, dd)
+	var pinghu_h := Terrain.surface(985.5, -1005.4)
+	var pinghu_g := Terrain.ground(985.5, -1005.4)
+	var binhe_sta_h := Terrain.surface(983.0, -930.6)
 	_check(
 		jx_ev.is_empty() and jx_min_d > 400.0 and jx_max_d > 1200.0 and max_stuck_jx < 55.0,
 		"Jiaxing Tram T1 runs 180s with traffic cleanly & zero deadlocks (min dist %.0fm, max %.0fm, max stop %.1fs)" % [jx_min_d, jx_max_d, max_stuck_jx]
+	)
+	_check(
+		Terrain.active and not Terrain.has_dem() and pinghu_h >= 2.0 and pinghu_g == 0.0 and binhe_sta_h < 0.05 and max_abs_grade_jx >= 1.5,
+		"Jiaxing river-bridge elevation arches & grade physics active (平湖塘桥=%.2fm over flat water=%.1fm, 滨河路站=%.2fm, max tram grade=%.1f%%)" % [pinghu_h, pinghu_g, binhe_sta_h, max_abs_grade_jx]
 	)
 
 	# ------------------------------------------------------------------
@@ -654,10 +667,26 @@ func _run() -> void:
 	var yz_ok := yz_pos.z < 1600.0 and yz_pos.z > 1300.0
 	var ps_ok := ps_pos.x < -220.0 and ps_pos.x > -420.0
 	var hx_ok := hx_pos.x < -695.0 and hx_pos.x > -860.0
+	var qf_pos := Vector3.ZERO
+	for sid_q in t1_sids:
+		var sd_q: Dictionary = jx_graph.stations.get(int(sid_q), {})
+		if str(sd_q.get("name", "")) == "有轨电车庆丰路基地站":
+			qf_pos = sd_q["pos"]
+	var qf_ok := qf_pos.z >= 4150.0 and qf_pos.z <= 4380.0
 	var pcut_cnt := (jx_graph.get_meta("portal_cutouts", []) as Array).size()
+	var bold_sign_ok := false
+	var ws_root: Node = m._track_root.get_node_or_null("WaysideSpeedSigns") if m._track_root != null else null
+	if ws_root != null:
+		for s_n in ws_root.get_children():
+			for ch_s in s_n.get_children():
+				if ch_s is Label3D and (ch_s as Label3D).outline_size >= 14:
+					bold_sign_ok = true
+					break
+			if bold_sign_ok:
+				break
 	_check(
-		str(t1_ln.get("model_key", "")) == "crrc-jiaxing-nanhu" and t1_sids.size() == 16 and t1_tr_secs == 5 and jx_sta_b1_y < -8.0 and jh_on_fanggong and rm_on_hcd and sx_ok and fy_ok and yz_ok and ps_ok and hx_ok and pcut_cnt >= 2 and pcut_cnt <= 16 and en_tts_ok and center_blvd_pct >= 90.0,
-		"Jiaxing T1 real alignment: 16 Amap stations (100%% EN TTS), %.0f%% center-median boulevards, 双溪路(%.0f), 纺工路由拳路(%s z=%.0f), 一中北(z=%.0f), 瓶山西(x=%.0f), 禾兴西(x=%.0f)" % [center_blvd_pct, sx_pos.x, fy_road, fy_pos.z, yz_pos.z, ps_pos.x, hx_pos.x]
+		str(t1_ln.get("model_key", "")) == "crrc-jiaxing-nanhu" and t1_sids.size() == 16 and t1_tr_secs == 5 and jx_sta_b1_y < -8.0 and jh_on_fanggong and rm_on_hcd and sx_ok and fy_ok and yz_ok and ps_ok and hx_ok and qf_ok and bold_sign_ok and pcut_cnt >= 2 and pcut_cnt <= 16 and en_tts_ok and center_blvd_pct >= 90.0,
+		"Jiaxing T1 real alignment: 16 Amap stations (100%% EN TTS), 庆丰路基地站(z=%.0f), %.0f%% center-median boulevards, 双溪路(%.0f), 纺工路由拳路(%s z=%.0f), 一中北(z=%.0f), 瓶山西(x=%.0f), 禾兴西(x=%.0f), bold speed signs" % [qf_pos.z, center_blvd_pct, sx_pos.x, fy_road, fy_pos.z, yz_pos.z, ps_pos.x, hx_pos.x]
 	)
 	_check(
 		t1_dock_checks > 0 and t1_misaligned == 0,

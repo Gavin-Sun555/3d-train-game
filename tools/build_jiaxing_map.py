@@ -106,9 +106,13 @@ NANHU_GATE_POS = (786.0, 486.0)           # 南湖景区主大门广场 (cleanly
 NANHU_TIANDI_POS = (798.0, -347.0)        # 南湖天地 (Nanhu NE lakeside commercial heritage)
 MEMORIAL_POS = proj(30.74986, 120.75693)  # 南湖革命纪念馆
 GOV_POS = (-95.0, 610.0)                  # 嘉兴市人民政府
-JIAXING_NO1_POS = (1756.0, 1430.0)        # 嘉兴市第一中学
+JIAXING_NO1_POS = (1670.0, 1385.0)        # 嘉兴市第一中学 (full authentic campus east of 纺工路, north of 中环南路)
 YUEHE_POS = (-620.0, -1930.0)             # 月河历史街区南入口牌坊 (verified dry land!)
 ZICHENG_POS = (-306.0, -816.0)            # 子城遗址公园 · 谯楼
+PINGSHAN_PARK_POS = (-325.0, -1210.0)     # 瓶山公园 (real OSM park hillock north of 中山东路建国南路)
+JIANGNAN_MALL_POS = (-625.0, -1105.0)     # 江南大厦 (中山东路/禾兴南路东北角老牌百货地标)
+DIAMOND_PLAZA_POS = (-740.0, -900.0)      # 戴梦得大厦 · 戴梦得购物中心 (禾兴南路520号商圈地标)
+CIFI_PLAZA_POS = (-955.0, -885.0)         # 旭辉广场 (中山东路666号核心商业综合体)
 CATHOLIC_CHURCH_POS = (-522.0, -894.0)    # 嘉兴天主教堂 (圣母显灵堂)
 FIRST_HOSPITAL_POS = (-1362.0, 1765.0)    # 嘉兴市第一医院
 SECOND_HOSPITAL_POS = (-198.0, -1781.0)   # 嘉兴市第二医院
@@ -642,7 +646,7 @@ def build_street_graph(nodes, ways, water_grid, park_grid=None, rail_grid=None):
 
         lm_keepout = [
             (HILTON_POS, 110.0), (WANDA_NANHU_POS, 155.0), (SAMS_CLUB_POS, 130.0),
-            (JIAXING_NO1_POS, 165.0), (CENTRAL_PARK_POS, 150.0), (JIAXING_STA_POS, 190.0),
+            (JIAXING_NO1_POS, 245.0), (CENTRAL_PARK_POS, 150.0), (JIAXING_STA_POS, 190.0),
         ]
         # Candidate grid across sparse eastern/NE MAIN_RECT & Sam's/Shuangxi urban blocks
         grid_step = 240.0
@@ -1538,9 +1542,14 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
         (NANHU_TIANDI_POS, 115.0, "nanhu_tiandi"),
         (MEMORIAL_POS, 105.0, "nanhu_memorial"),
         (GOV_POS, 125.0, "jiaxing_gov"),
-        (JIAXING_NO1_POS, 155.0, "jiaxing_no1_school"),
+        (JIAXING_NO1_POS, 215.0, "jiaxing_no1_school"),
         (YUEHE_POS, 18.0, "yuehe_quarter"),
         (ZICHENG_POS, 92.0, "zicheng_park"),
+        ((-315.0, -935.0), 72.0, "zicheng_park_north"),
+        (PINGSHAN_PARK_POS, 74.0, "pingshan_park"),
+        (JIANGNAN_MALL_POS, 48.0, "jiangnan_mall"),
+        (DIAMOND_PLAZA_POS, 54.0, "diamond_plaza"),
+        (CIFI_PLAZA_POS, 64.0, "cifi_plaza"),
         (CATHOLIC_CHURCH_POS, 58.0, "catholic_church"),
         (FIRST_HOSPITAL_POS, 128.0, "first_hospital"),
         (SECOND_HOSPITAL_POS, 95.0, "second_hospital"),
@@ -1574,6 +1583,12 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
         lz_s = dx_s * sa_s + dy_s * ca_s
         if -160.0 <= lx_s <= 260.0 and -265.0 <= lz_s <= 80.0:
             return False
+        # Keep the entire Jiaxing No.1 High School (嘉兴一中) campus & 纺工路 West Gate frontage 100% free of tall towers!
+        if 1446.0 <= cen[0] <= 1906.0 and 1170.0 <= cen[1] <= 1596.0:
+            return False
+        for p in pts:
+            if 1450.0 <= p[0] <= 1902.0 and 1174.0 <= p[1] <= 1592.0:
+                return False
         # Keep Jiaxing T1 open-cut U-trough tunnel ramps 100% free of surface buildings!
         for (rax, ray, rbx, rby) in (
             (997.81, -1170.11, 885.0, -1178.5),
@@ -2393,7 +2408,7 @@ def build_t1_starter_network(nodes_list, edges_list):
         ("__south_plaza_m__", 4221.50, 6742.88, ""),
         ("__south_plaza_e__", 4392.0, 6644.0, ""),
         ("__qingfeng_s__", 4317.21, 6448.94, "庆丰路"),
-        ("有轨电车庆丰路基地站", 4252.0, 4297.0, "庆丰路"),
+        ("有轨电车庆丰路基地站", 4246.0, 4275.0, "庆丰路"),
         ("庆丰路长水路站", 4242.0, 3527.0, "庆丰路"),
         ("__qf_yq_corner__", 4216.26, 2577.23, "由拳路"),
         ("由拳路双溪路站", 3255.4, 2531.6, "由拳路"),
@@ -2581,6 +2596,7 @@ def build_t1_starter_network(nodes_list, edges_list):
     # - 中山东路建国南路(瓶山): on 中山东路 immediately WEST of 建国南路 (x < -217.7), NOT east!
     # - 中山东路禾兴南路: on 中山东路 immediately WEST of 禾兴南路 (x < -689.3), NOT east!
     exact_station_pos = {
+        "有轨电车庆丰路基地站": (4246.0, 4275.0),
         "由拳路双溪路站": (3193.0, 2531.3),
         "纺工路由拳路站": (1413.0, 2448.0),
         "嘉兴一中站": (1432.0, 1532.0),
@@ -3147,8 +3163,6 @@ def main():
     # Iconic Jiaxing commercial district & landmark mall rooftop / plaza signboards at real OSM coordinates
     commercial_signs = [
         {"name": "五芳斋 · 嘉兴总店", "sub": "百年老字号", "pos": rnd((-250.1, -1168.3)), "angle": 0.0, "color": [0.76, 0.12, 0.12]},
-        {"name": "戴梦得购物中心", "sub": "DAIMOND PLAZA", "pos": rnd((-722.1, -879.4)), "angle": 0.0, "color": [0.16, 0.20, 0.34]},
-        {"name": "旭 辉 广 场", "sub": "CIFI MALL", "pos": rnd((-947.0, -896.5)), "angle": 0.0, "color": [0.80, 0.26, 0.14]},
         {"name": "经开万达广场", "sub": "WANDA PLAZA", "pos": rnd((-3645.8, -16.9)), "angle": 1.57, "color": [0.08, 0.32, 0.64]},
         {"name": "华府八佰伴", "sub": "YAOHAN PLAZA", "pos": rnd((-2018.0, 2288.0)), "angle": 0.0, "color": [0.14, 0.22, 0.38]},
     ]
@@ -3277,6 +3291,10 @@ def main():
         "scenic_pavilions": scenic_pavilions,
         "gated_compounds": gated_compounds,
         "zicheng_park": {"pos": rnd(ZICHENG_POS), "angle": 0.05},
+        "pingshan_park": {"pos": rnd(PINGSHAN_PARK_POS), "angle": 0.14},
+        "jiangnan_mall": {"pos": rnd(JIANGNAN_MALL_POS), "angle": 0.16},
+        "diamond_plaza": {"pos": rnd(DIAMOND_PLAZA_POS), "angle": 0.14},
+        "cifi_plaza": {"pos": rnd(CIFI_PLAZA_POS), "angle": 0.17},
         "catholic_church": {"pos": rnd(CATHOLIC_CHURCH_POS), "angle": 0.06},
         "first_hospital": {"pos": rnd(FIRST_HOSPITAL_POS), "angle": 0.03},
         "second_hospital": {"pos": rnd(SECOND_HOSPITAL_POS), "angle": 0.08},

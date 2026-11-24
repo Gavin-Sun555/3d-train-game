@@ -338,7 +338,9 @@ static func _jiaxing_gov(parent: Node3D, center: Vector3, angle: float, lights: 
 
 
 # =============================================================================================
-# 5. 嘉兴市第一中学 (Jiaxing No.1 High School — Clocktower Campus & 400m Athletics Stadium)
+# 5. 嘉兴市第一中学 (Jiaxing No.1 High School — Authentic Full Campus Layout matching Satellite View:
+#    West Gate on 纺工路, North Gate, South Gate on 中环南路, NW/SW Teaching Courtyards & Library,
+#    NE 3 Parallel Dormitory Slabs, SE 400m Red Athletics Stadium, White-Roof Indoor Gym & 6 Outdoor Courts)
 # =============================================================================================
 static func _jiaxing_no1_school(parent: Node3D, center: Vector3, angle: float, lights: Array) -> void:
 	var sc := Node3D.new()
@@ -347,52 +349,173 @@ static func _jiaxing_no1_school(parent: Node3D, center: Vector3, angle: float, l
 	sc.rotation.y = angle
 	parent.add_child(sc)
 
-	var brick := _mat(Color(0.64, 0.29, 0.22), 0.78)
-	var cream := _mat(Color(0.91, 0.88, 0.82), 0.72)
+	var brick := _mat(Color(0.60, 0.30, 0.23), 0.78)
+	var cream := _mat(Color(0.90, 0.87, 0.82), 0.74)
+	var warm_stone := _mat(Color(0.79, 0.77, 0.73), 0.80)
 	var roof_dark := _mat(Color(0.24, 0.26, 0.30), 0.58, 0.10)
-	var glass := _glass(Color(0.30, 0.46, 0.58), 0.64)
-	var track_red := _mat(Color(0.70, 0.24, 0.19), 0.86)
-	var pitch_green := _mat(Color(0.18, 0.48, 0.18), 0.88)
-	var line_white := _mat(Color(0.94, 0.95, 0.94), 0.70)
+	var roof_white := _mat(Color(0.92, 0.94, 0.96), 0.42, 0.12)
+	var glass := _glass(Color(0.28, 0.46, 0.60), 0.64)
+	var lawn := _mat(Color(0.24, 0.46, 0.22), 0.92)
+	var tree_dark := _mat(Color(0.18, 0.38, 0.18), 0.88)
+	var tree_mid := _mat(Color(0.24, 0.46, 0.21), 0.86)
+	var trunk := _mat(Color(0.32, 0.24, 0.17), 0.88)
+	var pond_mat := _mat(Color(0.16, 0.38, 0.44), 0.22, 0.15)
+	var track_red := _mat(Color(0.72, 0.23, 0.18), 0.86)
+	var pitch_green := _mat(Color(0.20, 0.50, 0.20), 0.88)
+	var court_red := _mat(Color(0.68, 0.30, 0.24), 0.86)
+	var court_green := _mat(Color(0.22, 0.48, 0.32), 0.86)
+	var line_white := _mat(Color(0.95, 0.96, 0.95), 0.70)
+	var fence_iron := _mat(Color(0.22, 0.24, 0.27), 0.48, 0.55)
 	var clock_face := _emissive(Color(1.0, 0.96, 0.84), 1.3)
 
-	# --- A. Century-Old Main Teaching Building & Iconic Central Clocktower ---
-	_box(sc, Vector3(112.0, 16.5, 22.0), Vector3(-36.0, 8.25, -42.0), brick)
-	_box(sc, Vector3(24.0, 11.0, 22.4), Vector3(-36.0, 7.2, -42.0), glass)
-	_box(sc, Vector3(114.0, 1.4, 23.0), Vector3(-36.0, 16.8, -42.0), cream)
-	_box(sc, Vector3(110.0, 1.6, 20.0), Vector3(-36.0, 18.2, -42.0), roof_dark)
-	# Flanking teaching wings
-	for wx: float in [-82.0, 10.0]:
-		_box(sc, Vector3(20.0, 14.5, 58.0), Vector3(wx, 7.25, -8.0), brick)
-		_box(sc, Vector3(21.2, 1.1, 59.0), Vector3(wx, 14.8, -8.0), cream)
-	# Central Iconic Clocktower (百年一中钟楼)
-	_box(sc, Vector3(16.0, 29.0, 16.0), Vector3(-36.0, 14.5, -42.0), brick)
-	_box(sc, Vector3(17.2, 1.2, 17.2), Vector3(-36.0, 25.5, -42.0), cream)
-	_cyl(sc, 2.2, 2.2, 0.35, Vector3(-36.0, 22.8, -50.1), clock_face, 16, Vector3(PI * 0.5, 0.0, 0.0))
-	_cyl(sc, 2.2, 2.2, 0.35, Vector3(-36.0, 22.8, -33.9), clock_face, 16, Vector3(PI * 0.5, 0.0, 0.0))
-	_cyl(sc, 0.6, 10.5, 6.2, Vector3(-36.0, 32.1, -42.0), roof_dark, 4, Vector3(0.0, PI * 0.25, 0.0))
-	# Campus Main Gate with plaque
-	_box(sc, Vector3(26.0, 0.9, 4.0), Vector3(-36.0, 7.4, 42.0), cream)
-	for gx: float in [-11.0, 11.0]:
-		_box(sc, Vector3(2.8, 7.4, 3.6), Vector3(-36.0 + gx, 3.7, 42.0), brick)
-	_sign(sc, "浙江省嘉兴市第一中学", Vector3(-36.0, 8.6, 44.2), 0.0, 76, 0.025, Color(0.92, 0.18, 0.14))
+	# --- A. Full Campus Ground Lawn, Ceremonial Plazas, Walkways & Perimeter School Fence ---
+	# Campus bounds: local x in [-210 .. +210] (420m E-W), z in [-196 .. +196] (392m N-S)
+	_box(sc, Vector3(416.0, 0.04, 388.0), Vector3(0.0, 0.02, 0.0), lawn, 0.0, 0.0, 0.0, false)
+	# West-Gate ceremonial entry spine + main north-south academic plaza (matching white paved T-plaza in satellite view)
+	_box(sc, Vector3(112.0, 0.06, 26.0), Vector3(-156.0, 0.04, -34.0), warm_stone, 0.0, 0.0, 0.0, false)
+	_box(sc, Vector3(26.0, 0.06, 140.0), Vector3(-124.0, 0.04, -84.0), warm_stone, 0.0, 0.0, 0.0, false)
+	# Internal paved campus ring roads & east-west avenue
+	_box(sc, Vector3(370.0, 0.055, 10.0), Vector3(0.0, 0.035, -34.0), warm_stone, 0.0, 0.0, 0.0, false)
+	_box(sc, Vector3(10.0, 0.055, 360.0), Vector3(-28.0, 0.035, 0.0), warm_stone, 0.0, 0.0, 0.0, false)
+	_box(sc, Vector3(10.0, 0.055, 290.0), Vector3(60.0, 0.035, -20.0), warm_stone, 0.0, 0.0, 0.0, false)
 
-	# --- B. Standard 400m Athletics Track & Football Stadium (田径场) on East Side ---
-	var sx := 74.0
-	var sz := 6.0
-	# Crimson synthetic running track oval (flushed slightly above ground y=0.05)
-	_box(sc, Vector3(68.0, 0.08, 112.0), Vector3(sx, 0.05, sz), track_red, 0.0, 0.0, 0.0, false)
-	_cyl(sc, 34.0, 34.0, 0.08, Vector3(sx, 0.05, sz - 56.0), track_red, 20)
-	_cyl(sc, 34.0, 34.0, 0.08, Vector3(sx, 0.05, sz + 56.0), track_red, 20)
-	# Lush green football pitch inside the track + white touchlines & center circle
-	_box(sc, Vector3(52.0, 0.09, 98.0), Vector3(sx, 0.06, sz), pitch_green, 0.0, 0.0, 0.0, false)
-	_box(sc, Vector3(50.0, 0.10, 0.35), Vector3(sx, 0.07, sz), line_white, 0.0, 0.0, 0.0, false)
-	_box(sc, Vector3(0.35, 0.10, 96.0), Vector3(sx - 25.0, 0.07, sz), line_white, 0.0, 0.0, 0.0, false)
-	_box(sc, Vector3(0.35, 0.10, 96.0), Vector3(sx + 25.0, 0.07, sz), line_white, 0.0, 0.0, 0.0, false)
-	# Covered west grandstand bleachers facing the stadium
-	_box(sc, Vector3(11.0, 6.2, 68.0), Vector3(sx - 44.0, 3.1, sz), cream)
-	_box(sc, Vector3(16.0, 0.65, 72.0), Vector3(sx - 41.5, 11.2, sz), _mat(Color(0.88, 0.90, 0.93), 0.36, 0.32), 0.0, -0.14)
-	_add_light(sc, Vector3(-36.0, 14.0, 26.0), Color(1.0, 0.90, 0.72), 52.0, lights)
+	# Perimeter masonry plinth + wrought-iron school fence with openings for West, North & South Gates
+	for z_w: float in [-194.0, 194.0]:
+		_box(sc, Vector3(160.0, 1.8, 0.55), Vector3(-128.0, 0.9, z_w), cream, 0.0, 0.0, 0.0, false)
+		_box(sc, Vector3(220.0, 1.8, 0.55), Vector3(96.0, 0.9, z_w), cream, 0.0, 0.0, 0.0, false)
+	# West perimeter wall facing 纺工路 (leaving wide 36m grand entrance opening at z = -34!)
+	_box(sc, Vector3(0.65, 2.0, 140.0), Vector3(-208.0, 1.0, -124.0), cream, 0.0, 0.0, 0.0, false)
+	_box(sc, Vector3(0.65, 2.0, 206.0), Vector3(-208.0, 1.0, 91.0), cream, 0.0, 0.0, 0.0, false)
+	_box(sc, Vector3(0.55, 1.8, 388.0), Vector3(208.0, 0.9, 0.0), cream, 0.0, 0.0, 0.0, false)
+
+	# --- B. Authentic Main West Gate (嘉兴一中 · 西门 facing 纺工路 & Tram T1 嘉兴一中站!), North Gate & South Gate ---
+	# 1) Grand West Gate (西门) at x = -208, z = -34 facing WEST (-X) directly toward 纺工路
+	_box(sc, Vector3(4.8, 1.1, 34.0), Vector3(-207.0, 8.2, -34.0), cream)
+	_box(sc, Vector3(6.2, 0.75, 36.5), Vector3(-207.0, 9.0, -34.0), roof_dark)
+	for gz_p: float in [-49.0, -40.5, -27.5, -19.0]:
+		_box(sc, Vector3(3.2, 8.2, 2.4), Vector3(-207.0, 4.1, gz_p), brick)
+		_box(sc, Vector3(3.6, 0.7, 2.8), Vector3(-207.0, 7.6, gz_p), cream)
+	# Flanking curved stone sign wall & guardrooms at West Gate
+	_box(sc, Vector3(4.6, 3.8, 9.5), Vector3(-204.0, 1.9, -54.5), cream)
+	_box(sc, Vector3(5.2, 0.5, 10.2), Vector3(-204.0, 4.0, -54.5), roof_dark)
+	_box(sc, Vector3(4.6, 3.8, 9.5), Vector3(-204.0, 1.9, -13.5), cream)
+	_box(sc, Vector3(5.2, 0.5, 10.2), Vector3(-204.0, 4.0, -13.5), roof_dark)
+	_box(sc, Vector3(0.4, 2.1, 13.0), Vector3(-207.5, 1.1, -34.0), fence_iron, 0.0, 0.0, 0.0, false)
+	_sign(sc, "浙江省嘉兴市第一中学", Vector3(-209.6, 8.3, -34.0), -PI * 0.5, 86, 0.032, Color(0.95, 0.80, 0.22))
+	_sign(sc, "JIAXING NO.1 HIGH SCHOOL", Vector3(-209.6, 6.9, -34.0), -PI * 0.5, 42, 0.024, Color(0.95, 0.96, 0.98))
+	# 2) North Gate (北门) at x = -30, z = -194 facing NORTH (-Z)
+	_box(sc, Vector3(24.0, 0.85, 3.8), Vector3(-30.0, 6.8, -194.0), cream)
+	_box(sc, Vector3(26.0, 0.6, 4.6), Vector3(-30.0, 7.4, -194.0), roof_dark)
+	for gx_n: float in [-40.0, -20.0]:
+		_box(sc, Vector3(2.4, 6.8, 3.2), Vector3(gx_n, 3.4, -194.0), brick)
+	_sign(sc, "嘉兴一中 · 北门", Vector3(-30.0, 7.0, -196.2), PI, 64, 0.025, Color(0.95, 0.82, 0.28))
+	# 3) South Gate (南门) at x = -28, z = +194 facing SOUTH (+Z) onto 中环南路
+	_box(sc, Vector3(24.0, 0.85, 3.8), Vector3(-28.0, 6.8, 194.0), cream)
+	_box(sc, Vector3(26.0, 0.6, 4.6), Vector3(-28.0, 7.4, 194.0), roof_dark)
+	for gx_s: float in [-38.0, -18.0]:
+		_box(sc, Vector3(2.4, 6.8, 3.2), Vector3(gx_s, 3.4, 194.0), brick)
+	_sign(sc, "嘉兴一中 · 南门", Vector3(-28.0, 7.0, 196.2), 0.0, 64, 0.025, Color(0.95, 0.82, 0.28))
+
+	# --- C. NW & North-Central Academic Teaching Courtyards & Library/Clocktower (matching top-left of satellite) ---
+	# North-West long main teaching block (x = -132, z = -152)
+	_box(sc, Vector3(114.0, 16.0, 20.0), Vector3(-132.0, 8.0, -152.0), cream)
+	_box(sc, Vector3(114.6, 3.6, 20.4), Vector3(-132.0, 1.8, -152.0), brick)
+	_box(sc, Vector3(116.5, 2.2, 22.5), Vector3(-132.0, 17.1, -152.0), roof_dark)
+	# Flanking west & central academic courtyard wings around the West Gate plaza
+	_box(sc, Vector3(58.0, 14.5, 18.0), Vector3(-164.0, 7.25, -88.0), cream)
+	_box(sc, Vector3(60.0, 2.0, 20.0), Vector3(-164.0, 15.5, -88.0), roof_dark)
+	_box(sc, Vector3(56.0, 14.5, 18.0), Vector3(-162.0, 7.25, -2.0), cream)
+	_box(sc, Vector3(58.0, 2.0, 20.0), Vector3(-162.0, 15.5, -2.0), roof_dark)
+	# Central Auditorium & Library Complex (x = -82, z = -108) + Century Clocktower (百年一中钟楼)
+	_box(sc, Vector3(44.0, 15.0, 34.0), Vector3(-82.0, 7.5, -112.0), brick)
+	_box(sc, Vector3(46.5, 2.4, 36.5), Vector3(-82.0, 16.2, -112.0), roof_dark)
+	_box(sc, Vector3(48.0, 14.0, 42.0), Vector3(-8.0, 7.0, -118.0), cream)
+	_box(sc, Vector3(51.0, 2.6, 45.0), Vector3(-8.0, 15.2, -118.0), roof_dark)
+	_box(sc, Vector3(14.0, 28.0, 14.0), Vector3(-8.0, 14.0, -118.0), brick)
+	_box(sc, Vector3(15.2, 1.1, 15.2), Vector3(-8.0, 25.0, -118.0), cream)
+	_cyl(sc, 2.1, 2.1, 0.35, Vector3(-15.1, 22.4, -118.0), clock_face, 16, Vector3(0.0, 0.0, PI * 0.5))
+	_cyl(sc, 2.1, 2.1, 0.35, Vector3(-8.0, 22.4, -110.9), clock_face, 16, Vector3(PI * 0.5, 0.0, 0.0))
+	_cyl(sc, 0.5, 9.6, 5.8, Vector3(-8.0, 30.8, -118.0), roof_dark, 4, Vector3(0.0, PI * 0.25, 0.0))
+
+	# South-West Teaching & Science Courtyard Complex (x = -126, z = +34..+86, matching satellite middle-left!)
+	_box(sc, Vector3(110.0, 15.0, 18.0), Vector3(-130.0, 7.5, 22.0), cream)
+	_box(sc, Vector3(112.0, 2.0, 20.0), Vector3(-130.0, 16.0, 22.0), roof_dark)
+	_box(sc, Vector3(92.0, 14.5, 18.0), Vector3(-124.0, 7.25, 68.0), cream)
+	_box(sc, Vector3(94.0, 2.0, 20.0), Vector3(-124.0, 15.5, 68.0), roof_dark)
+	# Courtyard connector wing & garden rotunda
+	_box(sc, Vector3(24.0, 12.5, 36.0), Vector3(-62.0, 6.25, 48.0), brick)
+	_box(sc, Vector3(26.5, 2.0, 38.5), Vector3(-62.0, 13.5, 48.0), roof_dark)
+	_box(sc, Vector3(44.0, 0.07, 22.0), Vector3(-132.0, 0.04, 45.0), warm_stone, 0.0, 0.0, 0.0, false)
+
+	# --- D. NE Quadrant: 3 Parallel Student Dormitory & Canteen Blocks (matching top-right of satellite!) ---
+	for dz_i in range(3):
+		var dz_pos := -162.0 + float(dz_i) * 44.0
+		var d_len := 134.0 if dz_i < 2 else 112.0
+		var dx_pos := 124.0 if dz_i < 2 else 134.0
+		_box(sc, Vector3(d_len, 16.5, 16.5), Vector3(dx_pos, 8.25, dz_pos), cream)
+		_box(sc, Vector3(d_len + 0.5, 3.2, 16.9), Vector3(dx_pos, 1.6, dz_pos), brick)
+		_box(sc, Vector3(d_len + 2.5, 2.0, 18.8), Vector3(dx_pos, 17.5, dz_pos), roof_dark)
+		_box(sc, Vector3(18.0, 13.5, 17.2), Vector3(dx_pos, 8.5, dz_pos), glass)
+	# Dining Hall & Student Activity Center south of the dorms
+	_box(sc, Vector3(68.0, 11.5, 24.0), Vector3(148.0, 5.75, -36.0), brick)
+	_box(sc, Vector3(70.5, 1.8, 26.5), Vector3(148.0, 12.4, -36.0), roof_dark)
+
+	# --- E. Central Campus Woodland Garden & Pond (x = 8, z = -10..+68, matching lush green heart!) ---
+	_cyl(sc, 22.0, 23.0, 0.08, Vector3(8.0, 0.05, 22.0), pond_mat, 16)
+	for ti in range(28):
+		var tx := -42.0 + float(ti % 7) * 16.5 + (6.0 if (ti / 7) % 2 == 1 else 0.0)
+		var tz := -22.0 + float(ti / 7) * 26.0
+		if Vector2(tx - 8.0, tz - 22.0).length() < 23.5:
+			continue
+		_cyl(sc, 0.24, 0.34, 3.6, Vector3(tx, 1.8, tz), trunk, 6)
+		_cyl(sc, 2.2, 4.2, 4.6, Vector3(tx, 5.2, tz), tree_dark if (ti % 2 == 0) else tree_mid, 8)
+	# Entrance avenue trees along 纺工路 & 中环南路
+	for at_z: float in [-175.0, -145.0, -115.0, -85.0, 12.0, 48.0, 88.0, 128.0, 168.0]:
+		_cyl(sc, 0.24, 0.34, 3.8, Vector3(-200.0, 1.9, at_z), trunk, 6)
+		_cyl(sc, 2.4, 4.0, 4.8, Vector3(-200.0, 5.4, at_z), tree_mid, 8)
+
+	# --- F. South-Central Iconic White-Roofed Indoor Gymnasium + 6 Outdoor Basketball/Tennis Courts ---
+	# Iconic bright white vaulted-roof gymnasium (x = -126, z = +134, unmistakably visible in satellite bottom-left!)
+	_box(sc, Vector3(64.0, 12.5, 52.0), Vector3(-126.0, 6.25, 134.0), cream)
+	_box(sc, Vector3(66.0, 2.4, 54.0), Vector3(-126.0, 13.7, 134.0), roof_white)
+	for rib_x: float in [-150.0, -138.0, -126.0, -114.0, -102.0]:
+		_box(sc, Vector3(1.6, 1.8, 55.0), Vector3(rib_x, 15.2, 134.0), roof_white)
+	# Adjacent Aquatic / Multi-Purpose Sports Hall with rooftop terracotta court (x = -68, z = +134)
+	_box(sc, Vector3(36.0, 9.0, 52.0), Vector3(-68.0, 4.5, 134.0), cream)
+	_box(sc, Vector3(32.0, 0.2, 22.0), Vector3(-68.0, 9.15, 118.0), court_red, 0.0, 0.0, 0.0, false)
+	_box(sc, Vector3(32.0, 0.2, 22.0), Vector3(-68.0, 9.15, 148.0), roof_white, 0.0, 0.0, 0.0, false)
+	# 6 Outdoor Basketball & Tennis Courts (2 rows x 3 columns, x in [-26 .. +46], z in [+102 .. +166])
+	for ci in range(3):
+		for cj in range(2):
+			var cx_c := -14.0 + float(ci) * 26.0
+			var cz_c := 118.0 + float(cj) * 36.0
+			_box(sc, Vector3(22.0, 0.08, 32.0), Vector3(cx_c, 0.05, cz_c), court_green, 0.0, 0.0, 0.0, false)
+			_box(sc, Vector3(17.5, 0.09, 28.0), Vector3(cx_c, 0.06, cz_c), court_red, 0.0, 0.0, 0.0, false)
+			_box(sc, Vector3(17.5, 0.10, 0.28), Vector3(cx_c, 0.07, cz_c), line_white, 0.0, 0.0, 0.0, false)
+
+	# --- G. SE Quadrant: Standard 400m Red Athletics Running Track & Football Stadium (matching satellite bottom-right!) ---
+	var sx := 130.0
+	var sz := 92.0
+	_box(sc, Vector3(76.0, 0.08, 108.0), Vector3(sx, 0.05, sz), track_red, 0.0, 0.0, 0.0, false)
+	_cyl(sc, 38.0, 38.0, 0.08, Vector3(sx, 0.05, sz - 54.0), track_red, 22)
+	_cyl(sc, 38.0, 38.0, 0.08, Vector3(sx, 0.05, sz + 54.0), track_red, 22)
+	# Football pitch + crisp white touchlines & penalty boxes
+	_box(sc, Vector3(56.0, 0.09, 98.0), Vector3(sx, 0.06, sz), pitch_green, 0.0, 0.0, 0.0, false)
+	_box(sc, Vector3(54.0, 0.10, 0.38), Vector3(sx, 0.07, sz), line_white, 0.0, 0.0, 0.0, false)
+	_box(sc, Vector3(0.38, 0.10, 96.0), Vector3(sx - 27.0, 0.07, sz), line_white, 0.0, 0.0, 0.0, false)
+	_box(sc, Vector3(0.38, 0.10, 96.0), Vector3(sx + 27.0, 0.07, sz), line_white, 0.0, 0.0, 0.0, false)
+	_box(sc, Vector3(54.0, 0.10, 0.38), Vector3(sx, 0.07, sz - 48.0), line_white, 0.0, 0.0, 0.0, false)
+	_box(sc, Vector3(54.0, 0.10, 0.38), Vector3(sx, 0.07, sz + 48.0), line_white, 0.0, 0.0, 0.0, false)
+	# Covered West Grandstand Bleachers + 4 Stadium Floodlight Masts
+	_box(sc, Vector3(11.0, 6.2, 74.0), Vector3(sx - 46.5, 3.1, sz), cream)
+	_box(sc, Vector3(16.5, 0.65, 78.0), Vector3(sx - 44.0, 11.4, sz), roof_white, 0.0, -0.14)
+	for fl_x: float in [sx - 42.0, sx + 42.0]:
+		for fl_z: float in [sz - 58.0, sz + 58.0]:
+			_cyl(sc, 0.25, 0.42, 22.0, Vector3(fl_x, 11.0, fl_z), fence_iron, 8)
+			_box(sc, Vector3(3.6, 1.4, 1.0), Vector3(fl_x, 22.2, fl_z), clock_face, 0.0, 0.0, 0.0, false)
+
+	_add_light(sc, Vector3(-206.0, 12.0, -34.0), Color(1.0, 0.90, 0.72), 62.0, lights)
+	_add_light(sc, Vector3(-28.0, 11.0, 192.0), Color(1.0, 0.90, 0.72), 48.0, lights)
 
 
 # =============================================================================================
@@ -623,25 +746,48 @@ static func _zicheng_park(parent: Node3D, center: Vector3, angle: float, lights:
 
 	# Restored 嘉兴府衙 historic timber hall, ceremonial stone axis, enclosing brick ramparts & corner watchtowers!
 	var ginkgo := _mat(Color(0.84, 0.68, 0.16), 0.78)
-	_box(zc, Vector3(8.5, 0.14, 72.0), Vector3(0.0, 0.07, -34.0), stone, 0.0, 0.0, 0.0, false)
-	# Enclosing East / West / North ancient brick ramparts & corner pavilions
+	var lantern := _emissive(Color(1.0, 0.30, 0.14), 2.1)
+	var moat_water := _mat(Color(0.15, 0.36, 0.42), 0.18, 0.16)
+	# Ancient city moat & carved stone ceremonial arch bridge in front of Qiaolou Gate + red palace lanterns
+	_box(zc, Vector3(76.0, 0.08, 9.5), Vector3(0.0, 0.04, 18.5), moat_water, 0.0, 0.0, 0.0, false)
+	_box(zc, Vector3(8.4, 0.85, 12.0), Vector3(0.0, 0.45, 18.5), stone)
+	for br_s: float in [-4.0, 4.0]:
+		_box(zc, Vector3(0.45, 1.1, 12.2), Vector3(br_s, 1.35, 18.5), stone)
+	for lx: float in [-11.0, -5.5, 5.5, 11.0]:
+		_cyl(zc, 0.28, 0.24, 0.62, Vector3(lx, ty + 4.8, 6.2), lantern, 8)
+		_cyl(zc, 0.28, 0.24, 0.62, Vector3(lx, ty + 4.8, -6.2), lantern, 8)
+
+	_box(zc, Vector3(11.0, 0.14, 148.0), Vector3(0.0, 0.07, -76.0), stone, 0.0, 0.0, 0.0, false)
+	# Enclosing East / West / North ancient brick ramparts, side wing galleries & corner pavilions
 	for ws_z: float in [-1.0, 1.0]:
-		_box(zc, Vector3(5.2, 5.6, 86.0), Vector3(ws_z * 42.0, 2.8, -36.0), brick_grey)
-		_box(zc, Vector3(9.5, 6.4, 9.5), Vector3(ws_z * 42.0, 3.2, -78.0), brick_grey)
-		_box(zc, Vector3(11.2, 2.2, 11.2), Vector3(ws_z * 42.0, 7.4, -78.0), tile_dark)
+		_box(zc, Vector3(5.2, 5.6, 118.0), Vector3(ws_z * 42.0, 2.8, -52.0), brick_grey)
+		_box(zc, Vector3(9.5, 6.4, 9.5), Vector3(ws_z * 42.0, 3.2, -110.0), brick_grey)
+		_box(zc, Vector3(11.2, 2.2, 11.2), Vector3(ws_z * 42.0, 7.4, -110.0), tile_dark)
+		# East & West timber side halls (东西配殿) flanking the main courtyard
+		_box(zc, Vector3(10.0, 5.0, 32.0), Vector3(ws_z * 26.0, 2.5, -52.0), plaster)
+		_box(zc, Vector3(12.2, 1.8, 34.5), Vector3(ws_z * 26.0, 5.8, -52.0), tile_dark)
 		# Golden ginkgo trees flanking the ceremonial courtyard axis
-		for gz_t: float in [-24.0, -38.0, -56.0]:
+		for gz_t: float in [-22.0, -40.0, -64.0, -88.0, -124.0]:
 			_cyl(zc, 0.32, 0.42, 4.6, Vector3(ws_z * 16.0, 2.3, gz_t), wood_red, 8)
 			_cyl(zc, 2.8, 4.2, 4.4, Vector3(ws_z * 16.0, 6.2, gz_t), ginkgo, 10)
-	_box(zc, Vector3(86.0, 5.6, 5.2), Vector3(0.0, 2.8, -78.0), brick_grey)
+	_box(zc, Vector3(86.0, 5.6, 5.2), Vector3(0.0, 2.8, -110.0), brick_grey)
 	# Ceremonial Yimen Gate (仪门) & Main 嘉兴府衙 Great Hall on raised stone plinth
-	_box(zc, Vector3(20.0, 4.8, 9.0), Vector3(0.0, 2.4, -26.0), plaster)
-	_box(zc, Vector3(23.5, 1.6, 11.5), Vector3(0.0, 5.6, -26.0), tile_dark)
-	_box(zc, Vector3(38.0, 1.1, 20.0), Vector3(0.0, 0.55, -52.0), stone)
-	_box(zc, Vector3(34.0, 7.2, 16.0), Vector3(0.0, 4.6, -52.0), plaster)
-	_box(zc, Vector3(38.5, 2.4, 19.5), Vector3(0.0, 9.2, -52.0), tile_dark)
-	_sign(zc, "嘉 兴 府 衙 遗 址", Vector3(0.0, 7.5, -43.5), 0.0, 58, 0.022, Color(0.98, 0.84, 0.34))
-	_add_light(zc, Vector3(0.0, 12.0, 14.0), Color(1.0, 0.80, 0.44), 52.0, lights)
+	_box(zc, Vector3(22.0, 5.0, 9.5), Vector3(0.0, 2.5, -26.0), plaster)
+	_box(zc, Vector3(25.5, 1.7, 12.0), Vector3(0.0, 5.8, -26.0), tile_dark)
+	_box(zc, Vector3(40.0, 1.2, 22.0), Vector3(0.0, 0.6, -54.0), stone)
+	_box(zc, Vector3(36.0, 7.6, 17.0), Vector3(0.0, 4.9, -54.0), plaster)
+	_box(zc, Vector3(41.0, 2.6, 21.0), Vector3(0.0, 9.8, -54.0), tile_dark)
+	_sign(zc, "嘉 兴 府 衙 遗 址", Vector3(0.0, 7.8, -45.2), 0.0, 62, 0.022, Color(0.98, 0.84, 0.34))
+	# North Heritage Entrance Archway facing 中山东路 (directly visible from Tram T1!)
+	_box(zc, Vector3(28.0, 0.14, 24.0), Vector3(0.0, 0.07, -148.0), stone, 0.0, 0.0, 0.0, false)
+	for ax_n: float in [-9.0, -4.5, 4.5, 9.0]:
+		_box(zc, Vector3(0.75, 7.8, 0.75), Vector3(ax_n, 3.9, -156.0), wood_red)
+		_box(zc, Vector3(1.3, 1.1, 1.3), Vector3(ax_n, 0.55, -156.0), stone)
+	_box(zc, Vector3(20.0, 1.2, 2.6), Vector3(0.0, 8.2, -156.0), tile_dark)
+	_box(zc, Vector3(11.5, 1.4, 3.2), Vector3(0.0, 9.4, -156.0), tile_dark)
+	_sign(zc, "子 城 遗 址 公 园", Vector3(0.0, 7.9, -157.5), PI, 72, 0.024, Color(0.98, 0.84, 0.34))
+	_add_light(zc, Vector3(0.0, 12.0, 14.0), Color(1.0, 0.80, 0.44), 56.0, lights)
+	_add_light(zc, Vector3(0.0, 10.0, -152.0), Color(1.0, 0.78, 0.42), 52.0, lights)
 
 
 # =============================================================================================
