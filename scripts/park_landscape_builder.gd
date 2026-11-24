@@ -872,17 +872,38 @@ static func _build_parks_detail(
 						if Geometry2D.is_point_in_polygon(lp, poly) and _road_clearance(clear, lp) > 2.8 and not _inside_any_building(clear, lp, 2.2) and not _inside_any_water(clear, lp, 1.8):
 							(prop_lists["park_lamp"] as Array).append(Transform3D(Basis.IDENTITY, Vector3(lp.x, 0.03, lp.y)))
 
-			# Find an open interior clearing for a Circular Focal Stone Plaza + Timber Pavilion (for grand parks!)
-			var plaza_c := _find_clear_park_spot(poly, centroid, pmin, pmax, clear, 9.0)
-			if plaza_c != Vector2(1e9, 1e9) and not _near_any_path_or_plaza(plaza_c, [], plaza_circles, 18.0):
-				var p_rad := 6.8 if area_m2 < 8000.0 else 8.8
-				plaza_circles.append([plaza_c, p_rad + 2.5])
-				_cyl_into(plaza_st, p_rad, 0.025, 0.058, 24, Color(0.75, 0.72, 0.66), Vector3(plaza_c.x, 0.0, plaza_c.y))
+			# Find open interior clearings for Circular Focal Stone Plazas + Timber Pavilions (1-3 per park by size!)
+			var n_plazas := 1 if area_m2 < 14000.0 else (2 if area_m2 < 42000.0 else 3)
+			var plaza_anchors: Array[Vector2] = [
+				centroid,
+				centroid.lerp(pmin, 0.36),
+				centroid.lerp(pmax, 0.36),
+			]
+			for pi_z in range(n_plazas):
+				var plaza_c := _find_clear_park_spot(poly, plaza_anchors[pi_z], pmin, pmax, clear, 8.0)
+				if plaza_c == Vector2(1e9, 1e9) or _near_any_path_or_plaza(plaza_c, [], plaza_circles, 22.0):
+					continue
+				var p_rad := 6.6 if area_m2 < 8000.0 else (8.8 if pi_z == 0 else 6.4)
+				plaza_circles.append([plaza_c, p_rad + 2.4])
+				_cyl_into(plaza_st, p_rad, 0.025, 0.058, 24, Color(0.76, 0.73, 0.67), Vector3(plaza_c.x, 0.0, plaza_c.y))
 				_cyl_into(plaza_st, p_rad - 0.55, 0.058, 0.068, 24, Color(0.67, 0.63, 0.58), Vector3(plaza_c.x, 0.0, plaza_c.y))
-				# Timber Park Pavilion / Pergola in large parks (Denny Park, Cascade Playground, Grid Central Parks, etc.)
-				if area_m2 >= 4200.0 and p_rad >= 6.8:
+				# Cross-park radial stone footpaths connecting the focal plaza out toward the perimeter walkways!
+				for rk in range(4):
+					var rang := float(rk) * PI * 0.5 + 0.25
+					var rdir := Vector2(cos(rang), sin(rang))
+					var rperp := Vector2(-rdir.y, rdir.x)
+					var prev_rp := plaza_c + rdir * (p_rad - 0.4)
+					for step_r in range(1, 7):
+						var nxt_rp := plaza_c + rdir * (p_rad + float(step_r) * 7.5)
+						if not Geometry2D.is_point_in_polygon(nxt_rp, poly) or _road_clearance(clear, nxt_rp) < 2.8 or _inside_any_water(clear, nxt_rp, 2.0) or _inside_any_building(clear, nxt_rp, 2.4):
+							break
+						_add_strip_prism(path_st, prev_rp, nxt_rp, rperp, -1.05, 1.05, 0.016, 0.036, Color(0.75, 0.71, 0.64))
+						path_segs.append([prev_rp, nxt_rp, 2.0])
+						prev_rp = nxt_rp
+				# Timber Park Pavilion / Gazebo in medium & large parks (every focal plaza >= 2400m2!)
+				if area_m2 >= 2400.0 and p_rad >= 6.2:
 					_add_park_pavilion_into(pav_st, Vector3(plaza_c.x, 0.068, plaza_c.y), _hash01(plaza_c.x, plaza_c.y, 9.0) * PI)
-					if lights.size() < 54:
+					if lights.size() < 58:
 						var om := OmniLight3D.new()
 						om.position = Vector3(plaza_c.x, 3.6 + (Terrain.surface(plaza_c.x, plaza_c.y) if Terrain.active else 0.0), plaza_c.y)
 						om.light_color = Color(1.0, 0.86, 0.62)
@@ -904,54 +925,53 @@ static func _build_parks_detail(
 						var fkey := "flower_pink" if k % 2 == 0 else "flower_gold"
 						(prop_lists[fkey] as Array).append(Transform3D(Basis(Vector3.UP, ang), Vector3(fp.x, 0.03, fp.y)))
 
-		# 2C. Populate Open Lawns with Picnic Tables, Shrubs, Flowerbeds & Multi-Species Park Tree Groves!
-		var step_m := 13.5 if area_m2 < 12000.0 else 18.0
-		var gx := pmin.x + 5.0
-		while gx <= pmax.x - 5.0:
-			var gz := pmin.y + 5.0
-			while gz <= pmax.y - 5.0:
-				var jx := (_hash01(gx, gz, 11.0) - 0.5) * step_m * 0.68
-				var jz := (_hash01(gx, gz, 17.0) - 0.5) * step_m * 0.68
+		# 2C. Populate Parks with Lush Multi-Species Woodland Groves (~10x denser trees!), Shrubs, Picnic Tables & Flowerbeds!
+		var step_m := 6.4 if area_m2 < 12000.0 else (7.8 if area_m2 < 60000.0 else 9.2)
+		var gx := pmin.x + 3.5
+		while gx <= pmax.x - 3.5:
+			var gz := pmin.y + 3.5
+			while gz <= pmax.y - 3.5:
+				var jx := (_hash01(gx, gz, 11.0) - 0.5) * step_m * 0.64
+				var jz := (_hash01(gx, gz, 17.0) - 0.5) * step_m * 0.64
 				var pt := Vector2(gx + jx, gz + jz)
 				gz += step_m
 
 				if not Geometry2D.is_point_in_polygon(pt, poly):
 					continue
-				if _road_clearance(clear, pt) < 4.5 or _inside_any_building(clear, pt, 3.6) or _inside_any_water(clear, pt, 2.5):
+				if _road_clearance(clear, pt) < 3.6 or _inside_any_building(clear, pt, 3.0) or _inside_any_water(clear, pt, 2.0):
 					continue
-				if _near_any_path_or_plaza(pt, path_segs, plaza_circles, 2.6):
+				if _near_any_path_or_plaza(pt, path_segs, plaza_circles, 2.3):
 					continue
 
 				var r := _hash01(pt.x, pt.y, 23.0)
 				var yaw := _hash01(pt.x, pt.y, 29.0) * TAU
 				if kind == "wood":
-					# Dense PNW woodland grove: mostly Douglas Firs + Bigleaf Maples + undergrowth shrubs
-					if r < 0.72:
+					if r < 0.88:
 						var sp_w := 0 if _hash01(pt.x, pt.y, 31.0) < 0.62 else 1
-						extra_park_trees.append({"pos": pt, "species": sp_w, "scale": 0.95 + _hash01(pt.x, pt.y, 37.0) * 0.45})
-					elif r < 0.90:
+						extra_park_trees.append({"pos": pt, "species": sp_w, "scale": 0.90 + _hash01(pt.x, pt.y, 37.0) * 0.50})
+					else:
 						(prop_lists["shrub"] as Array).append(Transform3D(Basis(Vector3.UP, yaw).scaled(Vector3.ONE * (0.9 + r * 0.5)), Vector3(pt.x, 0.03, pt.y)))
 				else:
-					# Balanced Seattle urban park: open sunlit lawn clearings + multi-species tree groves + picnic tables + shrubs
-					var grove_n := sin(pt.x * 0.038) * cos(pt.y * 0.038)
-					if grove_n > -0.18 and r < 0.42:
+					# Rich multi-species lush park canopy with natural sunlit glade pockets (grove_n < -0.58)
+					var grove_n := sin(pt.x * 0.032) * cos(pt.y * 0.032)
+					if grove_n > -0.58 and r < 0.80:
 						var sp_r := _hash01(pt.x, pt.y, 41.0)
-						var sp := 0 # Douglas Fir (34%)
-						if sp_r > 0.88:
-							sp = 4 # Autumn Maple / Ginkgo (12%)
-						elif sp_r > 0.74:
-							sp = 3 # Silver Birch (14%)
-						elif sp_r > 0.59:
-							sp = 2 # Ornamental Cherry Blossom (15%)
-						elif sp_r > 0.34:
-							sp = 1 # Bigleaf Maple (25%)
-						var sc := 0.92 + _hash01(pt.x, pt.y, 43.0) * 0.46
+						var sp := 0 # Evergreen / Camphor (32%)
+						if sp_r > 0.86:
+							sp = 4 # Autumn Maple / Ginkgo (14%)
+						elif sp_r > 0.72:
+							sp = 3 # Silver Birch / Willow (14%)
+						elif sp_r > 0.56:
+							sp = 2 # Ornamental Cherry / Plum Blossom (16%)
+						elif sp_r > 0.32:
+							sp = 1 # Broadleaf Plane / Maple (24%)
+						var sc := 0.86 + _hash01(pt.x, pt.y, 43.0) * 0.52
 						extra_park_trees.append({"pos": pt, "species": sp, "scale": sc})
-					elif r >= 0.42 and r < 0.55:
+					elif r >= 0.80 and r < 0.90:
 						(prop_lists["shrub"] as Array).append(Transform3D(Basis(Vector3.UP, yaw).scaled(Vector3.ONE * (0.85 + _hash01(pt.x, pt.y, 47.0) * 0.55)), Vector3(pt.x, 0.03, pt.y)))
-					elif r >= 0.55 and r < 0.61 and area_m2 >= 1800.0:
+					elif r >= 0.90 and r < 0.95 and area_m2 >= 1800.0:
 						(prop_lists["picnic"] as Array).append(Transform3D(Basis(Vector3.UP, yaw), Vector3(pt.x, 0.03, pt.y)))
-					elif r >= 0.61 and r < 0.66:
+					elif r >= 0.95:
 						var fk := "flower_pink" if _hash01(pt.x, pt.y, 53.0) < 0.4 else ("flower_blue" if _hash01(pt.x, pt.y, 59.0) < 0.5 else "flower_gold")
 						(prop_lists[fk] as Array).append(Transform3D(Basis(Vector3.UP, yaw), Vector3(pt.x, 0.03, pt.y)))
 			gx += step_m

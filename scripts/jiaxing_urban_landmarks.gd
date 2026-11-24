@@ -51,6 +51,9 @@ static func build(root: Node3D, lm: Dictionary, lights: Array) -> void:
 	if lm.has("cifi_plaza"):
 		var cf: Dictionary = lm["cifi_plaza"]
 		_cifi_plaza(root, _p(cf["pos"]), float(cf.get("angle", 0.17)), lights)
+	if lm.has("shaonian_street"):
+		var sn: Dictionary = lm["shaonian_street"]
+		_shaonian_pedestrian_street(root, _p(sn["pos"]), float(sn.get("angle", 0.144)), lights)
 
 
 static func _p(a: Array) -> Vector3:
@@ -746,3 +749,119 @@ static func _cifi_plaza(parent: Node3D, center: Vector3, angle: float, lights: A
 	_sign(cf, "C I F I   P L A Z A", Vector3(0.0, 17.0, -20.6), PI, 52, 0.028, Color(0.98, 0.96, 0.92))
 	_sign(cf, "旭 辉 广 场", Vector3(24.0, 53.5, -3.5), PI, 94, 0.036, Color(1.0, 0.76, 0.26))
 	_add_light(cf, Vector3(0.0, 14.0, -28.0), Color(1.0, 0.84, 0.56), 68.0, lights)
+
+
+# =============================================================================================
+# 14. 少年路步行街 (Shaonian Road Historic Pedestrian Commercial Street — 中山东路 to 环城北路!)
+#     Jiaxing's century-old vibrant pedestrian street west of Pingshan Park: granite promenade,
+#     3 entrance archways, continuous 2-3 story Republic-era & Jiangnan shopfront arcades,
+#     diverse illuminated signboards, striped awnings, overhead lantern garlands & street cafes!
+# =============================================================================================
+static func _shaonian_pedestrian_street(parent: Node3D, center: Vector3, angle: float, lights: Array) -> void:
+	var sn := Node3D.new()
+	sn.name = "ShaonianPedestrianStreet"
+	sn.position = center
+	sn.rotation.y = angle
+	parent.add_child(sn)
+
+	var granite := _mat(Color(0.76, 0.74, 0.70), 0.78)
+	var bluestone := _mat(Color(0.56, 0.57, 0.59), 0.80)
+	var brick_grey := _mat(Color(0.46, 0.47, 0.50), 0.80)
+	var brick_red := _mat(Color(0.62, 0.28, 0.22), 0.78)
+	var cream := _mat(Color(0.90, 0.87, 0.81), 0.76)
+	var tile_dark := _mat(Color(0.20, 0.22, 0.26), 0.56, 0.10)
+	var wood_red := _mat(Color(0.58, 0.15, 0.12), 0.52)
+	var glass := _glass(Color(0.28, 0.44, 0.58), 0.62)
+	var warm := _emissive(Color(1.0, 0.88, 0.62), 1.3)
+	var lantern_r := _emissive(Color(1.0, 0.28, 0.14), 2.0)
+	var lantern_g := _emissive(Color(1.0, 0.78, 0.24), 1.9)
+	var iron := _mat(Color(0.18, 0.20, 0.23), 0.44, 0.55)
+	var shrub := _mat(Color(0.20, 0.48, 0.22), 0.86)
+
+	var sign_mats := [
+		_mat(Color(0.80, 0.12, 0.12), 0.42),
+		_mat(Color(0.08, 0.34, 0.70), 0.42),
+		_mat(Color(0.12, 0.48, 0.26), 0.44),
+		_mat(Color(0.92, 0.58, 0.10), 0.42),
+		_mat(Color(0.22, 0.16, 0.14), 0.44),
+		_mat(Color(0.64, 0.12, 0.24), 0.42),
+	]
+	var awning_mats := [
+		_mat(Color(0.76, 0.16, 0.14), 0.72),
+		_mat(Color(0.10, 0.40, 0.30), 0.72),
+		_mat(Color(0.16, 0.30, 0.58), 0.72),
+		_mat(Color(0.86, 0.52, 0.14), 0.72),
+	]
+	var wall_mats := [cream, brick_grey, brick_red, _mat(Color(0.84, 0.81, 0.75), 0.76)]
+
+	# --- A. 540m Continuous Patterned Granite & Bluestone Pedestrian Promenade (z in [-270 .. +270]) ---
+	_box(sn, Vector3(15.0, 0.07, 544.0), Vector3(0.0, 0.035, 0.0), granite, 0.0, 0.0, 0.0, false)
+	_box(sn, Vector3(4.6, 0.08, 540.0), Vector3(0.0, 0.042, 0.0), bluestone, 0.0, 0.0, 0.0, false)
+
+	# --- B. 3 Grand Pedestrian Street Archways (South at 中山东路, Mid at 勤俭路, North at 环城北路) ---
+	var arch_zs := [262.0, -48.0, -262.0]
+	for ai in range(arch_zs.size()):
+		var az: float = arch_zs[ai]
+		for ax: float in [-6.4, -3.2, 3.2, 6.4]:
+			_box(sn, Vector3(0.68, 8.2, 0.68), Vector3(ax, 4.1, az), wood_red)
+			_box(sn, Vector3(1.15, 1.0, 1.15), Vector3(ax, 0.5, az), bluestone)
+		_box(sn, Vector3(14.8, 1.1, 2.2), Vector3(0.0, 8.4, az), tile_dark)
+		_box(sn, Vector3(8.8, 1.3, 2.8), Vector3(0.0, 9.6, az), tile_dark)
+		var title_s := "少 年 路 步 行 街" if ai != 1 else "少 年 路 老 街"
+		_sign(sn, title_s, Vector3(0.0, 7.8, az + 1.25), 0.0, 72, 0.024, Color(0.98, 0.86, 0.34))
+		_sign(sn, title_s, Vector3(0.0, 7.8, az - 1.25), PI, 72, 0.024, Color(0.98, 0.86, 0.34))
+		if ai == 0:
+			_sign(sn, "SHAONIAN PEDESTRIAN STREET", Vector3(0.0, 6.5, az + 1.25), 0.0, 32, 0.018, Color(0.96, 0.96, 0.96))
+
+	# --- C. Continuous 2-3 Story Republic-Era & Jiangnan Arcade Shopfronts along BOTH Sides! ---
+	# Leave clean cross-street gaps at 勤俭路 (z ≈ -66..-40), 中和街 (z ≈ 54..72), 道前街 (z ≈ 162..178)
+	var shop_names := [
+		"五芳斋老店", "文虎酱鸭", "嘉兴老面馆", "真真老老", "霸王茶姬", "瑞幸咖啡",
+		"蜜雪冰城", "丝绸百货", "老凤祥银楼", "百年糕点铺", "潮流服饰城", "新华书店",
+		"古茗奶茶", "老娘舅快餐", "三元臭豆腐", "江南茶庄", "光明眼镜", "阿婆粽子",
+	]
+	var bay_idx := 0
+	var bz := -246.0
+	while bz <= 246.0:
+		if (bz > -72.0 and bz < -34.0) or (bz > 48.0 and bz < 76.0) or (bz > 158.0 and bz < 182.0):
+			bz += 16.0
+			continue
+		for side: float in [-1.0, 1.0]:
+			var h_b := 7.6 + float((bay_idx * 7) % 3) * 2.4 # 7.6m / 10.0m / 12.4m authentic varied eaves!
+			var w_mat: Material = wall_mats[(bay_idx + (1 if side > 0.0 else 0)) % wall_mats.size()]
+			var s_mat: Material = sign_mats[(bay_idx * 3 + (2 if side > 0.0 else 0)) % sign_mats.size()]
+			var a_mat: Material = awning_mats[(bay_idx + (1 if side > 0.0 else 0)) % awning_mats.size()]
+			var bx := side * 12.2
+			# Shopfront arcade building body + pitched dark Jiangnan gable roof
+			_box(sn, Vector3(9.2, h_b, 14.8), Vector3(bx, h_b * 0.5, bz), w_mat)
+			_box(sn, Vector3(10.6, 1.4, 15.2), Vector3(bx, h_b + 0.7, bz), tile_dark)
+			# Ground-floor illuminated display glazing + vibrant shop fascia signboard + sloped striped awning
+			var face_x := side * 7.55
+			_box(sn, Vector3(0.28, 3.2, 12.4), Vector3(face_x, 1.75, bz), glass)
+			_box(sn, Vector3(0.18, 2.7, 11.4), Vector3(face_x + side * 0.16, 1.65, bz), warm, 0.0, 0.0, 0.0, false)
+			_box(sn, Vector3(0.55, 1.15, 13.6), Vector3(face_x - side * 0.15, 3.95, bz), s_mat)
+			_box(sn, Vector3(1.6, 0.22, 12.8), Vector3(face_x - side * 0.8, 3.15, bz), a_mat, 0.0, side * 0.26)
+			# Upper-floor arched/framed windows
+			_box(sn, Vector3(0.24, 1.9, 9.6), Vector3(face_x, 6.2, bz), glass)
+			if bay_idx % 2 == 0:
+				var s_lbl: String = shop_names[(bay_idx + (5 if side > 0.0 else 0)) % shop_names.size()]
+				_sign(sn, s_lbl, Vector3(face_x - side * 0.48, 3.98, bz), (-PI * 0.5 if side > 0.0 else PI * 0.5), 48, 0.020, Color(1.0, 0.96, 0.86))
+			bay_idx += 1
+
+		# Overhead festive red/gold lantern garlands spanning across the pedestrian street + planters & lamps!
+		if int(round(bz)) % 30 == 0 or absf(fmod(bz + 300.0, 32.0)) < 15.0:
+			_box(sn, Vector3(14.8, 0.06, 0.06), Vector3(0.0, 6.6, bz), iron, 0.0, 0.0, 0.0, false)
+			for lx_g: float in [-4.5, -1.5, 1.5, 4.5]:
+				_cyl(sn, 0.26, 0.22, 0.56, Vector3(lx_g, 6.2, bz), lantern_r if (int(absf(lx_g)) % 2 == 0) else lantern_g, 8)
+		# Alternating center flower planters, benches & vintage globe streetlamps
+		if bay_idx % 4 == 0:
+			_box(sn, Vector3(2.2, 0.65, 2.2), Vector3(0.0, 0.35, bz), bluestone)
+			_cyl(sn, 0.85, 1.1, 0.9, Vector3(0.0, 1.05, bz), shrub, 8)
+			for ls: float in [-5.6, 5.6]:
+				_cyl(sn, 0.08, 0.12, 4.4, Vector3(ls, 2.2, bz + 5.0), iron, 6)
+				_cyl(sn, 0.28, 0.28, 0.36, Vector3(ls, 4.55, bz + 5.0), warm, 8)
+		bz += 15.5
+
+	_add_light(sn, Vector3(0.0, 10.0, 240.0), Color(1.0, 0.82, 0.48), 58.0, lights)
+	_add_light(sn, Vector3(0.0, 10.0, 0.0), Color(1.0, 0.82, 0.48), 58.0, lights)
+	_add_light(sn, Vector3(0.0, 10.0, -240.0), Color(1.0, 0.82, 0.48), 58.0, lights)

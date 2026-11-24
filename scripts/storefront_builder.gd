@@ -131,10 +131,34 @@ const BRANDS := {
 	"汉庭酒店": {"bg": Color(0.10, 0.34, 0.68), "fg": Color(1, 1, 1), "frame": Color(0.22, 0.24, 0.28)},
 	"全季酒店": {"bg": Color(0.32, 0.26, 0.20), "fg": Color(0.96, 0.93, 0.86), "frame": Color(0.26, 0.22, 0.18)},
 	"亚朵酒店": {"bg": Color(0.14, 0.16, 0.20), "fg": Color(0.96, 0.95, 0.92), "frame": Color(0.20, 0.22, 0.26)},
+	"库迪咖啡": {"bg": Color(0.76, 0.12, 0.14), "fg": Color(1, 1, 1), "frame": Color(0.94, 0.92, 0.88), "awning": Color(0.72, 0.14, 0.14)},
+	"茶百道": {"bg": Color(0.06, 0.34, 0.72), "fg": Color(1, 1, 1), "frame": Color(0.94, 0.95, 0.96)},
+	"书亦烧仙草": {"bg": Color(0.78, 0.18, 0.16), "fg": Color(0.98, 0.95, 0.86), "frame": Color(0.26, 0.18, 0.14)},
+	"美宜佳": {"bg": Color(0.86, 0.12, 0.12), "fg": Color(1.0, 0.88, 0.14), "frame": Color(0.94, 0.94, 0.92)},
+	"赵一鸣零食": {"bg": Color(0.92, 0.14, 0.12), "fg": Color(1.0, 0.92, 0.16), "frame": Color(0.96, 0.94, 0.86)},
+	"好特卖": {"bg": Color(0.95, 0.76, 0.08), "fg": Color(0.12, 0.12, 0.14), "frame": Color(0.16, 0.16, 0.18)},
+	"百果园": {"bg": Color(0.10, 0.56, 0.22), "fg": Color(1, 1, 1), "frame": Color(0.94, 0.95, 0.90), "awning": Color(0.14, 0.52, 0.22)},
+	"鲜丰水果": {"bg": Color(0.16, 0.54, 0.18), "fg": Color(1.0, 0.94, 0.24), "frame": Color(0.92, 0.94, 0.90), "awning": Color(0.18, 0.50, 0.20)},
+	"钱大妈": {"bg": Color(0.82, 0.14, 0.14), "fg": Color(1, 1, 1), "frame": Color(0.94, 0.92, 0.90)},
+	"来伊份": {"bg": Color(0.94, 0.44, 0.06), "fg": Color(1, 1, 1), "frame": Color(0.96, 0.92, 0.86)},
+	"周黑鸭": {"bg": Color(0.95, 0.78, 0.06), "fg": Color(0.12, 0.10, 0.08), "frame": Color(0.16, 0.14, 0.12)},
+	"巴比馒头": {"bg": Color(0.86, 0.34, 0.08), "fg": Color(1, 1, 1), "frame": Color(0.94, 0.92, 0.86)},
+	"张亮麻辣烫": {"bg": Color(0.88, 0.22, 0.10), "fg": Color(1, 1, 1), "frame": Color(0.24, 0.18, 0.16)},
+	"袁记云饺": {"bg": Color(0.74, 0.16, 0.12), "fg": Color(0.98, 0.92, 0.70), "frame": Color(0.32, 0.22, 0.16)},
+	"老盛昌": {"bg": Color(0.64, 0.14, 0.12), "fg": Color(0.98, 0.88, 0.44), "frame": Color(0.28, 0.18, 0.14)},
+	"好利来": {"bg": Color(0.94, 0.92, 0.90), "fg": Color(0.16, 0.14, 0.14), "frame": Color(0.78, 0.74, 0.70), "awning": Color(0.84, 0.72, 0.68)},
+	"必胜客": {"bg": Color(0.74, 0.10, 0.12), "fg": Color(1, 1, 1), "frame": Color(0.22, 0.18, 0.16)},
+	"德克士": {"bg": Color(0.10, 0.50, 0.24), "fg": Color(1, 1, 1), "frame": Color(0.92, 0.94, 0.92)},
+	"一心堂药房": {"bg": Color(0.04, 0.56, 0.30), "fg": Color(1, 1, 1), "frame": Color(0.94, 0.95, 0.94)},
+	"博士眼镜": {"bg": Color(0.08, 0.22, 0.48), "fg": Color(1, 1, 1), "frame": Color(0.88, 0.90, 0.92)},
+	"中通快递": {"bg": Color(0.04, 0.44, 0.84), "fg": Color(1, 1, 1), "frame": Color(0.92, 0.94, 0.96)},
+	"圆通快递": {"bg": Color(0.38, 0.14, 0.56), "fg": Color(1, 1, 1), "frame": Color(0.92, 0.92, 0.94)},
+	"雅迪电动车": {"bg": Color(0.92, 0.42, 0.06), "fg": Color(1, 1, 1), "frame": Color(0.22, 0.24, 0.28)},
+	"爱玛电动车": {"bg": Color(0.84, 0.10, 0.24), "fg": Color(1, 1, 1), "frame": Color(0.92, 0.92, 0.94)},
 }
 
 # Authentic earthy local Chinese street-shop PVC/acrylic lightbox palettes (接地气非连锁底商招牌):
-# [bg, fg, frame, awning] — bold red/blue/green/yellow/orange boards with high-contrast white/yellow lettering!
+# [bg, fg, frame, awning] — 14 rich varied boards & storefront treatments!
 const LOCAL_CHINESE_STYLES := [
 	[Color(0.84, 0.10, 0.10), Color(1.0, 1.0, 1.0), Color(0.32, 0.30, 0.30), Color(0.76, 0.14, 0.14)],    # 经典大红底白字 (小吃/副食/五金)
 	[Color(0.80, 0.08, 0.08), Color(1.0, 0.90, 0.16), Color(0.30, 0.24, 0.20), Color(0.72, 0.12, 0.10)],  # 经典大红底黄字 (牛肉面/足浴/宾馆)
@@ -144,6 +168,12 @@ const LOCAL_CHINESE_STYLES := [
 	[Color(0.92, 0.38, 0.06), Color(1.0, 1.0, 1.0), Color(0.32, 0.26, 0.22), Color(0.84, 0.34, 0.08)],    # 亮橙底白字 (理发/烟酒/快递)
 	[Color(0.56, 0.08, 0.14), Color(1.0, 0.92, 0.56), Color(0.28, 0.20, 0.18), Color(0.52, 0.12, 0.14)],  # 枣红底金字 (老面馆/茶庄/糕点)
 	[Color(0.04, 0.48, 0.56), Color(1.0, 1.0, 1.0), Color(0.30, 0.34, 0.36), Color(0.08, 0.42, 0.48)],    # 蓝绿底白字 (干洗/眼镜/社区服务)
+	[Color(0.16, 0.17, 0.20), Color(0.98, 0.86, 0.40), Color(0.24, 0.24, 0.26), Color(0.22, 0.22, 0.26)], # 哑光黑金 (烧烤/咖啡/文创/理发)
+	[Color(0.92, 0.90, 0.85), Color(0.24, 0.16, 0.12), Color(0.46, 0.34, 0.24), Color(0.56, 0.36, 0.22)], # 原木米白 (烘焙/茶室/花店)
+	[Color(0.22, 0.38, 0.26), Color(0.98, 0.95, 0.84), Color(0.34, 0.28, 0.22), Color(0.20, 0.36, 0.24)], # 墨绿暖白 (茶叶/中药/私房菜)
+	[Color(0.54, 0.14, 0.44), Color(1.0, 0.96, 0.92), Color(0.30, 0.24, 0.28), Color(0.50, 0.16, 0.40)],  # 玫紫亮白 (美容美甲/母婴/女装)
+	[Color(0.10, 0.20, 0.42), Color(0.98, 0.88, 0.34), Color(0.24, 0.28, 0.34), Color(0.14, 0.24, 0.46)], # 藏青金字 (房产/律所/五金机电)
+	[Color(0.76, 0.28, 0.18), Color(1.0, 0.96, 0.88), Color(0.36, 0.24, 0.18), Color(0.68, 0.24, 0.16)],  # 砖红暖白 (卤味/火锅/家常菜)
 ]
 
 # Fallback palettes by shop category: [bg, fg, frame, awning]
@@ -296,18 +326,26 @@ static func _build_one(fst: SurfaceTool, gst: SurfaceTool, labels: Node3D, sf: D
 	var nh := absi(hash(name_txt))
 	var bulk_c: Color = Color(0.28, 0.29, 0.31) if is_zh_shop else (Color(0.20, 0.20, 0.21) if (nh % 2 == 0) else frame_c.darkened(0.25))
 	var is_local_zh := bool(st.get("is_local_zh", false))
-	var sign_y0 := (gh - 1.20) if is_local_zh else (gh - 1.04)
-	var sign_y1 := (gh - 0.14) if is_local_zh else (gh - 0.16)
-	var sign_d := 0.42 if is_local_zh else 0.34
+	# Diversify signboard heights, depths, and pilaster claddings across neighboring bays so street rows look genuinely distinct!
+	var pos_h := absi(hash(Vector2i(int(round(o.x * 2.0)), int(round(o.z * 2.0)))))
+	var v_var := (nh ^ pos_h)
+	var sign_h_delta: float = 0.0 if not is_zh_shop else float([-0.14, -0.05, 0.06, 0.16][v_var % 4])
+	var sign_y0 := ((gh - 1.20) if is_local_zh else (gh - 1.04)) - sign_h_delta
+	var sign_y1 := ((gh - 0.14) if is_local_zh else (gh - 0.16)) + clampf(sign_h_delta * 0.25, -0.04, 0.06)
+	var sign_d := (0.42 if is_local_zh else 0.34) + (0.08 if (v_var % 5 == 0) else (-0.05 if (v_var % 5 == 3) else 0.0))
 	var glass_top := sign_y0 - 0.06
-	var has_awning := bool(st["has_awning"])
+	var has_awning := bool(st["has_awning"]) or (is_zh_shop and (v_var % 7 < 2))
 	if has_awning:
 		glass_top = sign_y0 - 0.10
 	var pil := 0.24 if is_zh_shop else 0.32
 	var ctx := {"o": o, "u": U, "n": N, "st": fst}
 
-	# Pilasters + Unified Granite Podium Cornice (locks flush wall-to-wall rows into the building base!)
-	var pil_c := Color(0.68, 0.66, 0.62) if is_zh_shop else frame_c
+	# Varied Pilaster Claddings (granite / dark slate / warm wood / brick / charcoal) + Unified Podium Cornice
+	var zh_pil_pal := [
+		Color(0.68, 0.66, 0.62), Color(0.32, 0.34, 0.37), Color(0.56, 0.40, 0.26),
+		Color(0.62, 0.34, 0.26), Color(0.76, 0.72, 0.65), Color(0.24, 0.25, 0.28),
+	]
+	var pil_c: Color = zh_pil_pal[v_var % zh_pil_pal.size()] if is_zh_shop else frame_c
 	_box(ctx, 0.0, pil, 0.0, sign_y0, 0.0, 0.32, pil_c)
 	_box(ctx, w - pil, w, 0.0, sign_y0, 0.0, 0.32, pil_c)
 	if is_zh_shop:
@@ -315,6 +353,20 @@ static func _build_one(fst: SurfaceTool, gst: SurfaceTool, labels: Node3D, sf: D
 		_box(ctx, 0.0, w, gh - 0.12, gh + 0.06, 0.0, 0.44, Color(0.74, 0.72, 0.68))
 		_box(ctx, 0.0, pil, 0.0, 0.44, 0.0, 0.35, Color(0.32, 0.33, 0.35))
 		_box(ctx, w - pil, w, 0.0, 0.44, 0.0, 0.35, Color(0.32, 0.33, 0.35))
+		# Distinctive business-type storefront accents: pharmacy green cross / barber pole / decorative neon frame!
+		var k_zh := str(sf.get("kind", ""))
+		if k_zh == "pharmacy":
+			var gx_c := w - 0.55 if (v_var % 2 == 0) else 0.55
+			_box(ctx, gx_c - 0.26, gx_c + 0.26, sign_y0 + 0.32, sign_y0 + 0.52, sign_d, sign_d + 0.08, Color(0.06, 0.78, 0.28))
+			_box(ctx, gx_c - 0.10, gx_c + 0.10, sign_y0 + 0.16, sign_y0 + 0.68, sign_d, sign_d + 0.08, Color(0.06, 0.78, 0.28))
+		elif k_zh == "hairdresser":
+			var bx_p := 0.28 if (v_var % 2 == 0) else (w - 0.28)
+			_box(ctx, bx_p - 0.09, bx_p + 0.09, 1.55, 2.35, 0.32, 0.50, Color(0.92, 0.94, 0.96))
+			_box(ctx, bx_p - 0.095, bx_p + 0.095, 1.72, 1.92, 0.33, 0.51, Color(0.86, 0.12, 0.14))
+			_box(ctx, bx_p - 0.095, bx_p + 0.095, 2.02, 2.22, 0.33, 0.51, Color(0.10, 0.32, 0.82))
+		elif k_zh in ["cafe", "bakery"] and v_var % 3 == 0:
+			# Warm slatted timber shopfront accent header & flower planter box
+			_box(ctx, pil, w - pil, sign_y0 - 0.08, sign_y0, 0.04, 0.30, Color(0.56, 0.38, 0.22))
 	if bool(st["letters"]):
 		# Stone fascia band with raised individual letters
 		_box(ctx, 0.0, w, sign_y0, sign_y1, 0.0, 0.22, Color(0.80, 0.77, 0.72))
@@ -508,7 +560,7 @@ static func _make_label(txt: String, col: Color, letters: bool) -> Label3D:
 	l.modulate = col
 	l.double_sided = false
 	l.shaded = letters
-	l.visibility_range_end = 155.0
+	l.visibility_range_end = 110.0
 	l.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	l.render_priority = 1
 	return l

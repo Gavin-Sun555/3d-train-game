@@ -28,6 +28,9 @@ static func build(root: Node3D, lm: Dictionary, lights: Array) -> void:
 	if lm.has("jiaxing_no1_school"):
 		var s: Dictionary = lm["jiaxing_no1_school"]
 		_jiaxing_no1_school(root, _p(s["pos"]), float(s.get("angle", 0.0)), lights)
+	if lm.has("hanlin_residence"):
+		var hl: Dictionary = lm["hanlin_residence"]
+		_hanlin_residence_and_skybridge(root, _p(hl["pos"]), _p(hl.get("bridge_pos", [1432.1, 1531.9])), float(hl.get("angle", 0.20)), lights)
 	if lm.has("yuehe_quarter"):
 		var y: Dictionary = lm["yuehe_quarter"]
 		_yuehe_quarter(root, y, lights)
@@ -239,7 +242,10 @@ static func _nanhu_gate(parent: Node3D, center: Vector3, angle: float, lights: A
 
 
 # =============================================================================================
-# 3. 南湖景区 · 南湖天地 (Nanhu Tiandi Lakeside Heritage & Modern Commercial Complex)
+# 3. 南湖景区 · 南湖天地 & 嘉兴南湖凯悦酒店 (Nanhu Tiandi Flagship Waterfront Commercial Complex + Hyatt Nanhu)
+#    Jiaxing's #1 lakefront destination: 嘉绢印象 (1920s red-brick sawtooth silk mill & 34m brick chimney),
+#    鸳湖里弄 / 堰月街区 (8 sculpted Jiangnan zinc-and-glass pavilions, sky-decks & amphitheater),
+#    230m stepped lakeside timber promenade, AND 嘉兴南湖凯悦酒店 (Hyatt Nanhu lakeside resort hotel)!
 # =============================================================================================
 static func _nanhu_tiandi(parent: Node3D, center: Vector3, lights: Array) -> void:
 	var td := Node3D.new()
@@ -247,40 +253,140 @@ static func _nanhu_tiandi(parent: Node3D, center: Vector3, lights: Array) -> voi
 	td.position = center
 	parent.add_child(td)
 
-	var brick := _mat(Color(0.58, 0.27, 0.21), 0.78)
-	var cream := _mat(Color(0.88, 0.86, 0.81), 0.76)
-	var slate := _mat(Color(0.22, 0.24, 0.28), 0.52, 0.12)
-	var deck := _mat(Color(0.58, 0.46, 0.34), 0.80)
-	var glass := _glass(Color(0.32, 0.48, 0.60), 0.62)
-	var warm := _emissive(Color(1.0, 0.88, 0.66), 1.0)
+	var brick := _mat(Color(0.58, 0.25, 0.19), 0.78)
+	var brick_dk := _mat(Color(0.42, 0.18, 0.14), 0.82)
+	var travertine := _mat(Color(0.86, 0.82, 0.75), 0.62)
+	var stone_plaza := _mat(Color(0.79, 0.77, 0.73), 0.78)
+	var slate := _mat(Color(0.18, 0.20, 0.24), 0.44, 0.24)
+	var bronze := _mat(Color(0.36, 0.28, 0.20), 0.36, 0.62)
+	var cedar := _mat(Color(0.60, 0.42, 0.26), 0.72)
+	var deck := _mat(Color(0.55, 0.41, 0.28), 0.76)
+	var glass := _glass(Color(0.24, 0.44, 0.58), 0.60)
+	var glass_rail := _glass(Color(0.55, 0.76, 0.86), 0.42)
+	var warm := _emissive(Color(1.0, 0.88, 0.64), 1.4)
+	var gold_led := _emissive(Color(1.0, 0.78, 0.36), 1.9)
+	var pool_water := _mat(Color(0.14, 0.42, 0.52), 0.14, 0.22)
+	var willow := _mat(Color(0.24, 0.50, 0.22), 0.84)
+	var trunk := _mat(Color(0.30, 0.22, 0.16), 0.88)
 
-	# Lakeside timber waterfront promenade deck (flush low height y=0.05)
-	_box(td, Vector3(18.0, 0.08, 175.0), Vector3(-42.0, 0.04, 0.0), deck, 0.0, 0.0, 0.0, false)
+	# --- A. 230m Multi-Level Lakeside Timber Boardwalk, Stone Plazas & Sunken Amphitheater (亲水长廊) ---
+	_box(td, Vector3(112.0, 0.08, 226.0), Vector3(10.0, 0.04, 6.0), stone_plaza, 0.0, 0.0, 0.0, false)
+	# Cantilevered lakeside wooden promenade + glass balustrade + warm linear LED strip
+	_box(td, Vector3(16.0, 0.28, 224.0), Vector3(-44.0, 0.18, 6.0), deck, 0.0, 0.0, 0.0, false)
+	_box(td, Vector3(0.16, 1.05, 222.0), Vector3(-51.6, 0.85, 6.0), glass_rail, 0.0, 0.0, 0.0, false)
+	_box(td, Vector3(0.24, 0.14, 222.0), Vector3(-51.6, 0.34, 6.0), gold_led, 0.0, 0.0, 0.0, false)
+	# Stepped lakefront amphitheater viewing terraces + architectural water-mirror pool at center plaza
+	for step_i in range(4):
+		var st_w := 34.0 - float(step_i) * 3.2
+		_box(td, Vector3(st_w, 0.24, 28.0 - float(step_i) * 2.2), Vector3(-34.0 + float(step_i) * 1.4, 0.16 + float(step_i) * 0.22, 18.0), stone_plaza, 0.0, 0.0, 0.0, false)
+	_box(td, Vector3(18.0, 0.12, 26.0), Vector3(-16.0, 0.10, -2.0), pool_water, 0.0, 0.0, 0.0, false)
+	# Lakeside willow & camphor tree grove along the waterfront deck
+	for wz in range(-96, 114, 18):
+		if absf(float(wz) - 18.0) < 16.0:
+			continue
+		_cyl(td, 0.22, 0.34, 3.6, Vector3(-39.0, 1.9, float(wz)), trunk, 6)
+		_cyl(td, 2.2, 4.4, 4.8, Vector3(-39.0, 5.2, float(wz)), willow, 8)
 
-	# 5 staggered contemporary Jiangnan glass-and-slate waterfront pavilions (嘉绢印象 / 鸳湖里弄)
-	var specs := [
-		[Vector3(-12.0, 0.0, -64.0), Vector3(34.0, 11.0, 24.0), false],
-		[Vector3(14.0, 0.0, -26.0), Vector3(42.0, 13.5, 28.0), true],  # Historic red-brick silk mill
-		[Vector3(-10.0, 0.0, 16.0), Vector3(38.0, 11.5, 26.0), false],
-		[Vector3(18.0, 0.0, 56.0), Vector3(36.0, 10.5, 24.0), false],
-		[Vector3(-14.0, 0.0, 88.0), Vector3(30.0, 9.5, 22.0), true],
+	# --- B. Zone 1: 嘉绢印象 — 1920s Red-Brick Silk Mill Heritage Halls (Sawtooth Roofs & 34m Brick Chimney!) ---
+	# Main silk-mill exhibition & flagship retail hall (z = -24, x = +16)
+	_box(td, Vector3(48.0, 12.2, 34.0), Vector3(16.0, 6.1, -24.0), brick)
+	_box(td, Vector3(48.5, 4.4, 30.0), Vector3(16.0, 2.3, -24.0), glass)
+	_box(td, Vector3(46.0, 3.6, 28.0), Vector3(16.0, 2.1, -24.0), warm, 0.0, 0.0, 0.0, false)
+	# Signature red-brick pilasters & dark-steel industrial arched window mullions
+	for px_m in range(-18, 22, 8):
+		_box(td, Vector3(1.1, 12.6, 34.8), Vector3(16.0 + float(px_m), 6.3, -24.0), brick_dk)
+	# 4 iconic serrated industrial sawtooth skylight roofs (锯齿形厂房屋顶)
+	for st_i in range(4):
+		var sz_r := -36.0 + float(st_i) * 8.0
+		_box(td, Vector3(49.5, 0.45, 7.6), Vector3(16.0, 13.6, sz_r), slate, 0.0, 0.0, 0.34)
+		_box(td, Vector3(48.5, 2.3, 0.22), Vector3(16.0, 13.5, sz_r + 3.4), glass)
+	# Iconic 34m Historic Octagonal Red-Brick Silk Mill Chimney Landmark (嘉绢老烟囱!)
+	_cyl(td, 2.1, 3.6, 33.0, Vector3(-16.0, 16.5, -36.0), brick, 8)
+	_cyl(td, 2.5, 2.5, 0.9, Vector3(-16.0, 32.8, -36.0), brick_dk, 8)
+	_cyl(td, 2.65, 2.65, 0.42, Vector3(-16.0, 29.0, -36.0), gold_led, 8)
+	_sign(td, "嘉 绢 印 象", Vector3(-8.4, 10.6, -24.0), -PI * 0.5, 68, 0.024, Color(0.98, 0.88, 0.52))
+
+	# --- C. Zone 2: 鸳湖里弄 & 堰月街区 — 7 Contemporary Jiangnan Glass-and-Zinc Commercial Pavilions ---
+	# Each pavilion features sweeping cantilevered zinc eaves, warm cedar soffits, double-height glazing,
+	# lit retail interiors, 2F panoramic lakeside dining terraces & flagship brand fascia signs!
+	var pav_specs := [
+		[Vector3(-12.0, 0.0, 32.0), Vector3(36.0, 10.8, 24.0), "星巴克臻选 · 喜茶"],
+		[Vector3(28.0, 0.0, 26.0), Vector3(34.0, 12.0, 26.0), "霸王茶姬 · 华为旗舰"],
+		[Vector3(-14.0, 0.0, 66.0), Vector3(38.0, 11.2, 24.0), "外婆家 · 鸳湖里弄"],
+		[Vector3(28.0, 0.0, 68.0), Vector3(36.0, 10.6, 26.0), "优衣库 · 堰月街区"],
+		[Vector3(-12.0, 0.0, 100.0), Vector3(34.0, 9.8, 22.0), "南湖书院 · 文创馆"],
+		[Vector3(28.0, 0.0, 102.0), Vector3(32.0, 10.4, 22.0), "江南丝绸生活馆"],
 	]
-	for sp: Array in specs:
+	for sp: Array in pav_specs:
 		var p: Vector3 = sp[0]
 		var sz: Vector3 = sp[1]
-		var is_brick: bool = sp[2]
-		_box(td, sz, p + Vector3(0.0, sz.y * 0.5, 0.0), brick if is_brick else cream)
-		_box(td, Vector3(sz.x + 0.3, 4.2, sz.z - 4.0), p + Vector3(0.0, 2.2, 0.0), glass)
-		_box(td, Vector3(sz.x - 1.5, 3.6, sz.z - 5.0), p + Vector3(0.0, 2.0, 0.0), warm, 0.0, 0.0, 0.0, false)
-		# Crisp pitched Jiangnan dark-slate gable roof
-		_box(td, Vector3(sz.x + 3.2, 0.55, sz.z * 0.62), p + Vector3(0.0, sz.y + 1.5, -sz.z * 0.24), slate, 0.0, 0.0, 0.38)
-		_box(td, Vector3(sz.x + 3.2, 0.55, sz.z * 0.62), p + Vector3(0.0, sz.y + 1.5, sz.z * 0.24), slate, 0.0, 0.0, -0.38)
+		var sign_txt: String = sp[2]
+		# Limestone ground/upper core + crystal floor-to-ceiling retail curtain walls + glowing warm interiors
+		_box(td, sz, p + Vector3(0.0, sz.y * 0.5, 0.0), travertine)
+		_box(td, Vector3(sz.x + 0.35, 4.6, sz.z - 3.6), p + Vector3(0.0, 2.4, 0.0), glass)
+		_box(td, Vector3(sz.x - 3.6, 4.6, sz.z + 0.35), p + Vector3(0.0, 2.4, 0.0), glass)
+		_box(td, Vector3(sz.x - 1.6, 3.9, sz.z - 5.2), p + Vector3(0.0, 2.1, 0.0), warm, 0.0, 0.0, 0.0, false)
+		# 2F cantilevered panoramic lakeside terrace deck with bronze handrail
+		_box(td, Vector3(sz.x + 4.4, 0.42, sz.z + 4.4), p + Vector3(0.0, 5.1, 0.0), bronze)
+		_box(td, Vector3(sz.x + 4.2, 1.0, 0.14), p + Vector3(0.0, 5.8, sz.z * 0.5 + 2.1), glass_rail, 0.0, 0.0, 0.0, false)
+		_box(td, Vector3(0.14, 1.0, sz.z + 4.2), p + Vector3(-sz.x * 0.5 - 2.1, 5.8, 0.0), glass_rail, 0.0, 0.0, 0.0, false)
+		# Dramatic sweeping double-pitched dark-zinc Jiangnan roof with warm cedar timber eaves soffit
+		_box(td, Vector3(sz.x + 5.0, 0.32, sz.z + 4.6), p + Vector3(0.0, sz.y + 0.15, 0.0), cedar)
+		_box(td, Vector3(sz.x + 5.6, 0.52, sz.z * 0.64), p + Vector3(0.0, sz.y + 1.65, -sz.z * 0.25), slate, 0.0, 0.0, 0.34)
+		_box(td, Vector3(sz.x + 5.6, 0.52, sz.z * 0.64), p + Vector3(0.0, sz.y + 1.65, sz.z * 0.25), slate, 0.0, 0.0, -0.34)
+		_box(td, Vector3(sz.x + 5.8, 0.35, 0.55), p + Vector3(0.0, sz.y + 3.2, 0.0), bronze)
+		_sign(td, sign_txt, p + Vector3(-sz.x * 0.5 - 0.35, 5.6, 0.0), -PI * 0.5, 48, 0.020, Color(0.98, 0.90, 0.58))
+	# Elevated glass-and-bronze pedestrian skybridge linking 嘉绢印象 & 鸳湖里弄 courtyards
+	_box(td, Vector3(12.0, 0.55, 22.0), Vector3(8.0, 5.2, 2.0), bronze)
+	_box(td, Vector3(11.6, 2.8, 22.0), Vector3(8.0, 6.8, 2.0), glass_rail, 0.0, 0.0, 0.0, false)
 
-	# Iconic illuminated waterfront landmark sign "南 湖 天 地" facing Nanhu Lake
-	_box(td, Vector3(1.2, 7.0, 18.0), Vector3(-36.0, 3.5, 0.0), slate)
-	_sign(td, "南 湖 天 地", Vector3(-36.8, 4.4, 0.0), -PI * 0.5, 86, 0.028, Color(0.98, 0.86, 0.42))
-	_sign(td, "NANHU TIANDI", Vector3(-36.8, 2.3, 0.0), -PI * 0.5, 34, 0.022, Color(0.95, 0.96, 0.98))
-	_add_light(td, Vector3(-28.0, 10.0, 0.0), Color(1.0, 0.86, 0.62), 54.0, lights)
+	# --- D. Zone 3: 嘉兴南湖凯悦酒店 (Hyatt Nanhu — Sculptural Lakeside Luxury Resort Hotel!) ---
+	var hy := Node3D.new()
+	hy.name = "NanhuHyattHotel"
+	hy.position = Vector3(10.0, 0.0, -88.0)
+	td.add_child(hy)
+	# Grand granite arrival plaza, reflecting water mirror & cantilevered bronze porte-cochère canopy
+	_box(hy, Vector3(84.0, 0.14, 62.0), Vector3(0.0, 0.07, 0.0), stone_plaza, 0.0, 0.0, 0.0, false)
+	_box(hy, Vector3(24.0, 0.12, 10.0), Vector3(-22.0, 0.14, 24.0), pool_water, 0.0, 0.0, 0.0, false)
+	_box(hy, Vector3(22.0, 0.75, 11.0), Vector3(24.0, 5.4, 22.0), bronze)
+	_box(hy, Vector3(22.4, 0.25, 11.4), Vector3(24.0, 5.85, 22.0), gold_led, 0.0, 0.0, 0.0, false)
+	for pc_x: float in [15.0, 33.0]:
+		_cyl(hy, 0.38, 0.42, 5.4, Vector3(pc_x, 2.7, 26.0), travertine, 10)
+	# Double-height crystal glass lobby & lakeside banquet ballroom wing (west wing facing Nanhu Lake)
+	_box(hy, Vector3(68.0, 7.6, 28.0), Vector3(2.0, 3.8, 0.0), travertine)
+	_box(hy, Vector3(62.0, 6.2, 28.6), Vector3(2.0, 3.3, 0.0), glass)
+	_box(hy, Vector3(56.0, 5.2, 24.0), Vector3(2.0, 2.8, 0.0), warm, 0.0, 0.0, 0.0, false)
+	# Sculptural stepped L-shaped 7-story resort guestroom wings (29m main + 21m lake-view step-down!)
+	_box(hy, Vector3(58.0, 22.0, 20.0), Vector3(8.0, 18.6, -4.0), travertine)
+	_box(hy, Vector3(52.0, 18.5, 20.6), Vector3(8.0, 18.6, -4.0), glass)
+	_box(hy, Vector3(22.0, 14.0, 32.0), Vector3(-24.0, 14.6, 4.0), travertine)
+	_box(hy, Vector3(22.6, 11.2, 26.0), Vector3(-24.0, 14.6, 4.0), glass)
+	# Signature champagne-bronze horizontal floor slabs, balcony railings & vertical travertine fins
+	for fy_h: float in [11.2, 15.0, 18.8, 22.6, 26.4, 29.8]:
+		_box(hy, Vector3(60.5, 0.55, 22.4), Vector3(8.0, fy_h, -4.0), bronze)
+	for fy_w: float in [11.2, 15.0, 18.8, 21.8]:
+		_box(hy, Vector3(24.4, 0.52, 34.0), Vector3(-24.0, fy_w, 4.0), bronze)
+	for fin_x in range(-18, 36, 9):
+		_box(hy, Vector3(0.85, 22.4, 21.8), Vector3(float(fin_x), 18.6, -4.0), travertine)
+	# Rooftop sky-lounge canopy, glowing cornice line & panoramic garden terrace
+	_box(hy, Vector3(61.5, 0.35, 23.0), Vector3(8.0, 30.2, -4.0), gold_led, 0.0, 0.0, 0.0, false)
+	_box(hy, Vector3(36.0, 3.6, 14.0), Vector3(8.0, 31.8, -4.0), glass)
+	_box(hy, Vector3(42.0, 0.85, 18.0), Vector3(8.0, 34.0, -4.0), slate)
+	# Crisp illuminated Hyatt signage facing Nanhu Lake (West), South plaza & East (纺工路 / T1!)
+	_sign(hy, "嘉兴南湖凯悦酒店", Vector3(-35.6, 20.6, 4.0), -PI * 0.5, 86, 0.030, Color(0.98, 0.88, 0.44))
+	_sign(hy, "H Y A T T   N A N H U", Vector3(-35.6, 17.6, 4.0), -PI * 0.5, 44, 0.024, Color(0.96, 0.96, 0.98))
+	_sign(hy, "嘉兴南湖凯悦酒店", Vector3(38.6, 26.2, -4.0), PI * 0.5, 90, 0.032, Color(0.98, 0.88, 0.44))
+	_sign(hy, "H Y A T T", Vector3(38.6, 22.8, -4.0), PI * 0.5, 52, 0.026, Color(0.96, 0.96, 0.98))
+	_sign(hy, "嘉兴南湖凯悦酒店 · HYATT", Vector3(8.0, 28.4, 7.6), 0.0, 74, 0.028, Color(0.98, 0.88, 0.44))
+
+	# Iconic illuminated waterfront landmark sign "南 湖 天 地" facing Nanhu Lake & East T1 approach
+	_box(td, Vector3(1.4, 7.6, 22.0), Vector3(-42.0, 3.8, 18.0), slate)
+	_box(td, Vector3(1.6, 0.32, 22.4), Vector3(-42.0, 7.6, 18.0), gold_led, 0.0, 0.0, 0.0, false)
+	_sign(td, "南 湖 天 地", Vector3(-43.0, 4.8, 18.0), -PI * 0.5, 96, 0.030, Color(0.98, 0.86, 0.42))
+	_sign(td, "NANHU TIANDI", Vector3(-43.0, 2.5, 18.0), -PI * 0.5, 38, 0.022, Color(0.95, 0.96, 0.98))
+	_sign(td, "南 湖 天 地 · NANHU TIANDI", Vector3(52.0, 8.8, 14.0), PI * 0.5, 86, 0.028, Color(0.98, 0.86, 0.42))
+	_add_light(td, Vector3(-28.0, 12.0, 18.0), Color(1.0, 0.86, 0.62), 68.0, lights)
+	_add_light(hy, Vector3(14.0, 14.0, 20.0), Color(1.0, 0.88, 0.66), 68.0, lights)
 
 
 # =============================================================================================
@@ -516,6 +622,133 @@ static func _jiaxing_no1_school(parent: Node3D, center: Vector3, angle: float, l
 
 	_add_light(sc, Vector3(-206.0, 12.0, -34.0), Color(1.0, 0.90, 0.72), 62.0, lights)
 	_add_light(sc, Vector3(-28.0, 11.0, 192.0), Color(1.0, 0.90, 0.72), 48.0, lights)
+	# Wide paved West Gate forecourt apron extending cleanly westward to 纺工路 east sidewalk (zero visual gap!)
+	_box(sc, Vector3(48.0, 0.055, 220.0), Vector3(-232.0, 0.028, 12.0), warm_stone, 0.0, 0.0, 0.0, false)
+
+
+# =============================================================================================
+# 5B. 嘉兴一中过街人行天桥 (直达中央有轨电车嘉兴一中站) + 纺工路西侧 瀚林府邸 (Hanlin Residence)
+# =============================================================================================
+static func _hanlin_residence_and_skybridge(parent: Node3D, hanlin_center: Vector3, bridge_center: Vector3, angle: float, lights: Array) -> void:
+	var stone := _mat(Color(0.84, 0.81, 0.76), 0.72)
+	var stone_dk := _mat(Color(0.56, 0.54, 0.51), 0.76)
+	var cream := _mat(Color(0.90, 0.87, 0.81), 0.68)
+	var roof_slate := _mat(Color(0.22, 0.25, 0.30), 0.52, 0.14)
+	var steel_white := _mat(Color(0.92, 0.94, 0.96), 0.34, 0.42)
+	var bronze := _mat(Color(0.40, 0.32, 0.22), 0.38, 0.62)
+	var glass := _glass(Color(0.28, 0.50, 0.66), 0.56)
+	var glow := _emissive(Color(1.0, 0.90, 0.64), 1.5)
+	var lawn := _mat(Color(0.22, 0.46, 0.22), 0.90)
+	var water := _mat(Color(0.16, 0.44, 0.54), 0.16, 0.20)
+	var trunk := _mat(Color(0.30, 0.22, 0.16), 0.88)
+	var foliage := _mat(Color(0.19, 0.44, 0.20), 0.85)
+	var barrier := _mat(Color(0.88, 0.22, 0.16), 0.48)
+
+	# --- A. 嘉兴一中人行过街天桥 (Pedestrian Overpass Skybridge spanning 纺工路 + direct drop to Tram T1 嘉兴一中站!) ---
+	var sb := Node3D.new()
+	sb.name = "JiaxingNo1Skybridge"
+	sb.position = bridge_center
+	sb.rotation.y = angle
+	parent.add_child(sb)
+
+	# Main elevated steel-and-glass skybridge span at y = +5.75m (clears 4.8m tram & road lanes cleanly!)
+	_box(sb, Vector3(39.0, 0.52, 4.6), Vector3(0.0, 5.75, 0.0), steel_white)
+	_box(sb, Vector3(39.0, 0.18, 4.8), Vector3(0.0, 5.42, 0.0), bronze)
+	# Sleek curved glass side parapets & translucent architectural roof canopy
+	for zs: float in [-2.22, 2.22]:
+		_box(sb, Vector3(38.5, 1.35, 0.12), Vector3(0.0, 6.65, zs), glass, 0.0, 0.0, 0.0, false)
+	_box(sb, Vector3(39.6, 0.24, 5.4), Vector3(0.0, 8.65, 0.0), steel_white)
+	for px_r in range(-18, 20, 6):
+		_box(sb, Vector3(0.18, 2.7, 0.18), Vector3(float(px_r), 7.25, -2.25), steel_white)
+		_box(sb, Vector3(0.18, 2.7, 0.18), Vector3(float(px_r), 7.25, 2.25), steel_white)
+	# Supporting steel portal piers strictly outside the carriageway (x = +-16.5m) & glass elevator cores
+	for side_x: float in [-17.5, 17.5]:
+		_cyl(sb, 0.42, 0.48, 5.6, Vector3(side_x, 2.8, -1.6), steel_white, 10)
+		_cyl(sb, 0.42, 0.48, 5.6, Vector3(side_x, 2.8, 1.6), steel_white, 10)
+		# Glass elevator shaft + covered stair ramp landing on East (嘉兴一中) & West (瀚林府邸) sidewalks
+		_box(sb, Vector3(2.8, 8.2, 2.8), Vector3(side_x + signf(side_x) * 2.2, 4.1, -3.2), glass)
+		_box(sb, Vector3(3.1, 0.45, 3.1), Vector3(side_x + signf(side_x) * 2.2, 8.3, -3.2), steel_white)
+		# Sloped pedestrian stair flight running north along the sidewalk (y: 5.75 -> 0.0 over 14m)
+		_box(sb, Vector3(3.0, 0.45, 15.2), Vector3(side_x + signf(side_x) * 1.6, 2.85, 8.8), steel_white, 0.0, 0.0, 0.37)
+		_box(sb, Vector3(3.2, 0.22, 15.4), Vector3(side_x + signf(side_x) * 1.6, 5.45, 8.8), glass, 0.0, 0.0, 0.37, false)
+	# Central Station Drop Stairway & Elevator descending directly into the central 嘉兴一中站 tram platform!
+	_box(sb, Vector3(2.5, 0.42, 13.8), Vector3(0.0, 2.85, -8.2), steel_white, 0.0, 0.0, -0.39)
+	_box(sb, Vector3(2.6, 0.20, 14.0), Vector3(0.0, 5.35, -8.2), glass, 0.0, 0.0, -0.39, false)
+	_box(sb, Vector3(2.4, 7.6, 2.4), Vector3(0.0, 3.8, 3.6), glass)
+	_box(sb, Vector3(2.7, 0.38, 2.7), Vector3(0.0, 7.7, 3.6), steel_white)
+	# Overhead bridge signs facing both north & south along 纺工路!
+	_sign(sb, "嘉 兴 一 中 站  ·  过 街 天 桥", Vector3(0.0, 6.9, 2.42), 0.0, 66, 0.024, Color(0.98, 0.90, 0.44))
+	_sign(sb, "嘉 兴 一 中 站  ·  过 街 天 桥", Vector3(0.0, 6.9, -2.42), PI, 66, 0.024, Color(0.98, 0.90, 0.44))
+	_add_light(sb, Vector3(0.0, 8.0, 0.0), Color(1.0, 0.94, 0.80), 42.0, lights)
+
+	# --- B. 瀚林府邸 (Hanlin Residence — Upscale Chinese Gated Residential Community directly opposite 嘉兴一中!) ---
+	var hl := Node3D.new()
+	hl.name = "HanlinResidence"
+	hl.position = hanlin_center
+	hl.rotation.y = angle
+	parent.add_child(hl)
+
+	# Compound footprint: local x in [-105 .. +105] (210m E-W), z in [-142 .. +142] (284m N-S)
+	_box(hl, Vector3(204.0, 0.05, 278.0), Vector3(0.0, 0.025, 0.0), lawn, 0.0, 0.0, 0.0, false)
+	# Internal paved community paths + central courtyard reflecting pool & timber pavilion
+	_box(hl, Vector3(178.0, 0.07, 8.0), Vector3(0.0, 0.04, 18.0), stone, 0.0, 0.0, 0.0, false)
+	_box(hl, Vector3(8.0, 0.07, 240.0), Vector3(0.0, 0.04, 0.0), stone, 0.0, 0.0, 0.0, false)
+	_box(hl, Vector3(26.0, 0.12, 16.0), Vector3(4.0, 0.08, -8.0), water, 0.0, 0.0, 0.0, false)
+	_box(hl, Vector3(14.0, 0.4, 10.0), Vector3(4.0, 4.2, -26.0), bronze)
+	for px_p: float in [-2.2, 10.2]:
+		for pz_p: float in [-30.0, -22.0]:
+			_cyl(hl, 0.20, 0.22, 4.2, Vector3(px_p, 2.1, pz_p), stone_dk, 8)
+
+	# Enclosed neoclassical perimeter wall (stone plinth + dark-iron fence) with Grand East Gate facing 纺工路!
+	for z_w: float in [-138.0, 138.0]:
+		_box(hl, Vector3(204.0, 2.2, 0.6), Vector3(0.0, 1.1, z_w), cream, 0.0, 0.0, 0.0, false)
+	_box(hl, Vector3(0.6, 2.2, 276.0), Vector3(-102.0, 1.1, 0.0), cream, 0.0, 0.0, 0.0, false)
+	# East wall facing 纺工路 with 26m grand gateway opening at z = +18 (aligned right by the skybridge!)
+	_box(hl, Vector3(0.7, 2.4, 140.0), Vector3(102.0, 1.2, -68.0), cream, 0.0, 0.0, 0.0, false)
+	_box(hl, Vector3(0.7, 2.4, 104.0), Vector3(102.0, 1.2, 86.0), cream, 0.0, 0.0, 0.0, false)
+	# Grand Neoclassical East Gatehouse (瀚林府邸大门) + security lodge & boom barriers facing EAST (+X)
+	_box(hl, Vector3(5.2, 1.2, 28.0), Vector3(102.0, 7.6, 18.0), stone)
+	_box(hl, Vector3(6.4, 0.85, 30.5), Vector3(102.0, 8.5, 18.0), roof_slate)
+	for gz_h: float in [6.0, 12.5, 23.5, 30.0]:
+		_box(hl, Vector3(3.0, 7.6, 2.2), Vector3(102.0, 3.8, gz_h), cream)
+		_box(hl, Vector3(3.4, 0.65, 2.6), Vector3(102.0, 7.0, gz_h), bronze)
+	_box(hl, Vector3(4.2, 3.4, 6.2), Vector3(98.5, 1.7, 18.0), cream)
+	_box(hl, Vector3(0.22, 0.16, 4.6), Vector3(101.5, 1.05, 15.2), barrier, 0.0, 0.0, 0.0, false)
+	_box(hl, Vector3(0.22, 0.16, 4.6), Vector3(101.5, 1.05, 20.8), barrier, 0.0, 0.0, 0.0, false)
+	_sign(hl, "瀚  林  府  邸", Vector3(104.8, 7.7, 18.0), PI * 0.5, 84, 0.030, Color(0.98, 0.86, 0.36))
+	_sign(hl, "HANLIN RESIDENCE", Vector3(104.8, 6.3, 18.0), PI * 0.5, 38, 0.022, Color(0.95, 0.96, 0.98))
+
+	# 8 Upscale Stepped Chinese High-Rise Residential Slab Towers (新中式高层住宅楼, 28m..46m)
+	var towers := [
+		[Vector3(-56.0, 0.0, -96.0), Vector3(52.0, 38.0, 16.0)],
+		[Vector3(38.0, 0.0, -96.0), Vector3(54.0, 42.0, 16.0)],
+		[Vector3(-56.0, 0.0, -48.0), Vector3(52.0, 34.0, 16.0)],
+		[Vector3(46.0, 0.0, -48.0), Vector3(48.0, 36.0, 16.0)],
+		[Vector3(-58.0, 0.0, 56.0), Vector3(54.0, 44.0, 16.0)],
+		[Vector3(40.0, 0.0, 58.0), Vector3(52.0, 38.0, 16.0)],
+		[Vector3(-54.0, 0.0, 106.0), Vector3(56.0, 46.0, 16.0)],
+		[Vector3(42.0, 0.0, 106.0), Vector3(54.0, 40.0, 16.0)],
+	]
+	for tw: Array in towers:
+		var tp: Vector3 = tw[0]
+		var ts: Vector3 = tw[1]
+		_box(hl, ts, tp + Vector3(0.0, ts.y * 0.5, 0.0), cream)
+		_box(hl, Vector3(ts.x + 0.5, 4.2, ts.z + 0.5), tp + Vector3(0.0, 2.1, 0.0), stone_dk)
+		_box(hl, Vector3(ts.x - 4.0, ts.y - 6.0, ts.z + 0.4), tp + Vector3(0.0, ts.y * 0.5 + 1.5, 0.0), glass)
+		_box(hl, Vector3(ts.x + 2.4, 2.2, ts.z + 2.4), tp + Vector3(0.0, ts.y + 1.1, 0.0), roof_slate)
+		_box(hl, Vector3(ts.x * 0.42, 3.0, ts.z * 0.65), tp + Vector3(0.0, ts.y + 3.2, 0.0), cream)
+		_box(hl, Vector3(8.0, 3.2, 0.4), tp + Vector3(0.0, 1.8, ts.z * 0.5 + 0.35), glow, 0.0, 0.0, 0.0, false)
+	# Lush community garden trees throughout courtyard & along east promenade
+	for ti in range(42):
+		var tx := -88.0 + float(ti % 7) * 29.0
+		var tz := -122.0 + float(ti / 7) * 46.0
+		if absf(tx - 4.0) < 16.0 and absf(tz + 8.0) < 14.0:
+			continue
+		if absf(tz - 18.0) < 10.0 and tx > 55.0:
+			continue
+		_cyl(hl, 0.22, 0.32, 3.5, Vector3(tx, 1.75, tz), trunk, 6)
+		_cyl(hl, 2.2, 4.0, 4.6, Vector3(tx, 5.0, tz), foliage, 8)
+	_add_light(hl, Vector3(104.0, 10.0, 18.0), Color(1.0, 0.88, 0.64), 56.0, lights)
 
 
 # =============================================================================================

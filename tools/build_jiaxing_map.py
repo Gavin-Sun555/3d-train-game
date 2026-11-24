@@ -107,9 +107,12 @@ NANHU_TIANDI_POS = (798.0, -347.0)        # 南湖天地 (Nanhu NE lakeside comm
 MEMORIAL_POS = proj(30.74986, 120.75693)  # 南湖革命纪念馆
 GOV_POS = (-95.0, 610.0)                  # 嘉兴市人民政府
 JIAXING_NO1_POS = (1670.0, 1385.0)        # 嘉兴市第一中学 (full authentic campus east of 纺工路, north of 中环南路)
+HANLIN_POS = (1268.0, 1412.0)             # 瀚林府邸 (嘉兴一中纺工路西侧高端封闭小区)
+NO1_BRIDGE_POS = (1432.1, 1531.9)         # 嘉兴一中站人行过街天桥 (直达中央有轨电车站台)
 YUEHE_POS = (-620.0, -1930.0)             # 月河历史街区南入口牌坊 (verified dry land!)
 ZICHENG_POS = (-306.0, -816.0)            # 子城遗址公园 · 谯楼
 PINGSHAN_PARK_POS = (-325.0, -1210.0)     # 瓶山公园 (real OSM park hillock north of 中山东路建国南路)
+SHAONIAN_POS = (-485.5, -1342.0)          # 少年路步行街 (中山东路至环城北路历史商业步行街)
 JIANGNAN_MALL_POS = (-625.0, -1105.0)     # 江南大厦 (中山东路/禾兴南路东北角老牌百货地标)
 DIAMOND_PLAZA_POS = (-740.0, -900.0)      # 戴梦得大厦 · 戴梦得购物中心 (禾兴南路520号商圈地标)
 CIFI_PLAZA_POS = (-955.0, -885.0)         # 旭辉广场 (中山东路666号核心商业综合体)
@@ -1539,7 +1542,7 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
         (HAOGU_PAGODA_POS, 42.0, "haogu_pagoda"),
         (HUIJINGYUAN_POS, 64.0, "huijingyuan"),
         (NANHU_GATE_POS, 58.0, "nanhu_gate"),
-        (NANHU_TIANDI_POS, 115.0, "nanhu_tiandi"),
+        (NANHU_TIANDI_POS, 152.0, "nanhu_tiandi"),
         (MEMORIAL_POS, 105.0, "nanhu_memorial"),
         (GOV_POS, 125.0, "jiaxing_gov"),
         (JIAXING_NO1_POS, 215.0, "jiaxing_no1_school"),
@@ -1565,7 +1568,7 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
         (AIRPORT_TERM_POS, 260.0, "jiaxing_airport"),
     ]
 
-    def can_place(pts, bb, allow_in_park=False, water_margin=0.0):
+    def can_place(pts, bb, allow_in_park=False, water_margin=0.0, tight=False):
         cen = centroid(pts)
         if not in_active(cen):
             return False
@@ -1583,12 +1586,23 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
         lz_s = dx_s * sa_s + dy_s * ca_s
         if -160.0 <= lx_s <= 260.0 and -265.0 <= lz_s <= 80.0:
             return False
-        # Keep the entire Jiaxing No.1 High School (嘉兴一中) campus & 纺工路 West Gate frontage 100% free of tall towers!
-        if 1446.0 <= cen[0] <= 1906.0 and 1170.0 <= cen[1] <= 1596.0:
+        # Keep the entire Jiaxing No.1 High School (嘉兴一中) campus + diagonal 纺工路 West Gate frontage wedge
+        # 100% free of blocking tall towers, AND clear the opposite 瀚林府邸 (Hanlin Residence) compound block!
+        def _in_no1_or_hanlin(qx, qy):
+            x_fg = 1376.2 + (qy - 1260.2) * 0.2058
+            if 1162.0 <= qy <= 1602.0 and x_fg + 4.0 <= qx <= 1906.0:
+                return True
+            if 1260.0 <= qy <= 1568.0 and 1150.0 <= qx <= x_fg - 10.0:
+                return True
             return False
-        for p in pts:
-            if 1450.0 <= p[0] <= 1902.0 and 1174.0 <= p[1] <= 1592.0:
-                return False
+
+        if _in_no1_or_hanlin(cen[0], cen[1]) or any(_in_no1_or_hanlin(p[0], p[1]) for p in pts):
+            return False
+        # Keep 少年路步行街 (Shaonian Pedestrian Street: 中山东路 -> 环城北路) corridor clear for bespoke arcades!
+        if seg_dist(cen[0], cen[1], -445.0, -1065.0, -526.0, -1622.0)[0] < 22.0:
+            return False
+        if any(seg_dist(p[0], p[1], -445.0, -1065.0, -526.0, -1622.0)[0] < 18.0 for p in pts):
+            return False
         # Keep Jiaxing T1 open-cut U-trough tunnel ramps 100% free of surface buildings!
         for (rax, ray, rbx, rby) in (
             (997.81, -1170.11, 885.0, -1178.5),
@@ -1637,14 +1651,21 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
             for pp in park_grid.query(bb[0] - 2, bb[1] - 2, bb[2] + 2, bb[3] + 2):
                 if point_in_poly(cen[0], cen[1], pp):
                     return False
-        # Check overlap with existing buildings
+        # Check overlap with existing buildings (tight=True allows authentic shoulder-to-shoulder Yuehe rowhouses!)
+        pad_ov = 0.15 if tight else 1.5
         for ob in taken.query(bb[0] - 2, bb[1] - 2, bb[2] + 2, bb[3] + 2):
-            if ob[2] < bb[0] - 1.5 or ob[0] > bb[2] + 1.5 or ob[3] < bb[1] - 1.5 or ob[1] > bb[3] + 1.5:
+            if ob[2] < bb[0] - pad_ov or ob[0] > bb[2] + pad_ov or ob[3] < bb[1] - pad_ov or ob[1] > bb[3] + pad_ov:
                 continue
             if point_in_poly(cen[0], cen[1], ob[4]) or point_in_poly(*centroid(ob[4]), pts):
                 return False
-            for p in pts:
-                if point_in_poly(p[0], p[1], ob[4]):
+            if not tight:
+                for p in pts:
+                    if point_in_poly(p[0], p[1], ob[4]):
+                        return False
+            else:
+                # For tight rowhouses, only reject deep overlaps (> 45% overlap with existing footprint)
+                in_cnt = sum(1 for p in pts if point_in_poly(p[0], p[1], ob[4]))
+                if in_cnt >= 2:
                     return False
         return True
 
@@ -1799,9 +1820,9 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
                     x += step
                 y += step
 
-    # --- B2. Authentic Dry-Land-Conforming Yuehe Historic Quarter (月河历史街区 粉墙黛瓦水乡民居) ---
-    # Places dense Jiangnan 2-story white-wall/dark-gable courtyard townhouses strictly on DRY land
-    # (>= 3.5m clear of ALL real OSM canals!) framing the 14 real OSM stone bridges & pedestrian alleys!
+    # --- B2. Authentic Dense Continuous 1-2 Story Yuehe Historic Quarter (月河历史街区 连排粉墙黛瓦水乡民居) ---
+    # Packs hundreds of authentic shoulder-to-shoulder 1-2 story (4.2m..7.2m) Jiangnan watertown rowhouses
+    # strictly on DRY land lining every pedestrian stone alley & canal bank!
     yuehe_cnt = 0
     yh_foot_segs = []
     for wid, (refs, t) in ways.items():
@@ -1809,66 +1830,68 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
             fpts = [nodes[r] for r in refs if r in nodes]
             for fa, fb in zip(fpts, fpts[1:]):
                 mcx, mcy = (fa[0] + fb[0]) * 0.5, (fa[1] + fb[1]) * 0.5
-                if -890.0 <= mcx <= -390.0 and -2260.0 <= mcy <= -1860.0:
+                if -905.0 <= mcx <= -375.0 and -2275.0 <= mcy <= -1845.0:
                     yh_foot_segs.append((fa[0], fa[1], fb[0], fb[1]))
-    # First align traditional shop-houses directly along real Yuehe pedestrian alleys (中基路/小猪廊下/花鸟街)
+    # Pass 1: Continuous wall-to-wall 1-2 story Jiangnan shop-houses directly lining every Yuehe pedestrian alley!
     for (ax, ay, bx, by) in yh_foot_segs:
         sl = math.hypot(bx - ax, by - ay)
-        if sl < 8.0:
+        if sl < 6.0:
             continue
         ang = math.atan2(by - ay, bx - ax)
         ux, uy = (bx - ax) / sl, (by - ay) / sl
         nx, ny = -uy, ux
-        s = 5.0
-        while s < sl - 4.0:
+        s = 3.5
+        while s < sl - 2.5:
+            hl = rng.uniform(3.8, 5.8)
             for side in (-1.0, 1.0):
-                hl = rng.uniform(5.2, 8.2)
-                hw = rng.uniform(3.6, 5.2)
-                setb = 3.2 + hw
+                hw = rng.uniform(3.0, 4.2)
+                setb = 2.3 + hw
                 cx = ax + ux * s + nx * side * setb
                 cy = ay + uy * s + ny * side * setb
                 poly = make_rect_poly(cx, cy, ang, hl, hw)
                 pxs = [p[0] for p in poly]
                 pys = [p[1] for p in poly]
                 bb = (min(pxs), min(pys), max(pxs), max(pys))
-                if can_place(poly, bb, allow_in_park=False, water_margin=3.5):
-                    h = rng.choice([6.2, 7.2, 8.0, 8.8])
+                if can_place(poly, bb, allow_in_park=False, water_margin=1.4, tight=True):
+                    h = rng.choice([4.4, 5.2, 6.0, 6.6, 7.2])
                     out.append({
                         "pts": [rnd(p) for p in poly], "h": h, "kind": "house", "style": 3,
                         "colour": rng.choice(PALETTE_JIANGNAN),
                         "roof": pitched_roof_dict(cx, cy, ang, hl, hw, "gabled"),
-                        "roof_colour": "#242830",
+                        "roof_colour": rng.choice(["#22262e", "#262a33", "#1e222a"]),
                     })
                     taken.add((bb[0], bb[1], bb[2], bb[3], poly), *bb)
                     yuehe_cnt += 1
-            s += rng.uniform(13.0, 17.5)
-    # Second, fill remaining dry Yuehe peninsulas & canal banks with tight Jiangnan courtyard rows (strictly off water!)
-    yh_y = -2238.0
-    while yh_y <= -1874.0:
-        yh_x = -868.0
-        while yh_x <= -412.0:
-            # Leave clean stone pedestrian alleys clear
-            near_alley = any(seg_dist(yh_x, yh_y, fa, fb, fc, fd)[0] < 6.5 for (fa, fb, fc, fd) in yh_foot_segs)
+            s += hl * 1.92
+    # Pass 2: Dense continuous multi-row Jiangnan courtyard houses packing every dry Yuehe peninsula & canal bank!
+    yh_y = -2256.0
+    row_i = 0
+    while yh_y <= -1856.0:
+        yh_x = -892.0 + (3.5 if (row_i % 2 == 1) else 0.0)
+        while yh_x <= -388.0:
+            # Leave clean 4.2m stone pedestrian alleys clear
+            near_alley = any(seg_dist(yh_x, yh_y, fa, fb, fc, fd)[0] < 4.5 for (fa, fb, fc, fd) in yh_foot_segs)
             if not near_alley:
-                hl = rng.uniform(5.6, 8.6)
-                hw = rng.uniform(3.8, 5.2)
-                ang = rng.choice([0.10, 0.14, 0.18, math.pi * 0.5 + 0.14])
+                hl = rng.uniform(4.2, 6.0)
+                hw = rng.uniform(3.1, 4.1)
+                ang = rng.choice([0.12, 0.14, 0.16]) if (row_i % 4 != 3) else (math.pi * 0.5 + 0.14)
                 poly = make_rect_poly(yh_x, yh_y, ang, hl, hw)
                 pxs = [p[0] for p in poly]
                 pys = [p[1] for p in poly]
                 bb = (min(pxs), min(pys), max(pxs), max(pys))
-                if can_place(poly, bb, allow_in_park=False, water_margin=3.6):
-                    h = rng.choice([6.0, 7.0, 7.8, 8.6])
+                if can_place(poly, bb, allow_in_park=False, water_margin=1.5, tight=True):
+                    h = rng.choice([4.2, 5.0, 5.8, 6.4, 7.0])
                     out.append({
                         "pts": [rnd(p) for p in poly], "h": h, "kind": "house", "style": 3,
                         "colour": rng.choice(PALETTE_JIANGNAN),
                         "roof": pitched_roof_dict(yh_x, yh_y, ang, hl, hw, "gabled"),
-                        "roof_colour": "#252932",
+                        "roof_colour": rng.choice(["#232730", "#272b34", "#1f232b"]),
                     })
                     taken.add((bb[0], bb[1], bb[2], bb[3], poly), *bb)
                     yuehe_cnt += 1
-            yh_x += 17.5
-        yh_y += 15.5
+            yh_x += 9.8
+        yh_y += 9.0
+        row_i += 1
 
     # --- C. Street-Front Urban Fabric Infill along ALL roads (Old Town Jiangnan + Modern Avenues + HSR Corridor) ---
     street_cnt = 0
@@ -2068,28 +2091,30 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
             if in_active(p):
                 trees.append(p)
     rng_tr = random.Random(20260529)
-    # Nanhu Scenic Area (Lanxiu Garden, Haogu Peninsula, South/East lakeside groves)
-    for gx in range(-440, 920, 28):
-        for gy in range(-480, 620, 28):
-            tx = gx + rng_tr.uniform(-8.0, 8.0)
-            ty = gy + rng_tr.uniform(-8.0, 8.0)
-            if math.hypot(tx - HAOGU_PAGODA_POS[0], ty - HAOGU_PAGODA_POS[1]) < 36.0:
+    # Lush dense park & scenic woodland groves across Nanhu Scenic Area (Lanxiu Garden, Haogu Peninsula, South/East shores)
+    for gx in range(-480, 960, 12):
+        for gy in range(-520, 660, 12):
+            tx = gx + rng_tr.uniform(-4.5, 4.5)
+            ty = gy + rng_tr.uniform(-4.5, 4.5)
+            if math.hypot(tx - HAOGU_PAGODA_POS[0], ty - HAOGU_PAGODA_POS[1]) < 34.0:
                 continue
-            if math.hypot(tx - NANHU_GATE_POS[0], ty - NANHU_GATE_POS[1]) < 44.0:
+            if math.hypot(tx - NANHU_GATE_POS[0], ty - NANHU_GATE_POS[1]) < 42.0:
                 continue
-            if math.hypot(tx - HUIJINGYUAN_POS[0], ty - HUIJINGYUAN_POS[1]) < 48.0:
+            if math.hypot(tx - HUIJINGYUAN_POS[0], ty - HUIJINGYUAN_POS[1]) < 46.0:
                 continue
-            if rng_tr.random() < 0.62:
+            if math.hypot(tx - NANHU_TIANDI_POS[0], ty - NANHU_TIANDI_POS[1]) < 142.0:
+                continue
+            if rng_tr.random() < 0.78:
                 trees.append((tx, ty))
-    # Xiangjiadang Wetland Park lush dry-shore woodland & lakeside willow groves
+    # Xiangjiadang Wetland Park lush dry-shore woodland & lakeside willow groves (denser canopy!)
     xr = XIANGJIADANG_RECT
-    for gx in range(int(xr[0]) + 40, int(xr[2]) - 40, 42):
-        for gy in range(int(xr[1]) + 40, int(xr[3]) - 40, 42):
-            tx = gx + rng_tr.uniform(-14.0, 14.0)
-            ty = gy + rng_tr.uniform(-14.0, 14.0)
-            if math.hypot(tx - XIANGJIADANG_PARK_POS[0], ty - XIANGJIADANG_PARK_POS[1]) < 85.0:
+    for gx in range(int(xr[0]) + 40, int(xr[2]) - 40, 18):
+        for gy in range(int(xr[1]) + 40, int(xr[3]) - 40, 18):
+            tx = gx + rng_tr.uniform(-6.5, 6.5)
+            ty = gy + rng_tr.uniform(-6.5, 6.5)
+            if math.hypot(tx - XIANGJIADANG_PARK_POS[0], ty - XIANGJIADANG_PARK_POS[1]) < 78.0:
                 continue
-            if rng_tr.random() < 0.68:
+            if rng_tr.random() < 0.76:
                 trees.append((tx, ty))
 
     # Deduplicate lamps, crosswalks, and clearance-check trees
@@ -2109,7 +2134,7 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
 
     seen_t, d_trees = set(), []
     for tx, ty in trees:
-        c = (int(tx // 11), int(ty // 11))
+        c = (int(tx // 8), int(ty // 8))
         if c in seen_t or not in_active((tx, ty)):
             continue
         ok = True
@@ -2165,6 +2190,14 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
         ("老百姓大药房", "pharmacy"), ("海王星辰药房", "pharmacy"), ("益丰大药房", "pharmacy"),
         ("顺丰速运", "service"), ("菜鸟驿站", "service"), ("链家房产", "office"),
         ("汉庭酒店", "hotel"), ("全季酒店", "hotel"), ("亚朵酒店", "hotel"),
+        ("库迪咖啡", "cafe"), ("茶百道", "cafe"), ("书亦烧仙草", "cafe"),
+        ("美宜佳", "convenience"), ("赵一鸣零食", "convenience"), ("好特卖", "supermarket"),
+        ("百果园", "greengrocer"), ("鲜丰水果", "greengrocer"), ("钱大妈", "greengrocer"),
+        ("来伊份", "convenience"), ("周黑鸭", "fast_food"), ("巴比馒头", "fast_food"),
+        ("张亮麻辣烫", "fast_food"), ("袁记云饺", "restaurant"), ("老盛昌", "restaurant"),
+        ("好利来", "bakery"), ("必胜客", "restaurant"), ("德克士", "fast_food"),
+        ("一心堂药房", "pharmacy"), ("博士眼镜", "optician"), ("中通快递", "service"),
+        ("圆通快递", "service"), ("雅迪电动车", "hardware"), ("爱玛电动车", "hardware"),
     ]
     LOCAL_SHOPS = [
         # Authentic earthy non-chain Chinese street shops (红底白/黄字、蓝底白字、绿底白字、黄底红字等接地气招牌!)
@@ -2181,6 +2214,13 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
         ("光明眼镜店", "optician"), ("快捷商务宾馆", "hotel"), ("足浴养生会馆", "beauty"),
         ("便宜实惠百货", "convenience"), ("禾兴房产中介", "office"), ("晨光文具百货", "books"),
         ("宠物美容洗护", "service"), ("江南茶叶茶庄", "cafe"), ("老字号糕点铺", "bakery"),
+        ("嘉兴烧卖老店", "fast_food"), ("南湖卤味熟食", "fast_food"), ("桐乡煲仔饭", "restaurant"),
+        ("衢州鸭头夜宵", "restaurant"), ("小龙虾烧烤城", "restaurant"), ("手工烘焙蛋糕房", "bakery"),
+        ("鲜花绿植花艺", "florist"), ("图文广告快印", "office"), ("汽车美容洗车行", "hardware"),
+        ("盲人推拿正骨", "beauty"), ("美甲美睫工作室", "beauty"), ("棋牌品茗茶室", "cafe"),
+        ("萌宠动物医院", "service"), ("建材卫浴定制", "hardware"), ("家电空调维修", "hardware"),
+        ("名烟名酒茶行", "convenience"), ("母婴童装生活馆", "clothes"), ("品牌尾货折扣店", "clothes"),
+        ("体育用品专卖", "retail"), ("社区便民菜站", "greengrocer"), ("老城裁缝改衣", "dry_cleaning"),
     ]
     YUEHE_SHOPS = [
         ("五芳斋粽子", "restaurant", "chain"), ("月河茶馆", "cafe", "local"),
@@ -2272,21 +2312,21 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
             mx, my = (a[0] + c[0]) * 0.5, (a[1] + c[1]) * 0.5
             best_d = 1e9
             best_hw = 4.0
-            for (rax, ray, rbx, rby, hw) in road_grid.query(mx - 28, my - 28, mx + 28, my + 28):
+            for (rax, ray, rbx, rby, hw) in road_grid.query(mx - 32, my - 32, mx + 32, my + 32):
                 dd = seg_dist(mx, my, rax, ray, rbx, rby)[0] - hw
                 if dd < best_d:
                     best_d = dd
                     best_hw = hw
-            if best_d <= 18.0:
+            if best_d <= 22.0:
                 face_hits.append((best_d, best_hw, ei, a, c, el, ccw))
         face_hits.sort(key=lambda it: it[0])
-        for fh in face_hits[:2]:
+        for fh in face_hits[:3]:
             b_candidates.append((fh[0] - fh[1] * 0.70, bi, fh))
     b_candidates.sort(key=lambda it: it[0])
 
     for _prio, bi, (best_d, best_hw, ei, a, c, el, ccw) in b_candidates:
-        # ~54% of street-facing buildings carry ground-floor shops (busiest streets first), as in the real city
-        if len(storefronts) >= 45000:
+        # Dense city-wide street-front ground-floor commercial rows (~95,000+ diverse shops across Jiaxing!)
+        if len(storefronts) >= 96000:
             break
         if (bi, ei) in used_b_edges:
             continue
@@ -2295,19 +2335,19 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
         dist_nanhu = math.hypot(cen[0] - NANHU_ORIGIN[0], cen[1] - NANHU_ORIGIN[1])
         dist_hsr = math.hypot(cen[0] - SOUTH_STA_POS[0], cen[1] - SOUTH_STA_POS[1])
         dist_yuehe = math.hypot(cen[0] - YUEHE_POS[0], cen[1] - YUEHE_POS[1])
-        in_core_comm = min(dist_center, dist_nanhu) < 2600.0 or dist_hsr < 1100.0 or best_hw >= 5.2
-        prob = 0.96 if (best_hw >= 5.2 or in_core_comm) else 0.85
+        in_core_comm = min(dist_center, dist_nanhu) < 3200.0 or dist_hsr < 1400.0 or best_hw >= 4.8
+        prob = 0.99 if (best_hw >= 4.8 or in_core_comm) else 0.94
         if rng.random() > prob:
             continue
         nx, ny = ((c[1] - a[1]) / el, -(c[0] - a[0]) / el) if ccw else (-(c[1] - a[1]) / el, (c[0] - a[0]) / el)
         ux, uy = (c[0] - a[0]) / el, (c[1] - a[1]) / el
-        # Flush wall-to-wall continuous Chinese ground-floor shop rows (连排底商 — 1 to 5 seamless bays filling the entire facade!)
-        pad_end = 0.20 if el >= 9.0 else 0.12
+        # Flush wall-to-wall continuous Chinese ground-floor shop rows (连排底商 — 1 to 6 seamless bays filling the entire facade!)
+        pad_end = 0.18 if el >= 8.0 else 0.10
         usable = el - pad_end * 2.0
-        n_shops = max(1, min(5, int(round(usable / 5.8))))
+        n_shops = max(1, min(6, int(round(usable / 4.8))))
         bay_w = usable / n_shops
-        if bay_w < 3.5:
-            n_shops = max(1, int(usable // 3.8))
+        if bay_w < 3.3:
+            n_shops = max(1, int(usable // 3.5))
             bay_w = usable / n_shops
         for si in range(n_shops):
             lo = pad_end + bay_w * si
@@ -2825,53 +2865,58 @@ def build_gated_compounds(landuse_zones, ways, nodes, road_grid, water_grid, rai
     seen_c = set()
     for ring, nm in res_polys:
         c = centroid(ring)
-        seen_c.add((int(c[0] // 110), int(c[1] // 110)))
+        seen_c.add((int(c[0] // 72), int(c[1] // 72)))
     for lu, ring in landuse_zones:
         if lu != "residential":
             continue
         c = centroid(ring)
-        ck = (int(c[0] // 110), int(c[1] // 110))
-        if ck in seen_c or abs(poly_area(ring)) < 2200.0:
+        ck = (int(c[0] // 72), int(c[1] // 72))
+        if ck in seen_c or abs(poly_area(ring)) < 1600.0:
             continue
         seen_c.add(ck)
         res_polys.append((simplify_ring(ring, 4.0), ""))
 
-    # Synthesize block-hugging Chinese gated compounds across the ENTIRE Jiaxing urban fabric
-    # (old town + Nanhu New District + Xiuzhou + East Expansion + South Station/Qingfeng corridor)!
-    # Each block encloses the actual tight bounding box of residential buildings in that block so fences stay clear of roads!
+    # Synthesize block-hugging Chinese gated compounds across the ENTIRE Jiaxing residential fabric
+    # so the overwhelming majority of Chinese residential apartment clusters are enclosed gated 小区!
     synth_zones = [
-        (-3500, -3700, 5500, 4300, 175),
-        (1300, 2600, 4600, 6600, 185),
+        (-3700, -3950, 5700, 4550, 114),
+        (1100, 2400, 4800, 6800, 122),
     ]
     for x0, y0, x1, y1, step in synth_zones:
         for ex in range(x0, x1, step):
             for ey in range(y0, y1, step):
                 cx, cy = ex + step * 0.5, ey + step * 0.5
-                ck = (int(cx // 110), int(cy // 110))
-                if ck in seen_c or not in_active((cx, cy), -50.0):
+                ck = (int(cx // 72), int(cy // 72))
+                if ck in seen_c or not in_active((cx, cy), -40.0):
                     continue
-                # Never enclose Yuehe Historic Quarter, Nanhu Lake Island, or Airport
+                # Never enclose Yuehe Historic Quarter, Nanhu Lake Island, Shaonian St., Hanlin bespoke compound, or Airport
                 if math.hypot(cx - YUEHE_POS[0], cy - YUEHE_POS[1]) < 340.0:
                     continue
                 if math.hypot(cx - NANHU_ORIGIN[0], cy - NANHU_ORIGIN[1]) < 460.0:
                     continue
+                if math.hypot(cx - HANLIN_POS[0], cy - HANLIN_POS[1]) < 150.0:
+                    continue
+                if math.hypot(cx - JIAXING_NO1_POS[0], cy - JIAXING_NO1_POS[1]) < 245.0:
+                    continue
+                if seg_dist(cx, cy, -445.0, -1065.0, -526.0, -1622.0)[0] < 48.0:
+                    continue
                 if in_airport_precinct((cx, cy)):
                     continue
-                half_s = step * 0.44
+                half_s = step * 0.46
                 blk_blds = []
                 for ob in bld_grid.query(cx - half_s, cy - half_s, cx + half_s, cy + half_s):
                     bc = centroid(ob[4])
                     if abs(bc[0] - cx) <= half_s and abs(bc[1] - cy) <= half_s:
                         blk_blds.append(ob)
-                if len(blk_blds) < 3:
+                if len(blk_blds) < 2:
                     continue
                 bx0 = min(ob[0] for ob in blk_blds) - 4.0
                 by0 = min(ob[1] for ob in blk_blds) - 4.0
                 bx1 = max(ob[2] for ob in blk_blds) + 4.0
                 by1 = max(ob[3] for ob in blk_blds) + 4.0
-                if (bx1 - bx0) < 38.0 or (by1 - by0) < 38.0:
+                if (bx1 - bx0) < 30.0 or (by1 - by0) < 30.0:
                     continue
-                if (bx1 - bx0) > 210.0 or (by1 - by0) > 210.0:
+                if (bx1 - bx0) > 220.0 or (by1 - by0) > 220.0:
                     continue
                 rect_r = [(bx0, by0), (bx1, by0), (bx1, by1), (bx0, by1)]
                 seen_c.add(ck)
@@ -2879,7 +2924,7 @@ def build_gated_compounds(landuse_zones, ways, nodes, road_grid, water_grid, rai
 
     name_idx = 0
     for ring, raw_nm in res_polys:
-        if len(compounds) >= 520:
+        if len(compounds) >= 1650:
             break
         if len(ring) < 4 or len(ring) > 36:
             continue
@@ -3222,18 +3267,28 @@ def main():
     for kind_c, w_c, cpts in curated_paths:
         scenic_paths.append({"kind": kind_c, "w": w_c, "pts": [rnd(p) for p in cpts]})
 
-    # Curated Jiangnan Lakeside Scenic Gazebos (verified strictly on dry land!)
+    # Curated Jiangnan Lakeside & Urban Park Scenic Gazebos (verified strictly on dry land!)
     gazebo_cands = [
         (-215.0, -120.0),  # 揽秀园望塔亭
         (-85.0, -250.0),   # 壕股北岸亭
         (-265.0, -245.0),  # 伍相祠园亭
+        (-330.0, -10.0),   # 西南湖观荷亭
+        (-240.0, 160.0),   # 揽秀园南林亭
         (680.0, 430.0),    # 南湖东南观湖亭
         (780.0, 260.0),    # 会景园南亭
+        (560.0, 455.0),    # 南湖纪念馆东亭
+        (420.0, 475.0),    # 南湖革命广场亭
+        (105.0, -1385.0),  # 人民公园翠湖亭
+        (120.0, -1455.0),  # 人民公园林荫亭
+        (985.0, 2980.0),   # 中央公园东亭
+        (1165.0, 3110.0),  # 中央公园南亭
+        (1020.0, 3150.0),  # 中央公园西亭
         (4660.0, -5440.0), # 湘家荡西岸亭
         (4680.0, -4820.0), # 湘家荡北林亭
         (5320.0, -4360.0), # 湘家荡望湖亭
         (6410.0, -5120.0), # 湘家荡东湿地亭
         (5560.0, -6370.0), # 湘家荡南荷风亭
+        (5020.0, -6310.0), # 湘家荡荷塘月色亭
     ]
     scenic_pavilions = [{"pos": rnd(p)} for p in gazebo_cands if not pt_in_water_m(p[0], p[1], 5.5)]
 
@@ -3279,6 +3334,7 @@ def main():
         "nanhu_memorial": {"pos": rnd(MEMORIAL_POS), "angle": 0.08},
         "jiaxing_gov": {"pos": rnd(GOV_POS), "angle": 0.04},
         "jiaxing_no1_school": {"pos": rnd(JIAXING_NO1_POS), "angle": 0.02},
+        "hanlin_residence": {"pos": rnd(HANLIN_POS), "bridge_pos": rnd(NO1_BRIDGE_POS), "angle": 0.203},
         "yuehe_quarter": {
             "pos": rnd(yh_arch_pos),
             "arch_pos": rnd(yh_arch_pos),
@@ -3292,6 +3348,7 @@ def main():
         "gated_compounds": gated_compounds,
         "zicheng_park": {"pos": rnd(ZICHENG_POS), "angle": 0.05},
         "pingshan_park": {"pos": rnd(PINGSHAN_PARK_POS), "angle": 0.14},
+        "shaonian_street": {"pos": rnd(SHAONIAN_POS), "angle": 0.144},
         "jiangnan_mall": {"pos": rnd(JIANGNAN_MALL_POS), "angle": 0.16},
         "diamond_plaza": {"pos": rnd(DIAMOND_PLAZA_POS), "angle": 0.14},
         "cifi_plaza": {"pos": rnd(CIFI_PLAZA_POS), "angle": 0.17},

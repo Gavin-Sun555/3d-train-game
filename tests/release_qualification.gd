@@ -284,16 +284,20 @@ func _run() -> void:
 	var jx_jiangnan: Node = jx_lm.get_node_or_null("JiangnanDepartmentStore") if jx_lm != null else null
 	var jx_diamond: Node = jx_lm.get_node_or_null("DiamondPlazaTower") if jx_lm != null else null
 	var jx_cifi: Node = jx_lm.get_node_or_null("JiaxingCIFIPlaza") if jx_lm != null else null
+	var jx_shaonian: Node = jx_lm.get_node_or_null("ShaonianPedestrianStreet") if jx_lm != null else null
+	var jx_skybridge: Node = jx_lm.get_node_or_null("JiaxingNo1Skybridge") if jx_lm != null else null
+	var jx_hanlin: Node = jx_lm.get_node_or_null("HanlinResidence") if jx_lm != null else null
+	var jx_hyatt: Node = jx_tiandi.get_node_or_null("NanhuHyattHotel") if jx_tiandi != null else null
 	var jx_ap: Node = jx_lm.get_node_or_null("JiaxingNanhuAirport") if jx_lm != null else null
 	var jx_b1_root: Node = m._underground_landmarks_root
 	var jx_b1_hall: Node = jx_b1_root.get_node_or_null("JiaxingStationB1Hall") if jx_b1_root != null else null
 	_check(
-		jx_gov != null and jx_no1 != null and jx_yuehe != null and jx_zicheng != null and jx_cp != null and jx_haogu != null and jx_tiandi != null and jx_gate != null and jx_ap != null and jx_b1_hall != null,
-		"All iconic Jiaxing civic/scenic landmarks, B1 Station Hall, Nanhu Gate & Airport built"
+		jx_gov != null and jx_no1 != null and jx_skybridge != null and jx_hanlin != null and jx_yuehe != null and jx_zicheng != null and jx_cp != null and jx_haogu != null and jx_tiandi != null and jx_hyatt != null and jx_gate != null and jx_ap != null and jx_b1_hall != null,
+		"All iconic Jiaxing civic/scenic landmarks built (No.1 High School + Skybridge + Hanlin, Nanhu Tiandi + Hyatt Hotel, B1 Hall, Airport)"
 	)
 	_check(
-		jx_church != null and jx_h1 != null and jx_h2 != null and jx_h3 != null and jx_yaohan != null and jx_ybr != null and jx_hilton != null and jx_wanda != null and jx_sams != null and jx_xjd != null and jx_pingshan != null and jx_jiangnan != null and jx_diamond != null and jx_cifi != null,
-		"All urban, old-town & eastern landmarks built (Pingshan, Zicheng, Jiangnan, Diamond, CIFI, Church, Hospitals, Yaohan, Hilton, Wanda, Sam's, Xiangjiadang)"
+		jx_church != null and jx_h1 != null and jx_h2 != null and jx_h3 != null and jx_yaohan != null and jx_ybr != null and jx_hilton != null and jx_wanda != null and jx_sams != null and jx_xjd != null and jx_pingshan != null and jx_jiangnan != null and jx_diamond != null and jx_cifi != null and jx_shaonian != null,
+		"All urban, old-town & eastern landmarks built (Shaonian St., Pingshan, Zicheng, Jiangnan, Diamond, CIFI, Church, Hospitals, Yaohan, Hilton, Wanda, Sam's, Xiangjiadang)"
 	)
 	# Verify 360-degree closed Inner Ring Expressway across all 36 angular sectors + Yuehe pedestrian bridges
 	var ir_sec := {}
@@ -705,8 +709,8 @@ func _run() -> void:
 	var gcomp_cnt := ((m._map_data.get("landmarks", {}) as Dictionary).get("gated_compounds", []) as Array).size()
 	var zh_shader_on := float((m._building_mat as ShaderMaterial).get_shader_parameter("chinese_style")) > 0.5
 	_check(
-		zh_shader_on and sfs_arr.size() >= 20000 and n_chain >= 6000 and n_local >= 11000 and gcomp_n != null and gcomp_cnt >= 400,
-		"Chinese building shader ON, %d flush storefronts (%d chain + %d local) & %d Gated Residential Compounds" % [sfs_arr.size(), n_chain, n_local, gcomp_cnt]
+		zh_shader_on and sfs_arr.size() >= 85000 and n_chain >= 25000 and n_local >= 50000 and gcomp_n != null and gcomp_cnt >= 1200,
+		"Chinese building shader ON, %d diverse storefronts (%d chain + %d local) & %d Gated Residential Compounds" % [sfs_arr.size(), n_chain, n_local, gcomp_cnt]
 	)
 	# 3) >=80% Bike-Lane Coverage + 200-Unit MultiMesh E-Bike Fleet (>3x cars!) + Chinese EV Fleet & Jam-Free AI Cars!
 	var surf_rds := 0; var bl_rds := 0
