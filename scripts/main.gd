@@ -5947,7 +5947,8 @@ func _update_station_announcements() -> void:
 		var prefix_zh := "临时停靠，" if is_unsched_ann else ""
 		var prefix_en := "Unscheduled stop, " if is_unsched_ann else ""
 		var disp_ann := L10n.station_display_name(ann_name)
-		_sound.announce_station("%s%s 到了，请从%s车门下车。" % [prefix_zh, ann_name, side_zh], "%sArriving at %s. Doors open on the %s." % [prefix_en, disp_ann, side_en])
+		var en_ann := L10n.station_en_name(ann_name)
+		_sound.announce_station("%s%s 到了，请从%s车门下车。" % [prefix_zh, ann_name, side_zh], "%sArriving at %s. Doors open on the %s." % [prefix_en, en_ann, side_en])
 		_show_toast(L10n.t("📢 报站：%s%s 到了，请从%s车门下车", "📢 Announcement: %sArriving at %s (doors on %s)") % [prefix_zh if not L10n.is_en() else prefix_en, disp_ann, side_zh if not L10n.is_en() else side_en])
 	elif (not bool(tr.get("doors_target_open", false))) and _last_ann_door_open:
 		_last_ann_door_open = false
@@ -5955,7 +5956,8 @@ func _update_station_announcements() -> void:
 	elif dist <= 48.0 and dist > 7.5 and sid != _last_ann_approach_sid and float(tr.get("speed_mps", 0.0)) > 1.2:
 		_last_ann_approach_sid = sid
 		var disp_next := L10n.station_display_name(st_name)
-		_sound.announce_station("下一站，%s，请准备下车。" % st_name, "Next stop, %s." % disp_next)
+		var en_next := L10n.station_en_name(st_name)
+		_sound.announce_station("下一站，%s，请准备下车。" % st_name, "Next stop, %s." % en_next)
 		_show_toast(L10n.t("📢 报站：下一站，%s", "📢 Next stop: %s") % disp_next)
 
 

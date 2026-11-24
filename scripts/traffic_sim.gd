@@ -2183,6 +2183,9 @@ static func _safe_motor_lane_offset(graph: NetworkGraph, eid: int) -> float:
 		if sep > 2.0:
 			return maxf(6.25, w * 0.40)
 		if sep > 0.5:
+			# Wide center-tramway boulevard (>=18m): inner motor lane at ±5.35m (2nd lane at ±8.45m, bike lane outside ±9.95m!)
+			if w >= 17.5:
+				return 5.35
 			return maxf(4.95, w * 0.34)
 		return maxf(3.85, w * 0.28)
 	return clampf(w * 0.24, 2.35, 3.65)

@@ -22,6 +22,8 @@ var _bike_edges: Array[int] = []
 var _bike_edge_grid: Dictionary = {} # Vector2i (160m cell) -> Array[int]
 var _mast_grid: Dictionary = {}      # Vector2i (24m cell) -> Array[Vector2]
 var _clear_idx: Dictionary = {}      # Cached TrackBuilder track_clear_idx so e-bikes NEVER overlap tram rails
+var _tram_nodes: Dictionary = {}     # nid -> true for nodes touched by any surface built tram track
+var _node_max_hw: Dictionary = {}    # nid -> max half-width of incident surface roads (for accurate stop lines!)
 
 
 func _ready() -> void:
@@ -51,6 +53,8 @@ func rebuild(graph: NetworkGraph, focus_pos: Vector3) -> void:
 	_mmis_lod1.clear()
 	_bike_edges.clear()
 	_bike_edge_grid.clear()
+	_tram_nodes.clear()
+	_node_max_hw.clear()
 	_clear_idx = graph.get_meta("track_clear_idx", {})
 	_rebuild_mast_grid(graph)
 
@@ -58,6 +62,21 @@ func rebuild(graph: NetworkGraph, focus_pos: Vector3) -> void:
 		return
 	if _meshes_lod0.is_empty():
 		_build_meshes()
+
+	# Precompute tram-crossed intersection nodes & maximum crossing road half-width per node
+	for eid_v in graph.edges.keys():
+		var eid0 := int(eid_v)
+		var ed0: Dictionary = graph.edges[eid0]
+		if bool(ed0.get("underground", false)):
+			continue
+		var hw0 := clampf(float(ed0.get("width", 10.0)) * 0.5, 4.0, 13.5)
+		var na := int(ed0["a"])
+		var nb := int(ed0["b"])
+		_node_max_hw[na] = maxf(float(_node_max_hw.get(na, 4.5)), hw0)
+		_node_max_hw[nb] = maxf(float(_node_max_hw.get(nb, 4.5)), hw0)
+		if graph.built_tracks.has(eid0) and not graph.is_edge_grade_separated(eid0):
+			_tram_nodes[na] = true
+			_tram_nodes[nb] = true
 
 	for eid_v in graph.edges.keys():
 		var eid := int(eid_v)
@@ -80,13 +99,14 @@ func rebuild(graph: NetworkGraph, focus_pos: Vector3) -> void:
 	per_var_counts.fill(0)
 
 	for i in range(target):
-		var eid := _pick_edge(graph, focus_pos, true)
+		var eid := _pick_edge(graph, focus_pos, true, false)
 		if eid < 0:
 			continue
 		var ed: Dictionary = graph.edges[eid]
 		var elen := float(ed["length"])
 		var dir := 1.0 if _rng.randf() < 0.5 else -1.0
-		var s_init := lerpf(6.0, maxf(7.0, elen - 6.0), _rng.randf())
+		var pad_s := minf(16.0, elen * 0.30)
+		var s_init := lerpf(pad_s, maxf(pad_s + 1.0, elen - pad_s), _rng.randf())
 		var var_idx := _pick_variant_idx(i)
 		var slot := per_var_counts[var_idx]
 		per_var_counts[var_idx] = slot + 1
@@ -107,10 +127,20 @@ func rebuild(graph: NetworkGraph, focus_pos: Vector3) -> void:
 			"s": s_init,
 			"speed": cruise * 0.8,
 			"cruise": cruise,
-			"lane_jitter": _rng.randf_range(-0.24, 0.24),
+			"lane_jitter": _rng.randf_range(-0.22, 0.22),
 			"pos": Vector3.ZERO,
 			"fwd": Vector3.FORWARD,
 			"stuck_t": 0.0,
+			"turning": false,
+			"turn_s": 0.0,
+			"turn_len": 1.0,
+			"p0": Vector3.ZERO,
+			"p1": Vector3.ZERO,
+			"p2": Vector3.ZERO,
+			"next_eid": eid,
+			"next_dir": dir,
+			"next_s": s_init,
+			"bank": 0.0,
 		}
 		ebikes.append(eb)
 
@@ -182,13 +212,32 @@ func step(dt: float, graph: NetworkGraph, traffic: TrafficSim, trams: Array[Dict
 	for i in range(ebikes.size()):
 		var eb: Dictionary = ebikes[i]
 		var pos: Vector3 = eb["pos"]
-		if pos.distance_squared_to(focus_pos) > 315.0 * 315.0:
-			_respawn(eb, graph, focus_pos)
+		# Only recycle e-bikes well outside the visible camera radius (365m) and spawn in the outer horizon ring!
+		if pos.distance_squared_to(focus_pos) > 365.0 * 365.0:
+			_respawn(eb, graph, focus_pos, trams)
+			continue
+
+		# --- A. Smooth Quadratic-Bezier Intersection Turn / Crossing (zero 1-frame snapping & never freeze on rails!) ---
+		if bool(eb.get("turning", false)):
+			var t_spd := move_toward(float(eb["speed"]), maxf(4.6, float(eb["cruise"]) * 0.78), 4.2 * dt_c)
+			eb["speed"] = t_spd
+			var ts_next := float(eb["turn_s"]) + t_spd * dt_c
+			var t_len := maxf(1.0, float(eb["turn_len"]))
+			if ts_next >= t_len:
+				eb["turning"] = false
+				eb["edge_id"] = int(eb["next_eid"])
+				eb["dir"] = float(eb["next_dir"])
+				eb["s"] = float(eb["next_s"])
+				eb["bank"] = move_toward(float(eb.get("bank", 0.0)), 0.0, dt_c * 3.0)
+				_update_transform(eb, graph)
+			else:
+				eb["turn_s"] = ts_next
+				_update_turning_transform(eb, ts_next / t_len, dt_c)
 			continue
 
 		var eid := int(eb["edge_id"])
 		if not graph.edges.has(eid):
-			_respawn(eb, graph, focus_pos)
+			_respawn(eb, graph, focus_pos, trams)
 			continue
 		var ed: Dictionary = graph.edges[eid]
 		var elen := float(ed["length"])
@@ -199,13 +248,20 @@ func step(dt: float, graph: NetworkGraph, traffic: TrafficSim, trams: Array[Dict
 		var fwd: Vector3 = eb["fwd"]
 		var right := fwd.cross(Vector3.UP).normalized()
 
+		# Compute accurate stop line strictly BEHIND the crosswalk & crossing carriageway (especially 24m tram boulevards!)
+		var cross_hw := float(_node_max_hw.get(next_nid, 6.0))
+		var is_tram_xing := _tram_nodes.has(next_nid) and not graph.built_tracks.has(eid)
+		var stop_d := clampf(cross_hw + (3.2 if is_tram_xing else 2.2), 7.5, minf(16.5, elen * 0.42))
+		var corner_r := clampf(cross_hw + 0.4, 4.5, minf(12.5, elen * 0.38))
+
 		var target_spd := float(eb["cruise"])
-		if dist_end < 11.0:
-			target_spd = minf(target_spd, 4.2)
+		if dist_end < stop_d + 6.0 and dist_end > corner_r:
+			target_spd = minf(target_spd, 4.6)
 
 		# 1) Same-direction e-bike spacing via 24m spatial grid
 		var cx := int(floor(pos.x / 24.0))
 		var cz := int(floor(pos.z / 24.0))
+		var lead_stopped_ahead := false
 		for dx in range(-1, 2):
 			for dz in range(-1, 2):
 				var bucket: Array = grid.get(Vector2i(cx + dx, cz + dz), [])
@@ -217,50 +273,75 @@ func step(dt: float, graph: NetworkGraph, traffic: TrafficSim, trams: Array[Dict
 					if fwd.dot(oth["fwd"] as Vector3) < 0.35:
 						continue
 					var dv := (oth["pos"] as Vector3) - pos
-					if dv.length_squared() > 42.0:
+					if dv.length_squared() > 48.0:
 						continue
 					var along := dv.dot(fwd)
 					var lat := absf(dv.dot(right))
-					if along > 0.2 and lat < 0.85:
-						if along < 2.8:
+					if along > 0.2 and lat < 0.90:
+						if along < 2.9:
 							target_spd = 0.0
-						elif along < 6.0:
+							lead_stopped_ahead = true
+						elif along < 6.5:
 							target_spd = minf(target_spd, float(oth["speed"]) * 0.88)
 
-		# 2) Obey intersection traffic signals cleanly behind crosswalk
-		var stop_d := 8.4
-		if dist_end >= stop_d - 1.2 and dist_end <= stop_d + 9.5 and traffic.signals.has(next_nid):
+		# 2) Obey intersection traffic signals cleanly BEHIND stop_d (never creeping into the crosswalk!)
+		if dist_end >= stop_d - 1.0 and dist_end <= stop_d + 11.0 and traffic.signals.has(next_nid):
 			var aspect := traffic.get_signal_aspect(next_nid, Vector2(fwd.x, fwd.z))
 			if aspect != "green":
-				target_spd = 0.0 if dist_end <= stop_d + 1.4 else minf(target_spd, (dist_end - stop_d) * 0.65)
+				target_spd = 0.0 if dist_end <= stop_d + 1.5 else minf(target_spd, maxf(0.0, (dist_end - stop_d) * 0.55))
 
-		# 3) Yield to any nearby tram crossing perpendicular at an intersection
-		for tr: Dictionary in trams:
-			var tp: Vector3 = tr.get("pos", Vector3.ZERO)
-			var dv_t := tp - pos
-			if dv_t.length_squared() < 225.0:
-				var tf: Vector3 = tr.get("fwd", Vector3.FORWARD)
-				if absf(fwd.dot(tf)) < 0.78:
-					var along_t := dv_t.dot(fwd)
-					if along_t > -1.0 and along_t < 14.0:
-						target_spd = 0.0
+		# 3) Proactive Tram-Crossing Protection: stop strictly BEHIND stop_d whenever ANY tram approaches a tram intersection!
+		#    NEVER brake to 0 inside the crossing box itself — if already past stop_d, accelerate cleanly across!
+		if is_tram_xing and dist_end >= stop_d - 1.2 and dist_end <= stop_d + 16.0:
+			var np2: Vector2 = graph.nodes[next_nid]["pos"]
+			var node_pos := Vector3(np2.x, 0.0, np2.y)
+			var tram_approaching := false
+			for tr: Dictionary in trams:
+				var tp: Vector3 = tr.get("pos", Vector3.ZERO)
+				var to_node := node_pos - Vector3(tp.x, 0.0, tp.z)
+				var d2_n := to_node.length_squared()
+				if d2_n < 28.0 * 28.0:
+					tram_approaching = true
+					break
+				if d2_n < 68.0 * 68.0:
+					var tf: Vector3 = tr.get("fwd", Vector3.FORWARD)
+					if to_node.normalized().dot(Vector3(tf.x, 0.0, tf.z).normalized()) > 0.25:
+						tram_approaching = true
 						break
+				# Also check trailing sections of long 5-module trams occupying the crossing!
+				var secs_t: Array = tr.get("tram_info", {}).get("sections", [])
+				for sc_n in secs_t:
+					if is_instance_valid(sc_n):
+						var sp: Vector3 = (sc_n as Node3D).global_position
+						if Vector2(sp.x - np2.x, sp.z - np2.y).length_squared() < 24.0 * 24.0:
+							tram_approaching = true
+							break
+				if tram_approaching:
+					break
+			if tram_approaching or lead_stopped_ahead:
+				target_spd = 0.0 if dist_end <= stop_d + 1.8 else minf(target_spd, maxf(0.0, (dist_end - stop_d) * 0.52))
+		elif is_tram_xing and dist_end < stop_d - 1.2:
+			# Already committed past the stop line: keep moving cleanly so we NEVER stop on top of the tram tracks!
+			target_spd = maxf(target_spd, 5.4)
 
-		var spd := move_toward(float(eb["speed"]), target_spd, (14.5 if target_spd < float(eb["speed"]) else 4.6) * dt_c)
+		var spd := move_toward(float(eb["speed"]), target_spd, (7.8 if target_spd < float(eb["speed"]) else 3.4) * dt_c)
 		eb["speed"] = spd
 
-		var st_t := (float(eb.get("stuck_t", 0.0)) + dt_c) if spd < 0.2 else 0.0
+		var st_t := (float(eb.get("stuck_t", 0.0)) + dt_c) if spd < 0.15 else 0.0
 		eb["stuck_t"] = st_t
-		if st_t >= 20.0:
-			_respawn(eb, graph, focus_pos)
+		# Only recycle truly stuck e-bikes if far from the camera (never pop/vanish right in front of the player!)
+		if st_t >= 45.0 and pos.distance_squared_to(focus_pos) > 135.0 * 135.0:
+			_respawn(eb, graph, focus_pos, trams)
 			continue
 
 		var s_next := s_now + dir * spd * dt_c
-		if s_next >= elen - 1.8 or s_next <= 1.8:
-			_advance_next_edge(eb, graph, next_nid, eid)
+		var reached_end := (s_next >= elen - corner_r) if dir > 0.0 else (s_next <= corner_r)
+		if reached_end:
+			_begin_smooth_turn(eb, graph, next_nid, eid, focus_pos, trams)
 		else:
 			eb["s"] = s_next
-		_update_transform(eb, graph)
+			eb["bank"] = move_toward(float(eb.get("bank", 0.0)), 0.0, dt_c * 3.0)
+			_update_transform(eb, graph)
 
 
 func _edge_allows_ebike(graph: NetworkGraph, eid: int) -> bool:
@@ -269,9 +350,12 @@ func _edge_allows_ebike(graph: NetworkGraph, eid: int) -> bool:
 	var ed: Dictionary = graph.edges[eid]
 	if bool(ed.get("underground", false)):
 		return false
+	# Skip suppressed twin-carriageway ghost strips (lanes_f == 0 and lanes_b == 0)
+	if int(ed.get("lanes_f", 1)) + int(ed.get("lanes_b", 1)) <= 0:
+		return false
 	var elen := float(ed.get("length", 0.0))
 	var w := float(ed.get("width", 10.0))
-	if w < 8.0 or elen < 18.0:
+	if w < 8.0 or elen < 22.0:
 		return false
 	var hw := clampf(w * 0.5, 4.0, 13.5)
 	if graph.built_tracks.has(eid):
@@ -293,12 +377,31 @@ func _edge_allows_ebike(graph: NetworkGraph, eid: int) -> bool:
 				var mid := pts[pts.size() / 2] as Vector2
 				var clr_r := TrackBuilder.track_clearance_dist(_clear_idx, mid + nrm * lat_chk)
 				var clr_l := TrackBuilder.track_clearance_dist(_clear_idx, mid - nrm * lat_chk)
-				if clr_r < 2.25 or clr_l < 2.25:
+				if clr_r < 2.35 or clr_l < 2.35:
 					return false
 	return true
 
 
-func _advance_next_edge(eb: Dictionary, graph: NetworkGraph, at_nid: int, prev_eid: int) -> void:
+func _edge_lane_pose(graph: NetworkGraph, eid: int, s: float, dir: float, jitter: float) -> Array:
+	var ed: Dictionary = graph.edges[eid]
+	var elen := maxf(1.0, float(ed["length"]))
+	var hw := clampf(float(ed.get("width", 10.0)) * 0.5, 4.0, 13.5)
+	var bl_w := 2.05 if hw >= 5.75 else (1.55 if hw >= 4.8 else 1.25)
+	var lat_off := maxf(2.2, hw - bl_w * 0.52) + jitter * (1.0 if hw >= 5.75 else 0.55)
+	if graph.built_tracks.has(eid):
+		lat_off = clampf(lat_off, graph.get_edge_track_half_sep(eid) + 2.55, hw - 0.45)
+	var fr := TrafficSim._edge_frame(graph, eid, clampf(s, 0.0, elen), elen, dir)
+	var center: Vector3 = fr[0]
+	var fwd: Vector3 = fr[1]
+	fwd.y = 0.0
+	fwd = fwd.normalized() if fwd.length_squared() >= 1e-5 else Vector3.FORWARD
+	var right := fwd.cross(Vector3.UP).normalized()
+	var pos := _nudge_clear_of_masts(center + right * lat_off, right)
+	pos.y = 0.055 + (Terrain.surface(pos.x, pos.z) if Terrain.active else 0.0)
+	return [pos, fwd]
+
+
+func _begin_smooth_turn(eb: Dictionary, graph: NetworkGraph, at_nid: int, prev_eid: int, focus_pos: Vector3, trams: Array[Dictionary]) -> void:
 	var cands: Array[Dictionary] = []
 	var prev_fwd: Vector3 = eb["fwd"]
 	var best_straight: Dictionary = {}
@@ -314,6 +417,9 @@ func _advance_next_edge(eb: Dictionary, graph: NetworkGraph, at_nid: int, prev_e
 		var p1: Vector2 = pts[1] if ndir > 0.0 else pts[pts.size() - 2]
 		var nf := Vector3(p1.x - p0.x, 0.0, p1.y - p0.y).normalized()
 		var dp := prev_fwd.dot(nf)
+		# Never pick sharp hairpins (< -0.35) that look unnatural
+		if dp < -0.35:
+			continue
 		var item := {"eid": ne, "dir": ndir, "len": float(ed["length"]), "dot": dp}
 		cands.append(item)
 		if dp > best_dot:
@@ -321,32 +427,105 @@ func _advance_next_edge(eb: Dictionary, graph: NetworkGraph, at_nid: int, prev_e
 			best_straight = item
 
 	if cands.is_empty():
+		# Dead-end street: silently recycle out at the far horizon ring (only if >125m away, else gentle U-turn arc)
+		if (eb["pos"] as Vector3).distance_squared_to(focus_pos) > 125.0 * 125.0:
+			_respawn(eb, graph, focus_pos, trams)
+			return
 		var ed0: Dictionary = graph.edges[prev_eid]
-		eb["dir"] = -float(eb["dir"])
-		eb["s"] = 2.5 if float(eb["dir"]) > 0.0 else maxf(2.5, float(ed0["length"]) - 2.5)
+		var ndir0 := -float(eb["dir"])
+		var el0 := float(ed0["length"])
+		var ent0 := minf(8.0, el0 * 0.35)
+		var ns0 := ent0 if ndir0 > 0.0 else (el0 - ent0)
+		var end_pose0 := _edge_lane_pose(graph, prev_eid, ns0, ndir0, float(eb.get("lane_jitter", 0.0)))
+		var p0_u: Vector3 = eb["pos"]
+		var p2_u: Vector3 = end_pose0[0]
+		var p1_u := (p0_u + p2_u) * 0.5 + prev_fwd * 4.5
+		eb["turning"] = true
+		eb["p0"] = p0_u
+		eb["p1"] = p1_u
+		eb["p2"] = p2_u
+		eb["turn_len"] = maxf(3.0, p0_u.distance_to(p1_u) + p1_u.distance_to(p2_u))
+		eb["turn_s"] = 0.0
+		eb["next_eid"] = prev_eid
+		eb["next_dir"] = ndir0
+		eb["next_s"] = ns0
 		return
 
-	var pick: Dictionary = best_straight if (best_dot > 0.55 and _rng.randf() < 0.72) else cands[_rng.randi() % cands.size()]
-	eb["edge_id"] = int(pick["eid"])
-	eb["dir"] = float(pick["dir"])
-	eb["s"] = 2.5 if float(pick["dir"]) > 0.0 else maxf(2.5, float(pick["len"]) - 2.5)
+	# Strongly prefer straight-through (80%) or smooth right/left turn onto wide bike avenues
+	var pick: Dictionary = best_straight if (best_dot > 0.60 and _rng.randf() < 0.80) else cands[_rng.randi() % cands.size()]
+	var next_eid := int(pick["eid"])
+	var next_dir := float(pick["dir"])
+	var next_len := float(pick["len"])
+	var cross_hw := float(_node_max_hw.get(at_nid, 6.0))
+	var enter_r := clampf(cross_hw + 0.4, 4.5, minf(12.5, next_len * 0.38))
+	var next_s := enter_r if next_dir > 0.0 else (next_len - enter_r)
+	var end_pose := _edge_lane_pose(graph, next_eid, next_s, next_dir, float(eb.get("lane_jitter", 0.0)))
+	var p0_b: Vector3 = eb["pos"]
+	var p2_b: Vector3 = end_pose[0]
+	var f2_b: Vector3 = end_pose[1]
+	# Compute natural smooth quadratic-Bezier corner control point p1 along exit & entry tangents
+	var chord := p0_b.distance_to(p2_b)
+	var p1_b := (p0_b + p2_b) * 0.5
+	if float(pick["dot"]) < 0.85 and chord > 1.5:
+		var reach := clampf(chord * 0.42, 2.0, 12.0)
+		p1_b = ((p0_b + prev_fwd * reach) + (p2_b - f2_b * reach)) * 0.5
+	p1_b.y = (p0_b.y + p2_b.y) * 0.5
+	var arc_est := maxf(1.5, 0.5 * chord + 0.5 * (p0_b.distance_to(p1_b) + p1_b.distance_to(p2_b)))
+	eb["turning"] = true
+	eb["p0"] = p0_b
+	eb["p1"] = p1_b
+	eb["p2"] = p2_b
+	eb["turn_len"] = arc_est
+	eb["turn_s"] = 0.0
+	eb["next_eid"] = next_eid
+	eb["next_dir"] = next_dir
+	eb["next_s"] = next_s
 
 
-func _respawn(eb: Dictionary, graph: NetworkGraph, focus_pos: Vector3) -> void:
-	var eid := _pick_edge(graph, focus_pos, true)
+func _update_turning_transform(eb: Dictionary, u_raw: float, dt: float) -> void:
+	var u := clampf(u_raw, 0.0, 1.0)
+	var omt := 1.0 - u
+	var p0: Vector3 = eb["p0"]
+	var p1: Vector3 = eb["p1"]
+	var p2: Vector3 = eb["p2"]
+	var pos := p0 * (omt * omt) + p1 * (2.0 * omt * u) + p2 * (u * u)
+	var tang := (p1 - p0) * (2.0 * omt) + (p2 - p1) * (2.0 * u)
+	tang.y = 0.0
+	var old_fwd: Vector3 = eb["fwd"]
+	var new_fwd := tang.normalized() if tang.length_squared() > 1e-5 else old_fwd
+	var fwd := old_fwd.slerp(new_fwd, minf(1.0, dt * 10.0)).normalized()
+	# Subtle realistic lean into turns (~6 deg max)
+	var turn_cross := old_fwd.cross(new_fwd).y
+	var target_bank := clampf(-turn_cross * 0.45, -0.11, 0.11)
+	var bank := move_toward(float(eb.get("bank", 0.0)), target_bank, dt * 2.4)
+	eb["bank"] = bank
+	pos.y = 0.055 + (Terrain.surface(pos.x, pos.z) if Terrain.active else 0.0)
+	eb["pos"] = pos
+	eb["fwd"] = fwd
+	var basis := Basis.looking_at(fwd, Vector3.UP)
+	if absf(bank) > 0.002:
+		basis = basis.rotated(fwd, bank)
+	_write_mm_transform(eb, Transform3D(basis, pos))
+
+
+func _respawn(eb: Dictionary, graph: NetworkGraph, focus_pos: Vector3, trams: Array[Dictionary] = []) -> void:
+	var eid := _pick_edge(graph, focus_pos, true, true, trams)
 	if eid < 0:
 		return
 	var ed: Dictionary = graph.edges[eid]
 	var elen := float(ed["length"])
+	var pad_s := minf(16.0, elen * 0.30)
+	eb["turning"] = false
+	eb["bank"] = 0.0
 	eb["edge_id"] = eid
 	eb["dir"] = 1.0 if _rng.randf() < 0.5 else -1.0
-	eb["s"] = lerpf(5.0, maxf(6.0, elen - 5.0), _rng.randf())
-	eb["speed"] = float(eb["cruise"]) * 0.78
+	eb["s"] = lerpf(pad_s, maxf(pad_s + 1.0, elen - pad_s), _rng.randf())
+	eb["speed"] = float(eb["cruise"]) * 0.80
 	eb["stuck_t"] = 0.0
 	_update_transform(eb, graph)
 
 
-func _pick_edge(graph: NetworkGraph, focus_pos: Vector3, near: bool) -> int:
+func _pick_edge(graph: NetworkGraph, focus_pos: Vector3, near: bool, outer_ring_only: bool = false, trams: Array[Dictionary] = []) -> int:
 	if _bike_edges.is_empty():
 		return -1
 	if near:
@@ -358,15 +537,50 @@ func _pick_edge(graph: NetworkGraph, focus_pos: Vector3, near: bool) -> int:
 				for eid_v in _bike_edge_grid.get(Vector2i(fx + dx, fz + dz), []):
 					local_cands.append(int(eid_v))
 		if not local_cands.is_empty():
-			for _k in range(10):
+			var min_d2 := (145.0 * 145.0) if outer_ring_only else 0.0
+			var max_d2 := 345.0 * 345.0
+			for _k in range(28):
 				var cand := local_cands[_rng.randi() % local_cands.size()]
 				var pts: Array = graph.edges[cand]["pts"]
 				var mp: Vector2 = pts[pts.size() / 2]
 				var d2 := Vector2(mp.x - focus_pos.x, mp.y - focus_pos.z).length_squared()
-				if d2 <= 295.0 * 295.0:
+				if d2 < min_d2 or d2 > max_d2:
+					continue
+				var near_tram := false
+				for tr: Dictionary in trams:
+					var tp: Vector3 = tr.get("pos", Vector3.ZERO)
+					if Vector2(mp.x - tp.x, mp.y - tp.z).length_squared() < 28.0 * 28.0:
+						near_tram = true
+						break
+				if not near_tram:
 					return cand
+			# Fallback inside local_cands preferring the farthest edge from camera (never pop-in close!)
+			if outer_ring_only:
+				var best_c := local_cands[0]
+				var best_d := -1.0
+				for _m in range(12):
+					var c2 := local_cands[_rng.randi() % local_cands.size()]
+					var pts2: Array = graph.edges[c2]["pts"]
+					var mp2: Vector2 = pts2[pts2.size() / 2]
+					var dd := Vector2(mp2.x - focus_pos.x, mp2.y - focus_pos.z).length_squared()
+					if dd <= max_d2 and dd > best_d:
+						best_d = dd
+						best_c = c2
+				return best_c
 			return local_cands[_rng.randi() % local_cands.size()]
 	return _bike_edges[_rng.randi() % _bike_edges.size()]
+
+
+func _write_mm_transform(eb: Dictionary, tf: Transform3D) -> void:
+	var v := int(eb["var"])
+	var slot := int(eb["slot"])
+	if v >= 0 and v < _mmis_lod0.size():
+		var mm0 := _mmis_lod0[v].multimesh
+		if mm0 != null and slot < mm0.instance_count:
+			mm0.set_instance_transform(slot, tf)
+		var mm1 := _mmis_lod1[v].multimesh
+		if mm1 != null and slot < mm1.instance_count:
+			mm1.set_instance_transform(slot, tf)
 
 
 func _nudge_clear_of_masts(pos: Vector3, right: Vector3) -> Vector3:
@@ -392,46 +606,12 @@ func _nudge_clear_of_masts(pos: Vector3, right: Vector3) -> Vector3:
 
 func _update_transform(eb: Dictionary, graph: NetworkGraph) -> void:
 	var eid := int(eb["edge_id"])
-	var ed: Dictionary = graph.edges[eid]
-	var elen := maxf(1.0, float(ed["length"]))
-	var dir := float(eb["dir"])
-	var s := clampf(float(eb["s"]), 0.0, elen)
-	var hw := clampf(float(ed.get("width", 10.0)) * 0.5, 4.0, 13.5)
-	var bl_w := 2.05 if hw >= 5.75 else (1.55 if hw >= 4.8 else 1.25)
-	var lat_off := maxf(2.2, hw - bl_w * 0.52) + float(eb.get("lane_jitter", 0.0)) * (1.0 if hw >= 5.75 else 0.55)
-	if graph.built_tracks.has(eid):
-		lat_off = clampf(lat_off, graph.get_edge_track_half_sep(eid) + 2.55, hw - 0.45)
-	var fr := TrafficSim._edge_frame(graph, eid, s, elen, dir)
-	var center: Vector3 = fr[0]
-	var fwd: Vector3 = fr[1]
-	fwd.y = 0.0
-	if fwd.length_squared() < 1e-5:
-		fwd = Vector3.FORWARD
-	else:
-		fwd = fwd.normalized()
-	var right := fwd.cross(Vector3.UP).normalized()
-	var pos := _nudge_clear_of_masts(center + right * lat_off, right)
-	if not _clear_idx.is_empty():
-		var tc := TrackBuilder.track_clearance_dist(_clear_idx, Vector2(pos.x, pos.z))
-		if tc < 2.25:
-			# Push cleanly outward toward the outer curb if a diagonal/curved track encroaches
-			var p_out := pos + right * (2.35 - tc)
-			var p_in := pos - right * (2.35 - tc)
-			pos = p_out if TrackBuilder.track_clearance_dist(_clear_idx, Vector2(p_out.x, p_out.z)) >= TrackBuilder.track_clearance_dist(_clear_idx, Vector2(p_in.x, p_in.z)) else p_in
-	pos.y = 0.055 + (Terrain.surface(pos.x, pos.z) if Terrain.active else 0.0)
+	var pose := _edge_lane_pose(graph, eid, float(eb["s"]), float(eb["dir"]), float(eb.get("lane_jitter", 0.0)))
+	var pos: Vector3 = pose[0]
+	var fwd: Vector3 = pose[1]
 	eb["pos"] = pos
 	eb["fwd"] = fwd
-
-	var tf := Transform3D(Basis.looking_at(fwd, Vector3.UP), pos)
-	var v := int(eb["var"])
-	var slot := int(eb["slot"])
-	if v >= 0 and v < _mmis_lod0.size():
-		var mm0 := _mmis_lod0[v].multimesh
-		if mm0 != null and slot < mm0.instance_count:
-			mm0.set_instance_transform(slot, tf)
-		var mm1 := _mmis_lod1[v].multimesh
-		if mm1 != null and slot < mm1.instance_count:
-			mm1.set_instance_transform(slot, tf)
+	_write_mm_transform(eb, Transform3D(Basis.looking_at(fwd, Vector3.UP), pos))
 
 
 func _pick_variant_idx(i: int) -> int:

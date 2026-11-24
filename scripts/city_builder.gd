@@ -507,18 +507,33 @@ static func _build_roads_and_curbs(
 				var ym2 := y + 0.016
 				var dash_offs: Array[float] = []
 				if lf > 0 and lb > 0:
-					var med := 0.8 if lf + lb >= 4 else 0.0
-					for yo: float in ([-med - 0.1, med + 0.1] if med > 0.0 else [-0.12, 0.12]):
-						var c0 := a + nrm1 * yo
-						var c1 := b + nrm1 * yo
-						var cn := nrm1 * 0.06
-						_add_flat_quad(yellow_st, Vector3(c0.x - cn.x, ym2, c0.y - cn.y), Vector3(c0.x + cn.x, ym2, c0.y + cn.y),
-							Vector3(c1.x + cn.x, ym2, c1.y + cn.y), Vector3(c1.x - cn.x, ym2, c1.y - cn.y), Vector3.UP)
-						has_yellow = true
-					for k in range(1, lf):
-						dash_offs.append(med + float(k) * 3.3)
-					for k in range(1, lb):
-						dash_offs.append(-(med + float(k) * 3.3))
+					if bool(r.get("tram_median", false)) and hw >= 8.5:
+						# Center-of-road tramway boulevard: solid yellow borders outside the central ±3.1m tramway
+						# + white dashed dividers between outer motorized car lanes on BOTH sides!
+						for yo: float in [-3.55, 3.55]:
+							var c0 := a + nrm1 * yo
+							var c1 := b + nrm1 * yo
+							var cn := nrm1 * 0.075
+							_add_flat_quad(yellow_st, Vector3(c0.x - cn.x, ym2, c0.y - cn.y), Vector3(c0.x + cn.x, ym2, c0.y + cn.y),
+								Vector3(c1.x + cn.x, ym2, c1.y + cn.y), Vector3(c1.x - cn.x, ym2, c1.y - cn.y), Vector3.UP)
+							has_yellow = true
+						if lf >= 2 and hw >= 10.5:
+							dash_offs.append(6.90)
+						if lb >= 2 and hw >= 10.5:
+							dash_offs.append(-6.90)
+					else:
+						var med := 0.8 if lf + lb >= 4 else 0.0
+						for yo: float in ([-med - 0.1, med + 0.1] if med > 0.0 else [-0.12, 0.12]):
+							var c0 := a + nrm1 * yo
+							var c1 := b + nrm1 * yo
+							var cn := nrm1 * 0.06
+							_add_flat_quad(yellow_st, Vector3(c0.x - cn.x, ym2, c0.y - cn.y), Vector3(c0.x + cn.x, ym2, c0.y + cn.y),
+								Vector3(c1.x + cn.x, ym2, c1.y + cn.y), Vector3(c1.x - cn.x, ym2, c1.y - cn.y), Vector3.UP)
+							has_yellow = true
+						for k in range(1, lf):
+							dash_offs.append(med + float(k) * 3.3)
+						for k in range(1, lb):
+							dash_offs.append(-(med + float(k) * 3.3))
 				else:
 					var n_l := maxi(lf, lb)
 					for k in range(1, n_l):

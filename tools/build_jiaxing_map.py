@@ -1992,11 +1992,15 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
 
     roads, cws, lamps, trees = [], [], [], []
     for ed in edges:
+        if ed.get("hide_road"):
+            continue
         pts = ed["pts"]
         w = ed["width"]
         r = {"name": ed["name"], "width": w, "lanes_f": ed["lanes_f"], "lanes_b": ed["lanes_b"], "layer": 0, "pts": pts}
         if ed.get("bridge"):
             r["bridge"] = True
+        if ed.get("tram_median"):
+            r["tram_median"] = True
         if ed.get("underground"):
             r["underground"] = True
             roads.append(r)
@@ -2371,36 +2375,34 @@ def build_t1_starter_network(nodes_list, edges_list):
         path.reverse()
         return path
 
-    # All 21 authentic Phase 1 stations of Jiaxing Tram Line T1 in exact real-world sequence (Amap / 高德地图 verified!):
-    # Part A (Surface South -> North): 嘉兴南站 -> 庆丰路 -> 由拳路 -> 纺工路(直行景湖路/滨河路) -> 跨平湖塘桥 -> 纺工路北岸
-    # Part B (B1 Underground Tunnel): 纺工路北岸(干地) -> 东隧道坡道 -> 嘉兴火车站(B1中央无遮挡换乘廊道) -> 下穿沪昆铁路 -> 勤俭路出口坡道
-    # Part C (Surface West): 勤俭路西行 -> 环城东路南行(人民公园站) -> 中山东路(瓶山 -> 禾兴南路 -> 中山东路安乐路·旭辉广场)
+    # All 15 authentic operational stations of Jiaxing Tram Line T1 in exact real-world Amap (高德地图) sequence:
+    # Part A (Surface South -> North): 嘉兴南站(站前东行平滑北转) -> 庆丰路(庆丰路基地/长水路) -> 由拳路(商务大道) -> 纺工路(由拳路/一中/烟雨路/南溪西路/景湖路/滨河路) -> 跨平湖塘桥 -> 干地入口
+    # Part B (B1 Underground Tunnel): 东隧道坡道 -> 嘉兴火车站(B1中央无遮挡廊道) -> 下穿沪昆铁路 -> 勤俭路出口坡道
+    # Part C (Surface West): 勤俭路西行 -> 环城东路南行(人民公园) -> 中山东路(瓶山 -> 禾兴南路 -> 中山东路安乐路)
     waypoints_south = [
-        ("嘉兴南站", 4181.0, 6775.0, "庆丰路"),
-        ("庆丰路百川路", 4225.0, 6460.0, "庆丰路"),
-        ("庆丰路三环南路", 4240.0, 5695.0, "庆丰路"),
-        ("庆丰路五环洞路", 4248.0, 4950.0, "庆丰路"),
-        ("庆丰路基地", 4252.0, 4297.0, "庆丰路"),
-        ("庆丰路长水路", 4242.0, 3527.0, "庆丰路"),
-        ("由拳路庆丰路", 4245.0, 2550.0, "由拳路"),
-        ("由拳路双溪路", 3193.0, 2537.0, "由拳路"),
-        ("由拳路商务大道", 2408.0, 2529.0, "由拳路"),
-        ("由拳路富润路", 1900.0, 2490.0, "由拳路"),
-        ("纺工路由拳路（中央公园）", 1420.0, 2436.0, "纺工路"),
-        ("嘉兴一中", 1433.0, 1480.0, "纺工路"),
-        ("纺工路烟雨路", 1294.0, 724.0, "纺工路"),
-        ("纺工路南溪西路（南湖湖滨）", 1185.54, 117.30, ""),
-        ("纺工路景湖路", 1139.92, -351.19, ""),
-        ("纺工路滨河路", 985.44, -970.49, ""),
+        ("嘉兴南站", 4080.68, 6817.27, ""),
+        ("__south_plaza_m__", 4221.50, 6742.88, ""),
+        ("__south_plaza_e__", 4409.11, 6627.79, ""),
+        ("__qingfeng_s__", 4317.21, 6448.94, "庆丰路"),
+        ("有轨电车庆丰路基地站", 4252.0, 4297.0, "庆丰路"),
+        ("庆丰路长水路站", 4242.0, 3527.0, "庆丰路"),
+        ("__qf_yq_corner__", 4216.26, 2577.23, "由拳路"),
+        ("由拳路商务大道站", 2408.0, 2529.0, "由拳路"),
+        ("纺工路由拳路站", 1435.0, 2436.0, "纺工路"),
+        ("嘉兴一中站", 1433.0, 1540.0, "纺工路"),
+        ("纺工路烟雨路站", 1294.0, 724.0, "纺工路"),
+        ("纺工路南溪西路站", 1185.54, 117.30, ""),
+        ("纺工路景湖路站", 1139.92, -351.19, ""),
+        ("纺工路滨河路站", 985.44, -970.49, ""),
     ]
     waypoints_west = [
         ("__qinjian_corner__", 152.51, -1528.44, "勤俭路"),
         ("人民公园", 198.17, -1343.18, "环城东路"),
         ("__hcd_zsd_corner__", 238.97, -1172.32, "环城东路"),
         ("__zsd_east__", 226.44, -1130.44, "中山东路"),
-        ("中山东路建国南路（瓶山）", -214.02, -1088.86, "中山东路"),
+        ("中山东路建国南路(瓶山)", -214.02, -1088.86, "中山东路"),
         ("中山东路禾兴南路", -689.30, -1027.66, "中山东路"),
-        ("中山东路安乐路（旭辉广场）", -1119.63, -943.17, "中山东路"),
+        ("中山东路安乐路", -1119.63, -943.17, "中山东路"),
     ]
     wp_south_nodes = [(nm, nearest_node_xy(x, y, kw), x, y) for nm, x, y, kw in waypoints_south]
     # Surface continuation across 平湖塘 bridge (1320 -> 1321) onto dry land north of the canal (1328)!
@@ -2592,6 +2594,64 @@ def build_t1_starter_network(nodes_list, edges_list):
             "platform_len": 42.0,  # Fits the real 34.8m 5-module "南湖号" with generous 5/5 door alignment margin!
         })
 
+    # Center-of-Road Boulevard Upgrade (Real Jiaxing T1 cross-section: green lawn double-track tramway IN THE CENTER,
+    # flanked by bidirectional motorized car lanes + outer bike lanes on BOTH sides!)
+    track_eid_set = set(track_eids)
+    t1_surface_segs = []
+    for eid in track_eids:
+        if eid in ug_elev_map:
+            continue
+        ed = edge_by_id[eid]
+        ename = ed.get("name", "")
+        is_inner_narrow = any(k in ename for k in ("勤俭", "环城东")) or (ed["pts"][0][1] > 6620.0 and ed["pts"][-1][1] > 6620.0)
+        if is_inner_narrow:
+            ed["width"] = max(float(ed.get("width", 8.8)), 18.0)
+            ed["lanes_f"] = max(int(ed.get("lanes_f", 1)), 1)
+            ed["lanes_b"] = max(int(ed.get("lanes_b", 1)), 1)
+        else:
+            ed["width"] = max(float(ed.get("width", 8.8)), 24.0)
+            ed["lanes_f"] = max(int(ed.get("lanes_f", 2)), 2)
+            ed["lanes_b"] = max(int(ed.get("lanes_b", 2)), 2)
+        ed["tram_median"] = True
+        pts_t = ed["pts"]
+        hw_t = float(ed["width"]) * 0.5
+        for k in range(len(pts_t) - 1):
+            ax, ay = pts_t[k]
+            bx, by = pts_t[k + 1]
+            L_seg = math.hypot(bx - ax, by - ay)
+            if L_seg > 1.0:
+                t1_surface_segs.append((ax, ay, bx, by, (bx - ax) / L_seg, (by - ay) / L_seg, hw_t))
+
+    # Suppress duplicate parallel OSM twin-carriageway strips running right next to the unified 24m/18m T1 boulevards
+    # so there is no overlapping double asphalt or ghost parallel car lane!
+    hidden_twin_cnt = 0
+    for ed in edges_list:
+        if ed["id"] in track_eid_set or ed.get("underground"):
+            continue
+        pts_o = ed["pts"]
+        if len(pts_o) < 2:
+            continue
+        ax, ay = pts_o[0]
+        bx, by = pts_o[-1]
+        L_o = math.hypot(bx - ax, by - ay)
+        if L_o < 12.0:
+            continue
+        mx, my = (ax + bx) * 0.5, (ay + by) * 0.5
+        dx_o, dy_o = (bx - ax) / L_o, (by - ay) / L_o
+        for (tax, tay, tbx, tby, tdx, tdy, thw) in t1_surface_segs:
+            if abs(dx_o * tdx + dy_o * tdy) < 0.88:
+                continue
+            d_mid = seg_dist(mx, my, tax, tay, tbx, tby)[0]
+            if d_mid < thw + 11.5:
+                d_a = seg_dist(ax, ay, tax, tay, tbx, tby)[0]
+                d_b = seg_dist(bx, by, tax, tay, tbx, tby)[0]
+                if min(d_a, d_b) < thw + 11.5 and max(d_a, d_b) < thw + 17.0:
+                    ed["hide_road"] = True
+                    ed["lanes_f"] = 0
+                    ed["lanes_b"] = 0
+                    hidden_twin_cnt += 1
+                    break
+
     starter_tracks = []
     for eid in track_eids:
         is_ug = eid in ug_elev_map
@@ -2612,7 +2672,7 @@ def build_t1_starter_network(nodes_list, edges_list):
     if len(stations) >= 3:
         starter_lines.append({
             "id": 1,
-            "name": "T1线 · 嘉兴南站—安乐路",
+            "name": "T1线 · 嘉兴南站—中山东路安乐路",
             "color": [0.82, 0.12, 0.15],
             "model_key": "crrc-jiaxing-nanhu",
             "sections": 5,
@@ -2621,12 +2681,13 @@ def build_t1_starter_network(nodes_list, edges_list):
             "signal_priority": True,
         })
 
-    print(f"Starter T1 network (Real Phase 1): {len(starter_tracks)} tracked edges, {len(stations)} stations, {len(xover_eids)} crossovers")
+    print(f"Starter T1 network (Real Operational Amap): {len(starter_tracks)} tracked edges, {len(stations)} stations, {len(xover_eids)} crossovers, {hidden_twin_cnt} twin strips merged")
     return {
         "tracks": starter_tracks,
         "stations": stations,
         "lines": starter_lines,
         "global_signal_priority": False,
+        "_surface_segs": t1_surface_segs,
     }
 
 
@@ -2880,11 +2941,63 @@ def main():
                              min(a[0], b[0]) - fhw - 5.0, min(a[1], b[1]) - fhw - 5.0,
                              max(a[0], b[0]) + fhw + 5.0, max(a[1], b[1]) + fhw + 5.0)
 
+    # Build T1 starter network & widen its center-of-road boulevards BEFORE street furniture & storefronts!
+    starter = build_t1_starter_network(graph_nodes, graph_edges)
+    t1_surf_segs = starter.pop("_surface_segs", [])
+
+    # Update road_grid with widened T1 boulevard widths AND clear ANY building whose footprint encroaches on
+    # the widened T1 corridor (guarantees ZERO tram tracks ever drive through a building or storefront!)
+    t1_corridor_grid = Grid(80.0)
+    for (ax, ay, bx, by, _dx, _dy, thw) in t1_surf_segs:
+        road_grid.add((ax, ay, bx, by, thw + 1.5),
+                      min(ax, bx) - thw - 4.0, min(ay, by) - thw - 4.0,
+                      max(ax, bx) + thw + 4.0, max(ay, by) + thw + 4.0)
+        t1_corridor_grid.add((ax, ay, bx, by, thw + 3.2),
+                             min(ax, bx) - thw - 6.0, min(ay, by) - thw - 6.0,
+                             max(ax, bx) + thw + 6.0, max(ay, by) + thw + 6.0)
+
+    cleaned_blds = []
+    removed_t1_blds = 0
+    for b in blds:
+        bpts = b.get("pts", [])
+        if not bpts:
+            continue
+        xs = [p[0] for p in bpts]
+        ys = [p[1] for p in bpts]
+        cands = t1_corridor_grid.query(min(xs) - 20.0, min(ys) - 20.0, max(xs) + 20.0, max(ys) + 20.0)
+        blocked = False
+        if cands:
+            cx = sum(xs) / len(xs)
+            cy = sum(ys) / len(ys)
+            chk_pts = [(cx, cy)] + [(p[0], p[1]) for p in bpts] + [
+                ((bpts[k][0] + bpts[(k + 1) % len(bpts)][0]) * 0.5, (bpts[k][1] + bpts[(k + 1) % len(bpts)][1]) * 0.5)
+                for k in range(len(bpts))
+            ]
+            for (ax, ay, bx, by, clr_r) in cands:
+                for (px, py) in chk_pts:
+                    if seg_dist(px, py, ax, ay, bx, by)[0] < clr_r:
+                        blocked = True
+                        break
+                if blocked:
+                    break
+        if blocked:
+            removed_t1_blds += 1
+            continue
+        cleaned_blds.append(b)
+    blds = cleaned_blds
+    if removed_t1_blds > 0:
+        print(f"T1 corridor building clearance: removed {removed_t1_blds} buildings encroaching on widened T1 boulevards")
+        bld_grid = Grid(45.0)
+        for b in blds:
+            bpts = b["pts"]
+            xs = [p[0] for p in bpts]
+            ys = [p[1] for p in bpts]
+            bld_grid.add((min(xs), min(ys), max(xs), max(ys), bpts), min(xs), min(ys), max(xs), max(ys))
+
     roads, cws, lamps, trees, storefronts = build_street_furniture(
         graph_edges, graph_nodes, blds, poi_nodes, nodes, road_grid, water_grid, rail_grid, bld_grid, freeway_grid
     )
     gated_compounds = build_gated_compounds(landuse_zones, ways, nodes, road_grid, water_grid, rail_grid, bld_grid)
-    starter = build_t1_starter_network(graph_nodes, graph_edges)
 
     # Exact HSR station angle from real OSM platform orientation (~27 deg ENE-WSW)
     hsr_p0 = proj(30.69175, 120.79370)
