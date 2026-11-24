@@ -54,7 +54,7 @@ static func build_city(
 	_build_roads_and_curbs(parent, map_data.get("roads", []), map_data.get("crosswalks", []), road_mat)
 
 	# 3a. Freeways (I-5, SR-520, Aurora Bridge ...) and the structure under street bridges
-	FreewayBuilder.build(parent, map_data.get("freeways", []), road_mat)
+	FreewayBuilder.build(parent, map_data.get("freeways", []), road_mat, map_data.get("roads", []))
 	FreewayBuilder.build_street_bridges(parent, map_data.get("roads", []))
 
 	# 4. 3D architectural buildings (podium setbacks + 3D piers/cornices + interior parallax walls)

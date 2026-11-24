@@ -520,6 +520,16 @@ func _run() -> void:
 		scenic_n != null and red_boat_n != null and rb_dist > 56.0,
 		"Jiaxing scenic walkways built & Red Boat floats cleanly offshore in Nanhu Lake (r=%.1fm from island center)" % rb_dist
 	)
+	# Verify FreewayBuilder portal-straddle pier resolution keeps piers off surface roads & tram tracks
+	var test_rd_grid := FreewayBuilder._build_road_grid([{"pts": [[0.0, 0.0], [100.0, 0.0]], "width": 16.0, "layer": 0}])
+	var resolved_cols := FreewayBuilder._resolve_pier_columns(Vector3(50.0, 7.4, 0.0), Vector3(0.0, 0.0, 1.0), 6.4, 1.6, test_rd_grid, {})
+	var cols_clear_of_road := resolved_cols.size() == 2 and absf(resolved_cols[0]) >= 9.0 and absf(resolved_cols[1]) >= 9.0
+	var ng_pos_arr: Array = (m._map_data.get("landmarks", {}) as Dictionary).get("nanhu_gate", {}).get("pos", [0.0, 0.0])
+	var ng_clear := Vector2(float(ng_pos_arr[0]), float(ng_pos_arr[1])).distance_to(Vector2(862.25, 500.54)) > 60.0
+	_check(
+		cols_clear_of_road and ng_clear,
+		"Freeway piers auto-straddle streets/tracks as Portal Bents (cols=%s) & Nanhu Gate sits clear of T1" % [str(resolved_cols)]
+	)
 
 	# Simulate 3D Light Rail & 3D Monorail trains traversing elevated, ramps & underground tunnels!
 	var lr_min_y := 1e9; var lr_max_y := -1e9

@@ -102,7 +102,7 @@ NANHU_ORIGIN = proj(30.7568, 120.7557)
 YANYU_POS = proj(30.75750, 120.75586)
 HAOGU_PAGODA_POS = (-158.0, -162.0)       # 壕股塔 (verified dry green park land on Nanhu NW peninsula beside 伍相祠!)
 HUIJINGYUAN_POS = (830.0, 56.0)           # 会景园码头 (Nanhu east shore)
-NANHU_GATE_POS = (862.0, 500.0)           # 南湖景区主大门广场
+NANHU_GATE_POS = (786.0, 486.0)           # 南湖景区主大门广场 (cleanly west of 海盐塘路 & Tram T1, facing east!)
 NANHU_TIANDI_POS = (798.0, -347.0)        # 南湖天地 (Nanhu NE lakeside commercial heritage)
 MEMORIAL_POS = proj(30.74986, 120.75693)  # 南湖革命纪念馆
 GOV_POS = (-95.0, 610.0)                  # 嘉兴市人民政府
@@ -1181,27 +1181,30 @@ INNER_RING_NAMES = ("中环北路", "中环西路", "三环东路", "三环南�
 INNER_RING_BOX = (-3250.0, -4020.0, 5600.0, 3680.0)
 
 
-def build_freeways(nodes, ways):
+def build_freeways(nodes, ways, road_grid=None):
     out = []
     existing_viaduct_grid = Grid(60.0)
+    elev_nodes = {}  # osm_node_id -> deck elevation y
 
-    def emit_viaduct(pts, lanes, oneway, y_deck, cls, nm, is_link=False):
+    def emit_viaduct(pts, lanes, oneway, y_start, y_end, cls, nm):
         if len(pts) < 2:
             return
         dense = [pts[0]]
+        cum = [0.0]
         for a, b in zip(pts, pts[1:]):
             L = math.hypot(b[0] - a[0], b[1] - a[1])
             n = max(1, int(math.ceil(L / 12.0)))
             for k in range(1, n + 1):
-                dense.append((a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n))
+                np = (a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n)
+                cum.append(cum[-1] + math.hypot(np[0] - dense[-1][0], np[1] - dense[-1][1]))
+                dense.append(np)
+        total_l = max(cum[-1], 1.0)
         w = lanes * 3.5 + (2.2 if oneway else 3.2)
         ys = []
-        for idx in range(len(dense)):
-            if is_link:
-                frac = float(idx) / max(1.0, float(len(dense) - 1))
-                ys.append(0.18 + (y_deck - 0.18) * min(1.0, min(frac * 2.2, (1.0 - frac) * 2.2) + 0.25))
-            else:
-                ys.append(y_deck)
+        for s_cur in cum:
+            u = max(0.0, min(1.0, s_cur / total_l))
+            su = u * u * (3.0 - 2.0 * u)
+            ys.append(y_start + (y_end - y_start) * su)
         P = [[round(p[0], 2), round(p[1], 2), round(y, 2)] for p, y in zip(dense, ys)]
         start = 0
         while start < len(P) - 1:
@@ -1217,7 +1220,17 @@ def build_freeways(nodes, ways):
             })
             start = end
 
-    # Pass A: Real OSM elevated expressways (内环快速路, 机场快速路, ramps & interchange flyovers)
+    # Collect surface street OSM nodes so ramp touchdown ends snap cleanly to ground level (y = 0.05m)!
+    surface_nodes = set()
+    for wid, (refs, t) in ways.items():
+        h_s = t.get("highway", "")
+        if h_s in ("primary", "secondary", "tertiary", "residential", "unclassified", "living_street", "service"):
+            lay_s = str(t.get("layer", "0")).split(";")[0]
+            if lay_s in ("0", "") and not (bool(t.get("bridge")) and t.get("bridge") != "no"):
+                surface_nodes.update(refs)
+
+    # Pass A1: Real OSM elevated MAINLINE expressways (内环快速路, 机场快速路 — motorway / trunk)
+    raw_links = []
     for wid, (refs, t) in ways.items():
         cls = t.get("highway", "")
         if cls not in ("motorway", "motorway_link", "trunk", "trunk_link"):
@@ -1240,18 +1253,6 @@ def build_freeways(nodes, ways):
         pts = [nodes[i] for i in ids]
         if not any(in_active(p, 25.0) for p in pts):
             continue
-        # Keep only segments inside active city/corridors
-        runs = []
-        cur = []
-        for p in pts:
-            if in_active(p, 60.0):
-                cur.append(p)
-            else:
-                if len(cur) >= 2:
-                    runs.append(cur)
-                cur = []
-        if len(cur) >= 2:
-            runs.append(cur)
         is_link = cls.endswith("_link")
         try:
             lanes = int(str(t.get("lanes", "")).split(";")[0])
@@ -1260,10 +1261,30 @@ def build_freeways(nodes, ways):
         lanes = max(1, min(4, lanes))
         oneway = t.get("oneway", "yes") in ("yes", "1", "-1")
         y_deck = 7.4 + 2.4 * max(0, min(2, layer - 1))
-        for run in runs:
-            emit_viaduct(run, lanes, oneway, y_deck, cls, nm or "嘉兴内环快速路", is_link=is_link)
+        if is_link:
+            raw_links.append((ids, lanes, oneway, y_deck, cls, nm or "嘉兴内环快速路匝道"))
+            continue
+        # Mainline elevated deck: keep active runs & record elevated node heights
+        runs = []
+        cur = []
+        cur_ids = []
+        for nid_r, p in zip(ids, pts):
+            if in_active(p, 60.0):
+                cur.append(p)
+                cur_ids.append(nid_r)
+            else:
+                if len(cur) >= 2:
+                    runs.append((cur_ids, cur))
+                cur = []
+                cur_ids = []
+        if len(cur) >= 2:
+            runs.append((cur_ids, cur))
+        for r_ids, run in runs:
+            emit_viaduct(run, lanes, oneway, y_deck, y_deck, cls, nm or "嘉兴内环快速路")
+            for nid_r in r_ids:
+                elev_nodes[nid_r] = max(elev_nodes.get(nid_r, 0.0), y_deck)
             for a, b in zip(run, run[1:]):
-                existing_viaduct_grid.add((a[0], a[1], b[0], b[1]),
+                existing_viaduct_grid.add((a[0], a[1], b[0], b[1], y_deck),
                                           min(a[0], b[0]) - 28, min(a[1], b[1]) - 28,
                                           max(a[0], b[0]) + 28, max(a[1], b[1]) + 28)
 
@@ -1282,9 +1303,9 @@ def build_freeways(nodes, ways):
         if len(ids) < 2:
             continue
         pts = [nodes[i] for i in ids if in_rect(nodes[i], INNER_RING_BOX, 40.0)]
+        r_ids = [i for i in ids if in_rect(nodes[i], INNER_RING_BOX, 40.0)]
         if len(pts) < 2:
             continue
-        # Keep 三环南路 / 三环东路 strictly on the Inner Ring corridor (skip outer suburban branches!)
         mid = pts[len(pts) // 2]
         if "三环南路" in nm and (mid[1] > 3620.0 or mid[0] < -2900.0 or mid[0] > 5480.0):
             continue
@@ -1294,21 +1315,160 @@ def build_freeways(nodes, ways):
             continue
         if "中环西路" in nm and (mid[1] > 3560.0 or mid[1] < -3750.0):
             continue
-        # Skip pieces where OSM already provides a dedicated 内环快速路 viaduct right overhead
         already = False
-        for (ax, ay, bx, by) in existing_viaduct_grid.query(mid[0] - 26, mid[1] - 26, mid[0] + 26, mid[1] + 26):
+        for (ax, ay, bx, by, _yd) in existing_viaduct_grid.query(mid[0] - 26, mid[1] - 26, mid[0] + 26, mid[1] + 26):
             if seg_dist(mid[0], mid[1], ax, ay, bx, by)[0] < 24.0:
                 already = True
                 break
         if already:
             continue
         oneway = t.get("oneway", "no") in ("yes", "1", "-1")
-        emit_viaduct(pts, 3 if oneway else 4, oneway, 7.4, "trunk", f"嘉兴内环快速路（{nm}）", is_link=False)
+        emit_viaduct(pts, 3 if oneway else 4, oneway, 7.4, 7.4, "trunk", f"嘉兴内环快速路（{nm}）")
+        for nid_r in r_ids:
+            elev_nodes[nid_r] = max(elev_nodes.get(nid_r, 0.0), 7.4)
         for a, b in zip(pts, pts[1:]):
-            existing_viaduct_grid.add((a[0], a[1], b[0], b[1]),
+            existing_viaduct_grid.add((a[0], a[1], b[0], b[1], 7.4),
                                       min(a[0], b[0]) - 28, min(a[1], b[1]) - 28,
                                       max(a[0], b[0]) + 28, max(a[1], b[1]) + 28)
         ring_added += 1
+
+    # Pass A2: Stitch connected *_link ramp chains & solve exact ground (0.06m) <-> elevated (7.4m+) elevations!
+    # Guarantees EVERY on/off ramp seamlessly touches the ground road at y=0.06m AND joins the elevated deck at y=7.4m!
+    def endpoint_elev(nid, pt, default_deck):
+        if nid in elev_nodes:
+            return elev_nodes[nid], True
+        if nid in surface_nodes:
+            return 0.06, False
+        best_d = 1e9
+        best_y = default_deck
+        for (ax, ay, bx, by, yd) in existing_viaduct_grid.query(pt[0] - 18, pt[1] - 18, pt[0] + 18, pt[1] + 18):
+            dd = seg_dist(pt[0], pt[1], ax, ay, bx, by)[0]
+            if dd < best_d:
+                best_d = dd
+                best_y = yd
+        if best_d < 13.5:
+            return best_y, True
+        return 0.06, False
+
+    def snap_ground_to_road(pts_list, at_end):
+        """Extend a ramp's ground touchdown smoothly flush onto the adjacent surface road carriageway edge."""
+        if road_grid is None or len(pts_list) < 2:
+            return pts_list
+        p_end = pts_list[-1] if at_end else pts_list[0]
+        p_prev = pts_list[-2] if at_end else pts_list[1]
+        best_d = 1e9
+        best_proj = None
+        best_hw = 6.0
+        best_nrm = (0.0, 1.0)
+        for (ax, ay, bx, by, hw) in road_grid.query(p_end[0] - 32, p_end[1] - 32, p_end[0] + 32, p_end[1] + 32):
+            dx, dy = bx - ax, by - ay
+            l2 = dx * dx + dy * dy
+            if l2 < 1e-6:
+                continue
+            t_p = max(0.0, min(1.0, ((p_end[0] - ax) * dx + (p_end[1] - ay) * dy) / l2))
+            proj_p = (ax + dx * t_p, ay + dy * t_p)
+            dd = math.hypot(p_end[0] - proj_p[0], p_end[1] - proj_p[1])
+            if dd < best_d:
+                best_d = dd
+                best_proj = proj_p
+                best_hw = hw
+                sl = math.sqrt(l2)
+                best_nrm = (-dy / sl, dx / sl)
+        if best_proj is None or best_d > 30.0:
+            return pts_list
+        # If the ramp touchdown sits right on the center of a surface road (where a center tramway runs!),
+        # shift the ground touchdown cleanly PERPENDICULAR onto the outer motor lane (~7.0m from centerline)!
+        if best_d < 6.4:
+            # Find which side of the surface road the ramp body lies on
+            ref_idx = min(len(pts_list) - 1, max(1, len(pts_list) // 3)) if not at_end else max(0, len(pts_list) - 1 - max(1, len(pts_list) // 3))
+            p_ref = pts_list[ref_idx]
+            nx, ny = best_nrm
+            if (p_ref[0] - best_proj[0]) * nx + (p_ref[1] - best_proj[1]) * ny < 0.0:
+                nx, ny = -nx, -ny
+            lat_off = max(best_hw - 0.5, 7.2)
+            new_pts = list(pts_list)
+            # Shift any vertices near the touchdown that sit within lat_off of the road centerline onto the outer lane!
+            idxs = range(min(4, len(new_pts))) if not at_end else range(len(new_pts) - 1, max(-1, len(new_pts) - 5), -1)
+            for k_i in idxs:
+                pk = new_pts[k_i]
+                # Lateral signed distance from road line through best_proj
+                s_lat = (pk[0] - best_proj[0]) * nx + (pk[1] - best_proj[1]) * ny
+                if s_lat < lat_off:
+                    delta = lat_off - s_lat
+                    new_pts[k_i] = (pk[0] + nx * delta, pk[1] + ny * delta)
+            return new_pts
+        # Touch down cleanly on the outer lane edge of the surface road (staying clear of center tramway!)
+        if best_d > best_hw + 0.5:
+            vx, vy = p_end[0] - best_proj[0], p_end[1] - best_proj[1]
+            vl = max(math.hypot(vx, vy), 1e-6)
+            target = (best_proj[0] + vx / vl * max(best_hw - 1.4, 5.8), best_proj[1] + vy / vl * max(best_hw - 1.4, 5.8))
+            if math.hypot(target[0] - p_end[0], target[1] - p_end[1]) >= 2.0:
+                tdx, tdy = p_end[0] - p_prev[0], p_end[1] - p_prev[1]
+                tl = max(math.hypot(tdx, tdy), 1e-6)
+                target = (target[0] + tdx / tl * 6.0, target[1] + tdy / tl * 6.0)
+                return (pts_list + [target]) if at_end else ([target] + pts_list)
+        return pts_list
+
+    # Stitch simple degree-2 intermediate link nodes (e.g. bridge=yes ramp + ground approach ramp) into full chains!
+    link_end_map = defaultdict(list)
+    for li, item in enumerate(raw_links):
+        ids_l = item[0]
+        link_end_map[ids_l[0]].append((li, 0))
+        link_end_map[ids_l[-1]].append((li, 1))
+    used_link = [False] * len(raw_links)
+    stitched_links = []
+    for li in range(len(raw_links)):
+        if used_link[li]:
+            continue
+        used_link[li] = True
+        ids_c, lanes_c, ow_c, yd_c, cls_c, nm_c = raw_links[li]
+        chain = list(ids_c)
+        # Extend forward and backward through purely intermediate link nodes (not elev_nodes and not surface_nodes)
+        for extend_end in (True, False):
+            while True:
+                cur_n = chain[-1] if extend_end else chain[0]
+                if cur_n in elev_nodes or cur_n in surface_nodes:
+                    break
+                cands = [(oi, side_o) for (oi, side_o) in link_end_map[cur_n] if not used_link[oi]]
+                if len(cands) != 1:
+                    break
+                oi, side_o = cands[0]
+                used_link[oi] = True
+                oids = list(raw_links[oi][0])
+                yd_c = max(yd_c, raw_links[oi][3])
+                if extend_end:
+                    if side_o == 1:
+                        oids.reverse()
+                    chain.extend(oids[1:])
+                else:
+                    if side_o == 0:
+                        oids.reverse()
+                    chain = oids[:-1] + chain
+        stitched_links.append((chain, lanes_c, ow_c, yd_c, cls_c, nm_c))
+
+    ramp_cnt = 0
+    for chain, lanes_c, ow_c, yd_c, cls_c, nm_c in stitched_links:
+        pts_c = [nodes[nid] for nid in chain if nid in nodes]
+        ids_c = [nid for nid in chain if nid in nodes]
+        if len(pts_c) < 2 or not any(in_active(p, 40.0) for p in pts_c):
+            continue
+        # Keep active span
+        if not all(in_active(p, 80.0) for p in pts_c):
+            pts_c = [p for p in pts_c if in_active(p, 80.0)]
+            ids_c = [nid for nid in ids_c if in_active(nodes[nid], 80.0)]
+            if len(pts_c) < 2:
+                continue
+        y0, e0 = endpoint_elev(ids_c[0], pts_c[0], yd_c)
+        y1, e1 = endpoint_elev(ids_c[-1], pts_c[-1], yd_c)
+        if not e0 and e1:
+            pts_c = snap_ground_to_road(pts_c, at_end=False)
+        elif e0 and not e1:
+            pts_c = snap_ground_to_road(pts_c, at_end=True)
+        elif not e0 and not e1:
+            # Ground-level surface slip road (both ends on ground) — keep low flush with road or skip if tiny
+            y0, y1 = 0.06, 0.06
+        emit_viaduct(pts_c, lanes_c, ow_c, y0, y1, cls_c, nm_c)
+        ramp_cnt += 1
 
     # Verify 360-degree ring continuity around ring center (1100, -100) across 36 angular sectors
     ring_sectors = [0] * 36
@@ -1319,7 +1479,7 @@ def build_freeways(nodes, ways):
                     ang = math.degrees(math.atan2(pt[1] + 100.0, pt[0] - 1100.0)) % 360.0
                     ring_sectors[int(ang // 10)] += 1
     covered = sum(1 for c in ring_sectors if c > 0)
-    print(f"Freeways (Closed Inner Ring + Airport Expressway): {len(out)} pieces (+{ring_added} Inner Ring completions, {covered}/36 ring sectors covered)")
+    print(f"Freeways (Closed Inner Ring + Airport Expressway): {len(out)} pieces (+{ring_added} Inner Ring completions, {ramp_cnt} stitched ramps, {covered}/36 ring sectors covered)")
     return out
 
 
@@ -1814,7 +1974,7 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
 # ---------------------------------------------------------------------------------------------
 # 5. Roads, Crosswalks, Streetlamps, Avenue Trees, Storefronts
 # ---------------------------------------------------------------------------------------------
-def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_grid, water_grid, rail_grid, bld_grid):
+def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_grid, water_grid, rail_grid, bld_grid, freeway_grid=None):
     deg = defaultdict(int)
     for e in edges:
         deg[e["a"]] += 1
@@ -1925,6 +2085,11 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
         if ok:
             for (ax, ay, bx, by, rw) in rail_grid.query(tx - 14, ty - 14, tx + 14, ty + 14):
                 if seg_dist(tx, ty, ax, ay, bx, by)[0] < rw - 2.5:
+                    ok = False
+                    break
+        if ok and freeway_grid is not None:
+            for (ax, ay, bx, by, fhw) in freeway_grid.query(tx - 16, ty - 16, tx + 16, ty + 16):
+                if seg_dist(tx, ty, ax, ay, bx, by)[0] < fhw + 4.4:
                     ok = False
                     break
         if ok:
@@ -2284,10 +2449,20 @@ def main():
         ys = [p[1] for p in b["pts"]]
         bld_grid.add((min(xs), min(ys), max(xs), max(ys), b["pts"]), min(xs), min(ys), max(xs), max(ys))
 
+    freeways = build_freeways(nodes, ways, road_grid)
+    freeway_grid = Grid(60.0)
+    for fw in freeways:
+        fpts = fw["pts"]
+        fhw = float(fw.get("w", 12.0)) * 0.5
+        for k in range(len(fpts) - 1):
+            a, b = fpts[k], fpts[k + 1]
+            freeway_grid.add((a[0], a[1], b[0], b[1], fhw),
+                             min(a[0], b[0]) - fhw - 5.0, min(a[1], b[1]) - fhw - 5.0,
+                             max(a[0], b[0]) + fhw + 5.0, max(a[1], b[1]) + fhw + 5.0)
+
     roads, cws, lamps, trees, storefronts = build_street_furniture(
-        graph_edges, graph_nodes, blds, poi_nodes, nodes, road_grid, water_grid, rail_grid, bld_grid
+        graph_edges, graph_nodes, blds, poi_nodes, nodes, road_grid, water_grid, rail_grid, bld_grid, freeway_grid
     )
-    freeways = build_freeways(nodes, ways)
     starter = build_t1_starter_network(graph_nodes, graph_edges)
 
     # Exact HSR station angle from real OSM platform orientation (~27 deg ENE-WSW)
@@ -2359,7 +2534,7 @@ def main():
         {"name": "戴梦得购物中心", "sub": "DAIMOND PLAZA", "pos": rnd((-722.1, -879.4)), "angle": 0.0, "color": [0.16, 0.20, 0.34]},
         {"name": "旭 辉 广 场", "sub": "CIFI MALL", "pos": rnd((-947.0, -896.5)), "angle": 0.0, "color": [0.80, 0.26, 0.14]},
         {"name": "经开万达广场", "sub": "WANDA PLAZA", "pos": rnd((-3645.8, -16.9)), "angle": 1.57, "color": [0.08, 0.32, 0.64]},
-        {"name": "华府八佰伴", "sub": "YAOHAN PLAZA", "pos": rnd((-2006.0, 2288.0)), "angle": 0.0, "color": [0.14, 0.22, 0.38]},
+        {"name": "华府八佰伴", "sub": "YAOHAN PLAZA", "pos": rnd((-2018.0, 2288.0)), "angle": 0.0, "color": [0.14, 0.22, 0.38]},
     ]
 
     # Extract real OSM scenic park walkways & historic old-town alleys (南湖景区步道 / 月河青石板老街 / 湘家荡生态绿道)
@@ -2406,8 +2581,8 @@ def main():
         ("timber", 3.2, [(-290, -110), (-210, -90), (-135, -95), (-65, -115), (-35, -205), (-25, -310)]),
         ("greenway", 3.6, [(-420, -260), (-330, -120), (-260, -10), (-220, 120), (-180, 240)]),
         # Nanhu South & East Scenic Park promenade linking Main Gate -> Huijingyuan -> Nanhu Tiandi
-        ("greenway", 3.8, [(862, 500), (848, 320), (835, 160), (830, 56), (822, -140), (798, -347)]),
-        ("stone", 3.2, [(862, 500), (680, 460), (540, 440), (410, 470)]),
+        ("greenway", 3.8, [(786, 486), (824, 320), (830, 160), (830, 56), (822, -140), (798, -347)]),
+        ("stone", 3.4, [(842, 498), (786, 486), (680, 460), (540, 440), (410, 470)]),
         # Xiangjiadang Wetland Park lush dry-shore circular walking trails & lakefront greenway!
         ("greenway", 4.0, [(4520, -5620), (4640, -5420), (4710, -5180), (4700, -4920), (4640, -4680), (4820, -4480)]),
         ("stone", 3.2, [(4710, -5180), (4560, -5180), (4560, -4960), (4700, -4920)]),
@@ -2469,7 +2644,7 @@ def main():
         "yanyu_tower": {"pos": rnd(YANYU_POS), "island_pts": island_pts},
         "haogu_pagoda": {"pos": rnd(HAOGU_PAGODA_POS)},
         "huijingyuan": {"pos": rnd(HUIJINGYUAN_POS)},
-        "nanhu_gate": {"pos": rnd(NANHU_GATE_POS), "angle": -0.25},
+        "nanhu_gate": {"pos": rnd(NANHU_GATE_POS), "angle": -1.32},
         "nanhu_tiandi": {"pos": rnd(NANHU_TIANDI_POS)},
         "nanhu_memorial": {"pos": rnd(MEMORIAL_POS), "angle": 0.08},
         "jiaxing_gov": {"pos": rnd(GOV_POS), "angle": 0.04},
