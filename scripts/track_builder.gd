@@ -1454,6 +1454,8 @@ static func build_network_tracks_and_stations(
 		var vignole := is_vignole_style(eff_seg_st)
 		edge_eff_vignole[eid] = vignole
 		var portal_emitted := false
+		var utrough_pts: Array[Vector2] = []
+		var utrough_max_sep := sep_base
 		for i in range(frames.size() - 1):
 			var f0 := frames[i]
 			var f1 := frames[i + 1]
@@ -1491,10 +1493,9 @@ static func build_network_tracks_and_stations(
 					# Open-cut concrete U-trough retaining walls rising to street level (+0.55m above ground)
 					_emit_utrough_seg(tunnel_wall_st, f0, f1, sep_f0, sep_f1, false)
 					has_tunnel = true
-					if (i % 3 == 0):
-						var fw2 := Vector2(-f0.basis.z.x, -f0.basis.z.z).normalized()
-						var mid_xz := Vector2((f0.origin.x + f1.origin.x) * 0.5, (f0.origin.z + f1.origin.z) * 0.5)
-						portal_cutouts.append({"pos": mid_xz, "fwd": fw2, "hl": 3.4, "hw": sep + 2.35})
+					utrough_pts.append(Vector2(f0.origin.x, f0.origin.z))
+					utrough_pts.append(Vector2(f1.origin.x, f1.origin.z))
+					utrough_max_sep = maxf(utrough_max_sep, sep)
 					if not portal_emitted and minf(f0.origin.y, f1.origin.y) <= -4.15:
 						portal_emitted = true
 						var f_port := f1 if f1.origin.y < f0.origin.y else f0
@@ -1579,6 +1580,20 @@ static func build_network_tracks_and_stations(
 				var sf0 := f0; sf0.origin += f0.basis.x * offs0[li]
 				var sf1 := f1; sf1.origin += f1.basis.x * offs1[li]
 				_emit_rail_pair_and_wire(dark_rail_st, bright_rail_st, wire_st, sf0, sf1, local_vig)
+
+		# Emit ONE compact merged oriented portal cutout per open-cut U-trough ramp (never overflows the 16-slot shader array!)
+		if utrough_pts.size() >= 2:
+			var p_u0 := utrough_pts[0]
+			var p_u1 := utrough_pts[utrough_pts.size() - 1]
+			var v_u := p_u1 - p_u0
+			var len_u := v_u.length()
+			if len_u > 0.2:
+				portal_cutouts.append({
+					"pos": (p_u0 + p_u1) * 0.5,
+					"fwd": v_u / len_u,
+					"hl": len_u * 0.5 + 3.6,
+					"hw": utrough_max_sep + 2.65,
+				})
 
 		# Elevated Light Rail Viaduct Piers every ~28m (clear of intersections & cross streets)
 		if graph.edge_has_elevated_part(eid):
@@ -3068,6 +3083,8 @@ static func _build_monorail_guideways(
 				cuts.append(sc)
 		cuts.sort()
 		var mono_portal_emitted := false
+		var mono_ut_pts: Array[Vector2] = []
+		var mono_ut_sep := 0.0
 		for k in range(cuts.size() - 1):
 			var sa := cuts[k]
 			var sb := cuts[k + 1]
@@ -3082,10 +3099,9 @@ static func _build_monorail_guideways(
 				if ym > -4.65:
 					_emit_utrough_seg(tunnel_wall_st, fa, fb, sep_m0, sep_m1, true)
 					ug_flags["tunnel"] = true
-					if (k % 3 == 0):
-						var fw2m := Vector2(-fa.basis.z.x, -fa.basis.z.z).normalized()
-						var mid_xzm := Vector2((fa.origin.x + fb.origin.x) * 0.5, (fa.origin.z + fb.origin.z) * 0.5)
-						portal_cutouts.append({"pos": mid_xzm, "fwd": fw2m, "hl": 3.4, "hw": sep_m0 + 2.65})
+					mono_ut_pts.append(Vector2(fa.origin.x, fa.origin.z))
+					mono_ut_pts.append(Vector2(fb.origin.x, fb.origin.z))
+					mono_ut_sep = maxf(mono_ut_sep, maxf(sep_m0, sep_m1))
 					if not mono_portal_emitted and minf(fa.origin.y, fb.origin.y) <= -4.40:
 						mono_portal_emitted = true
 						var f_pm := fb if fb.origin.y < fa.origin.y else fa
@@ -3112,6 +3128,18 @@ static func _build_monorail_guideways(
 				var la := ln * geom_sep_at(g, sa)
 				var lb := ln * geom_sep_at(g, sb)
 				_mono_beam_segment(beam_st, rail_st, fa, fb, la, lb, top, bot, hw)
+		if mono_ut_pts.size() >= 2:
+			var mp0 := mono_ut_pts[0]
+			var mp1 := mono_ut_pts[mono_ut_pts.size() - 1]
+			var mv := mp1 - mp0
+			var mlen := mv.length()
+			if mlen > 0.2:
+				portal_cutouts.append({
+					"pos": (mp0 + mp1) * 0.5,
+					"fwd": mv / mlen,
+					"hl": mlen * 0.5 + 3.6,
+					"hw": mono_ut_sep + 2.85,
+				})
 		# T-piers every ~28m under elevated guideways — strictly CLEAR of intersections & crosswalks!
 		var ps := s0 + 9.0
 		while ps < s1 - 5.5:

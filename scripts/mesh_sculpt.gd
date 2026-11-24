@@ -280,3 +280,115 @@ static func add_lofted_hull(
 			st.set_color(col); st.set_normal(fnrm); st.add_vertex(cen)
 			st.set_color(col); st.set_normal(fnrm); st.add_vertex(v0)
 			st.set_color(col); st.set_normal(fnrm); st.add_vertex(v1)
+
+
+# Sweeps ONE continuous seamless organic tube along a 3D multi-joint polyline (e.g. shoulder -> elbow -> wrist,
+# or pelvis -> thigh -> knee -> calf -> ankle) using Bishop parallel-transport frames so joints bend smoothly
+# with ZERO pinched spheres or balloon seams!
+static func add_swept_limb(
+	st: SurfaceTool,
+	pts: Array[Vector3],
+	rads: Array[float],
+	segs: int,
+	col: Color,
+	cap_a: bool = true,
+	cap_b: bool = true
+) -> void:
+	var n := pts.size()
+	if n < 2 or rads.size() != n:
+		return
+
+	# Build smoothed tangents at each station
+	var tangs: Array[Vector3] = []
+	for i in range(n):
+		var t_vec := Vector3.ZERO
+		if i == 0:
+			t_vec = pts[1] - pts[0]
+		elif i == n - 1:
+			t_vec = pts[n - 1] - pts[n - 2]
+		else:
+			var d0 := (pts[i] - pts[i - 1]).normalized()
+			var d1 := (pts[i + 1] - pts[i]).normalized()
+			t_vec = d0 + d1
+			if t_vec.length_squared() < 1e-6:
+				t_vec = d0
+		tangs.append(t_vec.normalized() if t_vec.length_squared() > 1e-8 else Vector3.UP)
+
+	# Parallel-transport orthonormal cross-section frame (u, v) along the limb curve
+	var ref := Vector3.RIGHT if absf(tangs[0].dot(Vector3.RIGHT)) < 0.85 else Vector3.FORWARD
+	var u := tangs[0].cross(ref).normalized()
+	var v := tangs[0].cross(u).normalized()
+	var rings_v: Array = []
+	var rings_n: Array = []
+	for i in range(n):
+		var ti := tangs[i]
+		if i > 0:
+			var prev_t := tangs[i - 1]
+			var axis := prev_t.cross(ti)
+			var sin_a := axis.length()
+			if sin_a > 1e-5:
+				var ang := atan2(sin_a, clampf(prev_t.dot(ti), -1.0, 1.0))
+				var q := Quaternion(axis / sin_a, ang)
+				u = (q * u).normalized()
+			# Re-orthogonalize cleanly
+			u = (u - ti * u.dot(ti)).normalized()
+			v = ti.cross(u).normalized()
+		var r := rads[i]
+		var rv: Array[Vector3] = []
+		var rn: Array[Vector3] = []
+		for j in range(segs):
+			var a := TAU * float(j) / float(segs)
+			var nrm := (u * cos(a) + v * sin(a)).normalized()
+			rv.append(pts[i] + nrm * r)
+			rn.append(nrm)
+		rings_v.append(rv)
+		rings_n.append(rn)
+
+	# Connect consecutive rings with guaranteed outward-facing smooth quads
+	for i in range(n - 1):
+		var r0: Array = rings_v[i]
+		var r1: Array = rings_v[i + 1]
+		var n0: Array = rings_n[i]
+		var n1: Array = rings_n[i + 1]
+		for j in range(segs):
+			var jn := (j + 1) % segs
+			var v0: Vector3 = r0[j]
+			var v1: Vector3 = r1[j]
+			var v2: Vector3 = r1[jn]
+			var v3: Vector3 = r0[jn]
+			var avg_n := ((n0[j] as Vector3) + (n1[j] as Vector3) + (n1[jn] as Vector3) + (n0[jn] as Vector3)).normalized()
+			if (v1 - v0).cross(v2 - v0).dot(avg_n) >= 0.0:
+				emit_smooth_quad(st, v0, n0[j], v1, n1[j], v2, n1[jn], v3, n0[jn], col)
+			else:
+				emit_smooth_quad(st, v0, n0[j], v3, n0[jn], v2, n1[jn], v1, n1[j], col)
+
+	if cap_a:
+		var rf: Array = rings_v[0]
+		var fn := -tangs[0]
+		for j in range(segs):
+			var jn := (j + 1) % segs
+			var v0: Vector3 = rf[j]
+			var v1: Vector3 = rf[jn]
+			if (v1 - pts[0]).cross(v0 - pts[0]).dot(fn) >= 0.0:
+				st.set_color(col); st.set_normal(fn); st.add_vertex(pts[0])
+				st.set_color(col); st.set_normal(fn); st.add_vertex(v1)
+				st.set_color(col); st.set_normal(fn); st.add_vertex(v0)
+			else:
+				st.set_color(col); st.set_normal(fn); st.add_vertex(pts[0])
+				st.set_color(col); st.set_normal(fn); st.add_vertex(v0)
+				st.set_color(col); st.set_normal(fn); st.add_vertex(v1)
+	if cap_b:
+		var rl: Array = rings_v[n - 1]
+		var fn2 := tangs[n - 1]
+		for j in range(segs):
+			var jn := (j + 1) % segs
+			var v0: Vector3 = rl[j]
+			var v1: Vector3 = rl[jn]
+			if (v0 - pts[n - 1]).cross(v1 - pts[n - 1]).dot(fn2) >= 0.0:
+				st.set_color(col); st.set_normal(fn2); st.add_vertex(pts[n - 1])
+				st.set_color(col); st.set_normal(fn2); st.add_vertex(v0)
+				st.set_color(col); st.set_normal(fn2); st.add_vertex(v1)
+			else:
+				st.set_color(col); st.set_normal(fn2); st.add_vertex(pts[n - 1])
+				st.set_color(col); st.set_normal(fn2); st.add_vertex(v1)
+				st.set_color(col); st.set_normal(fn2); st.add_vertex(v0)

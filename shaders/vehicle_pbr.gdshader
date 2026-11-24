@@ -117,6 +117,29 @@ void fragment() {
 		col = mix(vec3(0.55, 0.34, 0.06), vec3(1.0, 0.68, 0.08), blink);
 		emit = vec3(1.0, 0.62, 0.06) * (blink * 4.2);
 		rough = 0.12;
+	} else if (mat_id == 7) {
+		// === Matte Woven Fabric / Clothing / Leather Seat (zero metallic shine, zero checkerboard!) ===
+		float weave = 0.96 + 0.05 * hash21(floor(v_local_pos.xy * 110.0 + v_local_pos.z * 90.0));
+		float fold = 0.94 + 0.06 * clamp(v_world_nrm.y * 0.5 + 0.5, 0.0, 1.0);
+		col = v_col.rgb * weave * fold;
+		rough = 0.90;
+		metal = 0.0;
+		spec = 0.14;
+		ccoat = 0.0;
+	} else if (mat_id == 8) {
+		// === Matte Natural Skin & Hair (warm soft diffuse, non-metallic!) ===
+		col = v_col.rgb;
+		rough = 0.72;
+		metal = 0.0;
+		spec = 0.24;
+		ccoat = 0.0;
+	} else if (mat_id == 9) {
+		// === Satin Matte Polymer / Scooter Seat Trim / Rubber Grips (clean, no honeycomb grille!) ===
+		col = v_col.rgb;
+		rough = 0.58;
+		metal = 0.04;
+		spec = 0.32;
+		ccoat = 0.0;
 	}
 
 	ALBEDO = col;

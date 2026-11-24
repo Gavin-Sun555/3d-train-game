@@ -21,6 +21,7 @@ var _rng := RandomNumberGenerator.new()
 var _bike_edges: Array[int] = []
 var _bike_edge_grid: Dictionary = {} # Vector2i (160m cell) -> Array[int]
 var _mast_grid: Dictionary = {}      # Vector2i (24m cell) -> Array[Vector2]
+var _clear_idx: Dictionary = {}      # Cached TrackBuilder track_clear_idx so e-bikes NEVER overlap tram rails
 
 
 func _ready() -> void:
@@ -50,6 +51,7 @@ func rebuild(graph: NetworkGraph, focus_pos: Vector3) -> void:
 	_mmis_lod1.clear()
 	_bike_edges.clear()
 	_bike_edge_grid.clear()
+	_clear_idx = graph.get_meta("track_clear_idx", {})
 	_rebuild_mast_grid(graph)
 
 	if not bool(graph.get_meta("is_chinese_city", false)):
@@ -59,10 +61,8 @@ func rebuild(graph: NetworkGraph, focus_pos: Vector3) -> void:
 
 	for eid_v in graph.edges.keys():
 		var eid := int(eid_v)
-		var ed: Dictionary = graph.edges[eid]
-		if bool(ed.get("underground", false)):
-			continue
-		if float(ed.get("width", 10.0)) >= 8.0 and float(ed.get("length", 0.0)) >= 18.0:
+		if _edge_allows_ebike(graph, eid):
+			var ed: Dictionary = graph.edges[eid]
 			_bike_edges.append(eid)
 			var pts: Array = ed["pts"]
 			var mp: Vector2 = pts[pts.size() / 2]
@@ -263,6 +263,41 @@ func step(dt: float, graph: NetworkGraph, traffic: TrafficSim, trams: Array[Dict
 		_update_transform(eb, graph)
 
 
+func _edge_allows_ebike(graph: NetworkGraph, eid: int) -> bool:
+	if not graph.edges.has(eid):
+		return false
+	var ed: Dictionary = graph.edges[eid]
+	if bool(ed.get("underground", false)):
+		return false
+	var elen := float(ed.get("length", 0.0))
+	var w := float(ed.get("width", 10.0))
+	if w < 8.0 or elen < 18.0:
+		return false
+	var hw := clampf(w * 0.5, 4.0, 13.5)
+	if graph.built_tracks.has(eid):
+		# Only permit bike lanes on wide tram boulevards with full clearance outside the tram dynamic envelope!
+		var tram_half := graph.get_edge_track_half_sep(eid)
+		if hw < tram_half + 3.55:
+			return false
+	# Also ensure the outer bike-lane path is clear of any nearby/curved tram tracks in _clear_idx
+	if not _clear_idx.is_empty():
+		var pts: Array = ed["pts"]
+		if pts.size() >= 2:
+			var bl_w := 2.05 if hw >= 5.75 else (1.55 if hw >= 4.8 else 1.25)
+			var lat_chk := maxf(2.2, hw - bl_w * 0.52)
+			var p0: Vector2 = pts[0]
+			var p1: Vector2 = pts[pts.size() - 1]
+			var d := p1 - p0
+			if d.length_squared() > 1.0:
+				var nrm := Vector2(-d.y, d.x).normalized()
+				var mid := pts[pts.size() / 2] as Vector2
+				var clr_r := TrackBuilder.track_clearance_dist(_clear_idx, mid + nrm * lat_chk)
+				var clr_l := TrackBuilder.track_clearance_dist(_clear_idx, mid - nrm * lat_chk)
+				if clr_r < 2.25 or clr_l < 2.25:
+					return false
+	return true
+
+
 func _advance_next_edge(eb: Dictionary, graph: NetworkGraph, at_nid: int, prev_eid: int) -> void:
 	var cands: Array[Dictionary] = []
 	var prev_fwd: Vector3 = eb["fwd"]
@@ -270,13 +305,9 @@ func _advance_next_edge(eb: Dictionary, graph: NetworkGraph, at_nid: int, prev_e
 	var best_dot := -2.0
 	for link in graph.adj.get(at_nid, []):
 		var ne := int(link["edge_id"])
-		if ne == prev_eid:
+		if ne == prev_eid or not _edge_allows_ebike(graph, ne):
 			continue
 		var ed: Dictionary = graph.edges[ne]
-		if bool(ed.get("underground", false)) or float(ed.get("length", 0.0)) < 14.0:
-			continue
-		if float(ed.get("width", 10.0)) < 7.8:
-			continue
 		var ndir := 1.0 if int(ed["a"]) == at_nid else -1.0
 		var pts: Array = ed["pts"]
 		var p0: Vector2 = pts[0] if ndir > 0.0 else pts[pts.size() - 1]
@@ -368,6 +399,8 @@ func _update_transform(eb: Dictionary, graph: NetworkGraph) -> void:
 	var hw := clampf(float(ed.get("width", 10.0)) * 0.5, 4.0, 13.5)
 	var bl_w := 2.05 if hw >= 5.75 else (1.55 if hw >= 4.8 else 1.25)
 	var lat_off := maxf(2.2, hw - bl_w * 0.52) + float(eb.get("lane_jitter", 0.0)) * (1.0 if hw >= 5.75 else 0.55)
+	if graph.built_tracks.has(eid):
+		lat_off = clampf(lat_off, graph.get_edge_track_half_sep(eid) + 2.55, hw - 0.45)
 	var fr := TrafficSim._edge_frame(graph, eid, s, elen, dir)
 	var center: Vector3 = fr[0]
 	var fwd: Vector3 = fr[1]
@@ -378,6 +411,13 @@ func _update_transform(eb: Dictionary, graph: NetworkGraph) -> void:
 		fwd = fwd.normalized()
 	var right := fwd.cross(Vector3.UP).normalized()
 	var pos := _nudge_clear_of_masts(center + right * lat_off, right)
+	if not _clear_idx.is_empty():
+		var tc := TrackBuilder.track_clearance_dist(_clear_idx, Vector2(pos.x, pos.z))
+		if tc < 2.25:
+			# Push cleanly outward toward the outer curb if a diagonal/curved track encroaches
+			var p_out := pos + right * (2.35 - tc)
+			var p_in := pos - right * (2.35 - tc)
+			pos = p_out if TrackBuilder.track_clearance_dist(_clear_idx, Vector2(p_out.x, p_out.z)) >= TrackBuilder.track_clearance_dist(_clear_idx, Vector2(p_in.x, p_in.z)) else p_in
 	pos.y = 0.055 + (Terrain.surface(pos.x, pos.z) if Terrain.active else 0.0)
 	eb["pos"] = pos
 	eb["fwd"] = fwd
@@ -459,19 +499,22 @@ static func _make_scooter_mesh(
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 
-	# Material IDs for vehicle_pbr.gdshader: 0=clearcoat paint, 1=glass/visor, 2=tire/alloy, 3=matte/trim/fabric, 4=LED head, 5=ruby tail
+	# Material IDs for vehicle_pbr.gdshader: 0=clearcoat paint, 1=glass/visor, 2=tire/alloy, 3=chrome/grille, 4=LED head, 5=ruby tail, 7=matte cloth/leather, 8=matte skin/hair, 9=satin plastic trim
 	var c_body := _pbr(body_rgb, 0)
 	var c_helm := _pbr(helmet_rgb, 0)
 	var c_glass := _pbr(Color(0.08, 0.14, 0.20), 1)
 	var c_tire := _pbr(Color(0.09, 0.09, 0.10), 2)
 	var c_rim := _pbr(Color(0.76, 0.79, 0.82), 3)
 	var c_brake := _pbr(Color(0.42, 0.44, 0.47), 3)
-	var c_trim := _pbr(Color(0.15, 0.16, 0.18), 3)
+	var c_trim := _pbr(Color(0.15, 0.16, 0.18), 9)
+	var c_seat := _pbr(Color(0.16, 0.15, 0.16), 7)
 	var c_chrome := _pbr(Color(0.78, 0.80, 0.84), 3)
-	var c_jacket := _pbr(jacket_rgb, 3)
-	var c_pants := _pbr(Color(0.18, 0.21, 0.27), 3)
-	var c_skin := _pbr(Color(0.88, 0.74, 0.62), 3)
-	var c_shoe := _pbr(Color(0.14, 0.14, 0.16), 3)
+	var c_jacket := _pbr(jacket_rgb, 7)
+	var c_collar := _pbr(jacket_rgb.darkened(0.22), 7)
+	var c_pants := _pbr(Color(0.18, 0.22, 0.29), 7)
+	var c_skin := _pbr(Color(0.89, 0.75, 0.63), 8)
+	var c_hair := _pbr(Color(0.13, 0.11, 0.10), 8)
+	var c_shoe := _pbr(Color(0.16, 0.16, 0.18), 7)
 	var c_head := _pbr(Color(1.0, 0.96, 0.86), 4)
 	var c_tail := _pbr(Color(0.95, 0.10, 0.10), 5)
 
@@ -480,7 +523,6 @@ static func _make_scooter_mesh(
 	var t_seg := 4 if lod1 else 10
 	var e_seg := 5 if lod1 else 14
 	var e_rng := 3 if lod1 else 9
-	var cap_r := 1 if lod1 else 3
 
 	# 1. Sculpted Toroidal Front & Rear Wheels + 5-Spoke Alloy Rims + Brake Rotors!
 	MeshSculpt.add_sculpted_wheel(st, Vector3(0.0, 0.24, -0.64), 0.24, 0.11, 0.0, w_maj, w_min, c_tire, c_rim, c_brake, 5, false)
@@ -518,8 +560,14 @@ static func _make_scooter_mesh(
 		_oval_ring(Vector3(0.0, 0.96, -0.44), 0.15, 0.09, e_seg),
 	]
 	MeshSculpt.add_lofted_hull(st, apron_stations, c_body, true, true, true)
-	# Sculpted ergonomic leather seat cushion + rear grab handle
-	MeshSculpt.add_capsule(st, Vector3(0.0, 0.76, 0.12), Vector3(0.0, 0.79, 0.58), 0.13, 0.14, e_seg, 4, c_trim)
+	# Sculpted ergonomic leather seat cushion (matte leather mat_id=7, smooth lofted contour!)
+	var seat_st := [
+		_oval_ring(Vector3(0.0, 0.74, 0.06), 0.11, 0.065, e_seg),
+		_oval_ring(Vector3(0.0, 0.76, 0.22), 0.155, 0.075, e_seg),
+		_oval_ring(Vector3(0.0, 0.78, 0.44), 0.165, 0.075, e_seg),
+		_oval_ring(Vector3(0.0, 0.79, 0.60), 0.13, 0.060, e_seg),
+	]
+	MeshSculpt.add_lofted_hull(st, seat_st, c_seat, true, true, true)
 	# Tubular handlebars, grips, stem & twin round rear-view mirrors!
 	MeshSculpt.add_tube(st, Vector3(0.0, 0.88, -0.44), Vector3(0.0, 1.00, -0.42), 0.032, 0.028, t_seg, c_trim, 1)
 	MeshSculpt.add_tube(st, Vector3(-0.35, 0.98, -0.38), Vector3(0.0, 1.00, -0.44), 0.022, 0.022, t_seg, c_trim, 1)
@@ -537,35 +585,73 @@ static func _make_scooter_mesh(
 	if has_shield:
 		MeshSculpt.add_ellipsoid(st, Vector3(0.0, 1.18, -0.52), Vector3(0.22, 0.19, 0.035), e_seg, 5, c_glass)
 
-	# 4. Sculpted Anatomical Rider (tapered thighs/knees/shins/shoes, contoured jacket torso, elbows/arms/hands, smooth visored helmet!)
-	for sx: float in [-0.12, 0.12]:
-		var hip := Vector3(sx, 0.84, 0.16)
-		var knee := Vector3(sx * 1.25, 0.66, -0.18)
-		var ankle := Vector3(sx * 1.15, 0.34, -0.22)
-		MeshSculpt.add_capsule(st, hip, knee, 0.072, 0.058, t_seg, cap_r, c_pants)
-		MeshSculpt.add_capsule(st, knee, ankle, 0.055, 0.042, t_seg, cap_r, c_pants)
-		MeshSculpt.add_ellipsoid(st, Vector3(sx * 1.15, 0.33, -0.29), Vector3(0.048, 0.038, 0.11), e_seg, 3 if lod1 else 4, c_shoe)
-	# Contoured jacket torso (hip -> waist -> chest -> shoulders -> collar)
+	# 4. Natural Smooth Human Commuter Rider (matte woven cloth + seamless parallel-transport swept limbs, ZERO balloon joints!)
+	var limb_seg := 6 if lod1 else 12
+	# Seamless seated pelvis / trousers base blending hips smoothly into both thighs
+	var hip_st := [
+		_oval_ring(Vector3(0.0, 0.78, 0.24), 0.155, 0.115, e_seg),
+		_oval_ring(Vector3(0.0, 0.87, 0.20), 0.170, 0.125, e_seg),
+		_oval_ring(Vector3(0.0, 0.94, 0.17), 0.162, 0.118, e_seg),
+	]
+	MeshSculpt.add_lofted_hull(st, hip_st, c_pants, true, true, true)
+	# Seamless continuous swept legs (pelvis -> upper thigh -> rounded knee bend -> calf -> ankle)
+	for sx: float in [-1.0, 1.0]:
+		var leg_pts: Array[Vector3] = [
+			Vector3(sx * 0.095, 0.85, 0.20),
+			Vector3(sx * 0.115, 0.77, 0.02),
+			Vector3(sx * 0.132, 0.70, -0.14),
+			Vector3(sx * 0.135, 0.64, -0.20),
+			Vector3(sx * 0.132, 0.54, -0.22),
+			Vector3(sx * 0.128, 0.42, -0.22),
+			Vector3(sx * 0.125, 0.34, -0.22),
+		]
+		var leg_rads: Array[float] = [0.074, 0.068, 0.060, 0.056, 0.052, 0.044, 0.038]
+		MeshSculpt.add_swept_limb(st, leg_pts, leg_rads, limb_seg, c_pants, false, true)
+		MeshSculpt.add_ellipsoid(st, Vector3(sx * 0.125, 0.325, -0.275), Vector3(0.046, 0.036, 0.105), e_seg, 3 if lod1 else 5, c_shoe)
+
+	# Sculpted 7-station natural human jacket torso (coat hem -> waist -> ribs -> chest -> sloped shoulders -> collar)
 	var torso_st := [
-		_oval_ring(Vector3(0.0, 0.84, 0.16), 0.16, 0.11, e_seg),
-		_oval_ring(Vector3(0.0, 1.06, 0.13), 0.17, 0.12, e_seg),
-		_oval_ring(Vector3(0.0, 1.32, 0.09), 0.21, 0.13, e_seg),
-		_oval_ring(Vector3(0.0, 1.42, 0.07), 0.11, 0.08, e_seg),
+		_oval_ring(Vector3(0.0, 0.85, 0.19), 0.178, 0.125, e_seg),
+		_oval_ring(Vector3(0.0, 0.98, 0.16), 0.168, 0.118, e_seg),
+		_oval_ring(Vector3(0.0, 1.13, 0.13), 0.186, 0.126, e_seg),
+		_oval_ring(Vector3(0.0, 1.26, 0.10), 0.205, 0.128, e_seg),
+		_oval_ring(Vector3(0.0, 1.35, 0.09), 0.188, 0.114, e_seg),
+		_oval_ring(Vector3(0.0, 1.40, 0.08), 0.120, 0.086, e_seg),
+		_oval_ring(Vector3(0.0, 1.44, 0.075), 0.074, 0.068, e_seg),
 	]
 	MeshSculpt.add_lofted_hull(st, torso_st, c_jacket, true, true, true)
-	# Upper arms, elbows, forearms & hands gripping handlebars
-	for sx: float in [-0.21, 0.21]:
-		var sh := Vector3(sx, 1.32, 0.08)
-		var elb := Vector3(sx * 1.18, 1.09, -0.06)
-		var hand := Vector3(sx * 1.48, 0.99, -0.37)
-		MeshSculpt.add_capsule(st, sh, elb, 0.052, 0.044, t_seg, cap_r, c_jacket)
-		MeshSculpt.add_capsule(st, elb, hand, 0.042, 0.032, t_seg, cap_r, c_jacket)
-		MeshSculpt.add_ellipsoid(st, hand, Vector3(0.036, 0.034, 0.046), e_seg, 3 if lod1 else 4, c_skin)
-	# Neck, sculpted head & smooth spherical safety helmet with glossy dark visor!
-	MeshSculpt.add_tube(st, Vector3(0.0, 1.40, 0.07), Vector3(0.0, 1.49, 0.06), 0.052, 0.048, t_seg, c_skin, 1)
-	MeshSculpt.add_ellipsoid(st, Vector3(0.0, 1.56, 0.05), Vector3(0.092, 0.108, 0.100), e_seg, e_rng, c_skin)
-	MeshSculpt.add_ellipsoid(st, Vector3(0.0, 1.60, 0.07), Vector3(0.124, 0.122, 0.138), e_seg, e_rng, c_helm)
-	MeshSculpt.add_ellipsoid(st, Vector3(0.0, 1.57, -0.02), Vector3(0.106, 0.058, 0.072), e_seg, 5, c_glass)
+	# Jacket stand collar around neck base
+	var collar_st := [
+		_oval_ring(Vector3(0.0, 1.41, 0.078), 0.078, 0.072, e_seg),
+		_oval_ring(Vector3(0.0, 1.465, 0.072), 0.070, 0.066, e_seg),
+	]
+	MeshSculpt.add_lofted_hull(st, collar_st, c_collar, true, false, true)
+
+	# Seamless continuous swept sleeves emerging organically from inside the chest/shoulders -> elbow -> wrist -> hand!
+	for sx: float in [-1.0, 1.0]:
+		var arm_pts: Array[Vector3] = [
+			Vector3(sx * 0.135, 1.32, 0.10),
+			Vector3(sx * 0.195, 1.29, 0.08),
+			Vector3(sx * 0.228, 1.20, 0.02),
+			Vector3(sx * 0.240, 1.11, -0.05),
+			Vector3(sx * 0.256, 1.06, -0.14),
+			Vector3(sx * 0.285, 1.01, -0.26),
+			Vector3(sx * 0.312, 0.99, -0.35),
+		]
+		var arm_rads: Array[float] = [0.062, 0.054, 0.048, 0.044, 0.041, 0.036, 0.030]
+		MeshSculpt.add_swept_limb(st, arm_pts, arm_rads, limb_seg, c_jacket, false, true)
+		MeshSculpt.add_ellipsoid(st, Vector3(sx * 0.322, 0.985, -0.382), Vector3(0.032, 0.028, 0.042), e_seg, 3 if lod1 else 4, c_skin)
+
+	# Natural human neck, head, visible hair nape, and commuter half-shell helmet with dark visor!
+	var neck_pts: Array[Vector3] = [Vector3(0.0, 1.42, 0.074), Vector3(0.0, 1.50, 0.062), Vector3(0.0, 1.54, 0.056)]
+	var neck_rads: Array[float] = [0.054, 0.048, 0.050]
+	MeshSculpt.add_swept_limb(st, neck_pts, neck_rads, limb_seg, c_skin, false, false)
+	MeshSculpt.add_ellipsoid(st, Vector3(0.0, 1.575, 0.050), Vector3(0.088, 0.106, 0.098), e_seg, e_rng, c_skin)
+	# Natural dark hair visible at nape and sides beneath commuter helmet
+	MeshSculpt.add_ellipsoid(st, Vector3(0.0, 1.572, 0.082), Vector3(0.090, 0.088, 0.082), e_seg, 4 if lod1 else 6, c_hair)
+	# Sleek ergonomic half-helmet sitting naturally on top of the head + glossy curved visor
+	MeshSculpt.add_ellipsoid(st, Vector3(0.0, 1.620, 0.062), Vector3(0.114, 0.102, 0.126), e_seg, e_rng, c_helm)
+	MeshSculpt.add_ellipsoid(st, Vector3(0.0, 1.586, -0.028), Vector3(0.098, 0.050, 0.062), e_seg, 4 if lod1 else 5, c_glass)
 
 	# 5. Delivery Courier Rear Insulated Box (外卖保温箱 + 金属货架 + 反光带)
 	if has_box:
@@ -641,11 +727,12 @@ static func _make_shared_bike_mesh(frame_rgb: Color, jacket_rgb: Color, lod1: bo
 	var c_tire := _pbr(Color(0.10, 0.10, 0.11), 2)
 	var c_rim := _pbr(Color(0.76, 0.78, 0.80), 3)
 	var c_brake := _pbr(Color(0.28, 0.30, 0.32), 3)
-	var c_trim := _pbr(Color(0.15, 0.16, 0.18), 3)
-	var c_jacket := _pbr(jacket_rgb, 3)
-	var c_pants := _pbr(Color(0.20, 0.24, 0.32), 3)
-	var c_skin := _pbr(Color(0.88, 0.74, 0.62), 3)
-	var c_hair := _pbr(Color(0.14, 0.12, 0.11), 3)
+	var c_trim := _pbr(Color(0.15, 0.16, 0.18), 9)
+	var c_jacket := _pbr(jacket_rgb, 7)
+	var c_pants := _pbr(Color(0.20, 0.24, 0.32), 7)
+	var c_skin := _pbr(Color(0.89, 0.75, 0.63), 8)
+	var c_hair := _pbr(Color(0.14, 0.12, 0.11), 8)
+	var c_shoe := _pbr(Color(0.16, 0.16, 0.18), 7)
 
 	var w_maj := 10 if lod1 else 18
 	var w_min := 5 if lod1 else 8
@@ -672,25 +759,46 @@ static func _make_shared_bike_mesh(frame_rgb: Color, jacket_rgb: Color, lod1: bo
 	MeshSculpt.add_ellipsoid(st, seat_top + Vector3(0.0, 0.06, 0.02), Vector3(0.08, 0.035, 0.13), e_seg, 4, c_trim)
 	MeshSculpt.add_ellipsoid(st, Vector3(0.0, 0.80, -0.56), Vector3(0.15, 0.10, 0.12), e_seg, 4, c_frame)
 
-	# Sculpted cyclist (anatomical legs, leaning torso, arms on handlebars, sculpted head + hair)
-	for sx: float in [-0.10, 0.10]:
-		var hip := Vector3(sx, 0.86, 0.22)
-		var knee := Vector3(sx * 1.15, 0.62, -0.04 if sx < 0.0 else 0.06)
-		var foot := Vector3(sx * 1.10, 0.28 if sx < 0.0 else 0.42, 0.08)
-		MeshSculpt.add_capsule(st, hip, knee, 0.065, 0.052, t_seg, 2, c_pants)
-		MeshSculpt.add_capsule(st, knee, foot, 0.048, 0.036, t_seg, 2, c_pants)
+	# Sculpted natural cyclist (matte cloth, seamless swept limbs, natural forward riding lean!)
+	var b_limb := 6 if lod1 else 10
+	for sx: float in [-1.0, 1.0]:
+		var kn_z := -0.04 if sx < 0.0 else 0.05
+		var ft_y := 0.29 if sx < 0.0 else 0.42
+		var leg_b: Array[Vector3] = [
+			Vector3(sx * 0.085, 0.87, 0.22),
+			Vector3(sx * 0.105, 0.74, 0.09),
+			Vector3(sx * 0.112, 0.62, kn_z),
+			Vector3(sx * 0.110, 0.48, 0.04),
+			Vector3(sx * 0.106, ft_y, 0.08),
+		]
+		var rad_b: Array[float] = [0.066, 0.058, 0.050, 0.044, 0.036]
+		MeshSculpt.add_swept_limb(st, leg_b, rad_b, b_limb, c_pants, false, true)
+		MeshSculpt.add_ellipsoid(st, Vector3(sx * 0.106, ft_y - 0.015, 0.03), Vector3(0.042, 0.032, 0.095), e_seg, 3 if lod1 else 4, c_shoe)
 	var t_st := [
-		_oval_ring(Vector3(0.0, 0.86, 0.22), 0.14, 0.10, e_seg),
-		_oval_ring(Vector3(0.0, 1.12, 0.14), 0.16, 0.11, e_seg),
-		_oval_ring(Vector3(0.0, 1.36, 0.04), 0.19, 0.12, e_seg),
-		_oval_ring(Vector3(0.0, 1.44, 0.00), 0.09, 0.07, e_seg),
+		_oval_ring(Vector3(0.0, 0.85, 0.22), 0.150, 0.105, e_seg),
+		_oval_ring(Vector3(0.0, 1.00, 0.18), 0.148, 0.102, e_seg),
+		_oval_ring(Vector3(0.0, 1.18, 0.11), 0.168, 0.112, e_seg),
+		_oval_ring(Vector3(0.0, 1.32, 0.05), 0.186, 0.114, e_seg),
+		_oval_ring(Vector3(0.0, 1.40, 0.02), 0.118, 0.082, e_seg),
+		_oval_ring(Vector3(0.0, 1.44, 0.00), 0.072, 0.064, e_seg),
 	]
 	MeshSculpt.add_lofted_hull(st, t_st, c_jacket, true, true, true)
-	for sx: float in [-0.19, 0.19]:
-		MeshSculpt.add_capsule(st, Vector3(sx, 1.35, 0.04), Vector3(sx * 1.15, 1.13, -0.14), 0.046, 0.038, t_seg, 2, c_jacket)
-		MeshSculpt.add_capsule(st, Vector3(sx * 1.15, 1.13, -0.14), Vector3(sx * 1.32, 0.96, -0.39), 0.036, 0.028, t_seg, 2, c_jacket)
-	MeshSculpt.add_ellipsoid(st, Vector3(0.0, 1.56, -0.04), Vector3(0.090, 0.105, 0.096), e_seg, 6, c_skin)
-	MeshSculpt.add_ellipsoid(st, Vector3(0.0, 1.61, -0.02), Vector3(0.098, 0.086, 0.104), e_seg, 5, c_hair)
+	for sx: float in [-1.0, 1.0]:
+		var arm_b: Array[Vector3] = [
+			Vector3(sx * 0.125, 1.32, 0.05),
+			Vector3(sx * 0.180, 1.29, 0.02),
+			Vector3(sx * 0.212, 1.15, -0.11),
+			Vector3(sx * 0.236, 1.05, -0.25),
+			Vector3(sx * 0.255, 0.96, -0.38),
+		]
+		var arad_b: Array[float] = [0.054, 0.047, 0.040, 0.034, 0.028]
+		MeshSculpt.add_swept_limb(st, arm_b, arad_b, b_limb, c_jacket, false, true)
+		MeshSculpt.add_ellipsoid(st, Vector3(sx * 0.262, 0.96, -0.39), Vector3(0.028, 0.025, 0.036), e_seg, 3 if lod1 else 4, c_skin)
+	var neck_b: Array[Vector3] = [Vector3(0.0, 1.42, 0.00), Vector3(0.0, 1.50, -0.025)]
+	var nrad_b: Array[float] = [0.048, 0.044]
+	MeshSculpt.add_swept_limb(st, neck_b, nrad_b, b_limb, c_skin, false, false)
+	MeshSculpt.add_ellipsoid(st, Vector3(0.0, 1.565, -0.042), Vector3(0.086, 0.102, 0.094), e_seg, 6, c_skin)
+	MeshSculpt.add_ellipsoid(st, Vector3(0.0, 1.608, -0.022), Vector3(0.095, 0.084, 0.102), e_seg, 5, c_hair)
 	return st.commit()
 
 

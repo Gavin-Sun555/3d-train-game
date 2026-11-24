@@ -559,6 +559,8 @@ func _run() -> void:
 	# Simulate 3D Light Rail & 3D Monorail trains traversing elevated, ramps & underground tunnels!
 	var lr_min_y := 1e9; var lr_max_y := -1e9
 	var mr_min_y := 1e9; var mr_max_y := -1e9
+	var t1_dock_checks := 0
+	var t1_misaligned := 0
 	var ev3 := {}
 	for _s3 in range(900): # 90s @ 0.1s
 		ev3 = jx_tsim.step_all_trams(0.1, jx_graph, m._pax_sim, m._traffic_sim, m._sound)
@@ -566,17 +568,24 @@ func _run() -> void:
 			break
 		for tr3: Dictionary in jx_tsim.trams:
 			var y3 := (((tr3["tram_info"]["sections"] as Array)[0]) as Node3D).global_position.y
-			if int(tr3.get("line_id", -1)) == lr_lid:
+			var lid3 := int(tr3.get("line_id", -1))
+			if lid3 == lr_lid:
 				lr_min_y = minf(lr_min_y, y3); lr_max_y = maxf(lr_max_y, y3)
-			elif int(tr3.get("line_id", -1)) == mr_lid:
+			elif lid3 == mr_lid:
 				mr_min_y = minf(mr_min_y, y3); mr_max_y = maxf(mr_max_y, y3)
+			elif lid3 == 1 and float(tr3.get("door_ratio", 0.0)) > 0.65 and float(tr3.get("speed_mps", 0.0)) < 0.25:
+				t1_dock_checks += 1
+				var od3 := int(tr3.get("open_doorways", 0))
+				var td3 := maxi(1, int(tr3.get("total_doorways", 5)))
+				if od3 < td3:
+					t1_misaligned += 1
 	_check(
 		ev3.is_empty() and lr_max_y > 6.5 and lr_min_y < -8.0 and mr_max_y > 12.5 and mr_min_y < -8.0,
 		"3D trains traverse elevated/ramps/tunnels smoothly with zero incidents (LR y=[%.1f..%.1f]m, Mono y=[%.1f..%.1f]m)" % [lr_min_y, lr_max_y, mr_min_y, mr_max_y]
 	)
 
 	# Verify all Jiaxing Realism Upgrades:
-	# 1) Real T1 Phase 1 (21 stations) with B1 Underground 嘉兴火车站 tunneling under railway to 人民公园 + 5-module 南湖号
+	# 1) Real T1 Phase 1 (21 stations) with straight 纺工路景湖路, B1 嘉兴火车站, 环城东路 人民公园, 5/5 AI door alignment & <=16 portal cutouts!
 	var t1_ln: Dictionary = jx_graph.lines.get(1, {})
 	var t1_tr_secs := 0
 	for tr_chk: Dictionary in jx_tsim.trams:
@@ -584,14 +593,27 @@ func _run() -> void:
 			t1_tr_secs = (tr_chk["tram_info"]["sections"] as Array).size()
 			break
 	var jx_sta_b1_y := 0.0
+	var jh_pos := Vector3.ZERO
+	var rm_pos := Vector3.ZERO
 	for sid_v in jx_graph.stations.keys():
 		var sd: Dictionary = jx_graph.stations[sid_v]
-		if str(sd.get("name", "")) == "嘉兴火车站":
+		var sname := str(sd.get("name", ""))
+		if sname == "嘉兴火车站":
 			jx_sta_b1_y = (sd["pos"] as Vector3).y
-			break
+		elif sname == "纺工路景湖路":
+			jh_pos = sd["pos"] as Vector3
+		elif sname == "人民公园":
+			rm_pos = sd["pos"] as Vector3
+	var jh_on_fanggong := jh_pos.x >= 1110.0 and jh_pos.x <= 1175.0 and jh_pos.z <= -220.0 and jh_pos.z >= -400.0
+	var rm_on_hcd := rm_pos.x >= 145.0 and rm_pos.x <= 220.0 and rm_pos.z <= -1320.0 and rm_pos.z >= -1515.0
+	var pcut_cnt := (jx_graph.get_meta("portal_cutouts", []) as Array).size()
 	_check(
-		str(t1_ln.get("model_key", "")) == "crrc-jiaxing-nanhu" and (t1_ln.get("station_ids", []) as Array).size() == 21 and t1_tr_secs == 5 and jx_sta_b1_y < -8.0,
-		"Jiaxing T1 runs 5-module CRRC 南湖号 across 21 real stations with B1 Underground 嘉兴火车站 (y=%.1fm)" % jx_sta_b1_y
+		str(t1_ln.get("model_key", "")) == "crrc-jiaxing-nanhu" and (t1_ln.get("station_ids", []) as Array).size() == 21 and t1_tr_secs == 5 and jx_sta_b1_y < -8.0 and jh_on_fanggong and rm_on_hcd and pcut_cnt >= 2 and pcut_cnt <= 16,
+		"Jiaxing T1 real alignment: 5-mod 南湖号, straight 景湖路(%.0f,%.0f), B1 嘉兴站(y=%.1fm), 环城东路 人民公园(%.0f,%.0f), %d portal cutouts (<=16)" % [jh_pos.x, jh_pos.z, jx_sta_b1_y, rm_pos.x, rm_pos.z, pcut_cnt]
+	)
+	_check(
+		t1_dock_checks > 0 and t1_misaligned == 0,
+		"Jiaxing T1 5-section AI docking alignment: %d door-open checks, %d misaligned (100%% 5/5 doors aligned!)" % [t1_dock_checks, t1_misaligned]
 	)
 	# 2) Chinese Architecture Shader + Flush Dense Storefronts (>=20k) + 400+ Gated Residential Compounds
 	var sfs_arr: Array = m._map_data.get("storefronts", [])
@@ -637,9 +659,11 @@ func _run() -> void:
 					if float(eb_d.get("speed", 0.0)) > 1.0:
 						eb_moving += 1
 	var move_ratio := float(moving_samples) / float(maxi(1, total_samples))
-	# Verify ZERO e-bike clipping against tram catenary masts!
+	# Verify ZERO e-bike clipping against tram catenary masts AND ZERO e-bike overlap with tram tracks!
 	var mast_pts_chk: Array = jx_graph.get_meta("mast_positions", [])
+	var clr_idx_chk: Dictionary = jx_graph.get_meta("track_clear_idx", {})
 	var min_eb_mast_d := 999.0
+	var min_eb_track_d := 999.0
 	if ts_jx != null and ts_jx.ebike_sim != null:
 		for eb_d: Dictionary in ts_jx.ebike_sim.ebikes:
 			var ep: Vector3 = eb_d["pos"]
@@ -648,9 +672,13 @@ func _run() -> void:
 				var md := ep2.distance_to(mp)
 				if md < min_eb_mast_d:
 					min_eb_mast_d = md
+			if not clr_idx_chk.is_empty():
+				var td := TrackBuilder.track_clearance_dist(clr_idx_chk, ep2)
+				if td < min_eb_track_d:
+					min_eb_track_d = td
 	_check(
-		bl_pct >= 80.0 and zh_ev_cnt == 16 and ebike_cnt >= 150 and ebike_cnt >= car_cnt * 3 and eb_moving > 0 and move_ratio >= 0.40 and min_eb_mast_d >= 0.85,
-		"Bike lanes %.1f%%, %d e-bikes vs %d cars (%.1fx), %.0f%% cruising, ZERO e-bike/mast clipping (min dist %.2fm across %d masts)" % [bl_pct, ebike_cnt, car_cnt, float(ebike_cnt) / float(maxi(1, car_cnt)), move_ratio * 100.0, min_eb_mast_d, mast_pts_chk.size()]
+		bl_pct >= 80.0 and zh_ev_cnt == 16 and ebike_cnt >= 150 and ebike_cnt >= car_cnt * 3 and eb_moving > 0 and move_ratio >= 0.40 and min_eb_mast_d >= 0.85 and min_eb_track_d >= 1.80,
+		"Bike lanes %.1f%%, %d e-bikes vs %d cars (%.1fx), %.0f%% cruising, ZERO e-bike/mast (min %.2fm) or track overlap (min %.2fm)" % [bl_pct, ebike_cnt, car_cnt, float(ebike_cnt) / float(maxi(1, car_cnt)), move_ratio * 100.0, min_eb_mast_d, min_eb_track_d]
 	)
 	# Verify quantitative sculpted asset LOD budgets (Cars LOD0/1/2, E-Bikes LOD0/1, NPC LOD0/1)!
 	var car_t0 := CarMeshGen.get_tri_count(ts_jx._zh_car_lods[0]["lod0"]) if not ts_jx._zh_car_lods.is_empty() else 0

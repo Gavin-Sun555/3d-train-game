@@ -387,9 +387,6 @@ static func _build_roads_and_curbs(
 	var yellow_st := SurfaceTool.new()
 	yellow_st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var has_yellow := false
-	var bike_st := SurfaceTool.new()
-	bike_st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var has_bike := false
 
 	var curb_st := SurfaceTool.new()
 	curb_st.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -538,35 +535,8 @@ static func _build_roads_and_curbs(
 							Vector3(d1.x + dn.x, ym2, d1.y + dn.y), Vector3(d1.x - dn.x, ym2, d1.y - dn.y), Vector3.UP)
 						has_mark = true
 						sd += 9.2
-				# Authentic Chinese Non-Motorized Bike Lane (非机动车道: green outer strip + solid white line on ~86% of roads!)
-				if bool(r.get("bike_lane", false)) and hw >= 4.0 and layer == 0 and seg_len > 15.0:
-					var bl_s0 := minf(8.5 if hw >= 5.75 else 6.5, seg_len * 0.24)
-					var bl_s1 := seg_len - bl_s0
-					var ba := a + dir * bl_s0
-					var bb := a + dir * bl_s1
-					var yb := y + 0.011
-					var bl_w := 2.05 if hw >= 5.75 else (1.55 if hw >= 4.8 else 1.25)
-					for bside: float in [-1.0, 1.0]:
-						# Subtle muted emerald/teal-green bike-lane asphalt strip along outer lane
-						var inner_o := bside * (hw - bl_w)
-						var outer_o := bside * (hw - 0.14)
-						var o_lo := minf(inner_o, outer_o)
-						var o_hi := maxf(inner_o, outer_o)
-						var p0b := ba + nrm1 * o_lo
-						var p1b := ba + nrm1 * o_hi
-						var p2b := bb + nrm1 * o_hi
-						var p3b := bb + nrm1 * o_lo
-						_add_flat_quad(bike_st, Vector3(p0b.x, yb, p0b.y), Vector3(p1b.x, yb, p1b.y),
-							Vector3(p2b.x, yb, p2b.y), Vector3(p3b.x, yb, p3b.y), Vector3.UP)
-						has_bike = true
-						# Solid white bike-lane divider stripe (机非分界实线)
-						var loff := bside * (hw - bl_w - 0.08)
-						var l0 := ba + nrm1 * loff
-						var l1 := bb + nrm1 * loff
-						var ln := nrm1 * 0.08
-						_add_flat_quad(mark_st, Vector3(l0.x - ln.x, ym2, l0.y - ln.y), Vector3(l0.x + ln.x, ym2, l0.y + ln.y),
-							Vector3(l1.x + ln.x, ym2, l1.y + ln.y), Vector3(l1.x - ln.x, ym2, l1.y - ln.y), Vector3.UP)
-						has_mark = true
+				# Bike-lane strips & divider stripes are built track-aware inside _build_kerbs() -> _build_bike_lane_strips()
+				# so green non-motorized lanes NEVER overlap laid tram tracks!
 				continue
 			var s := 3.5
 			while s + 3.0 < seg_len - 3.0:
@@ -648,17 +618,6 @@ static func _build_roads_and_curbs(
 		y_mi.material_override = y_mat
 		y_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(y_mi)
-	if has_bike:
-		var b_mi := MeshInstance3D.new()
-		b_mi.name = "BikeLaneStrips"
-		b_mi.mesh = Terrain.commit_draped(bike_st, b_mi)
-		var b_mat := ShaderMaterial.new()
-		b_mat.shader = load("res://shaders/road_marking.gdshader") as Shader
-		b_mat.set_shader_parameter("paint_col", Color(0.18, 0.42, 0.34))
-		b_mat.set_shader_parameter("rough_val", 0.88)
-		b_mi.material_override = b_mat
-		b_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		parent.add_child(b_mi)
 
 
 static func _build_buildings(parent: Node3D, buildings: Array, building_mat: ShaderMaterial) -> void:
@@ -2308,7 +2267,7 @@ const ROAD_Y := 0.042
 static func _build_kerbs(parent: Node3D, roads: Array, bays: Array, road_mat: Material, clear_idx: Dictionary = {}) -> void:
 	parent.set_meta("last_bays_sig", _station_bays_sig(bays) + "#" + _tile_clear_sig(parent, clear_idx))
 	var has_tracks := not clear_idx.is_empty() and not (clear_idx.get("grid", {}) as Dictionary).is_empty()
-	for nm: String in ["GraniteCurbs", "StationKerbBays", "Sidewalks", "StreetFurniture", "BikeLaneGuardrails"]:
+	for nm: String in ["GraniteCurbs", "StationKerbBays", "Sidewalks", "StreetFurniture", "BikeLaneStrips", "BikeLaneLines", "BikeLaneGuardrails"]:
 		var old := parent.get_node_or_null(nm)
 		if old != null:
 			parent.remove_child(old)
@@ -2486,7 +2445,127 @@ static func _build_kerbs(parent: Node3D, roads: Array, bays: Array, road_mat: Ma
 		bay_mi.material_override = road_mat
 		bay_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(bay_mi)
-	_build_bike_guardrails(parent, roads, int(parent.get_meta("kerb_emit_n", roads.size())), seg_grid, bays, clear_idx, has_tracks)
+	var emit_n_b := int(parent.get_meta("kerb_emit_n", roads.size()))
+	_build_bike_lane_strips(parent, roads, emit_n_b, bays, clear_idx, has_tracks)
+	_build_bike_guardrails(parent, roads, emit_n_b, seg_grid, bays, clear_idx, has_tracks)
+
+
+# Track-aware Chinese Non-Motorized Bike Lanes (非机动车道): green outer asphalt strip + solid white divider line.
+# Rebuilt whenever tracks change so green bike lanes NEVER overlap laid tram tracks or station bays!
+static func _build_bike_lane_strips(
+	parent: Node3D, roads: Array, emit_n: int,
+	bays: Array, clear_idx: Dictionary, has_tracks: bool
+) -> void:
+	var bike_st := SurfaceTool.new()
+	bike_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var line_st := SurfaceTool.new()
+	line_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var has_bike := false
+	var has_line := false
+	var yb := ROAD_Y + 0.011
+	var ym := ROAD_Y + 0.016
+
+	for ri in range(mini(emit_n, roads.size())):
+		var r: Dictionary = roads[ri]
+		if not bool(r.get("bike_lane", false)) or bool(r.get("underground", false)) or int(r.get("layer", 0)) != 0:
+			continue
+		var hw := clampf(float(r.get("width", 12.0)) * 0.5, 3.2, 13.5)
+		if hw < 4.0:
+			continue
+		var pts: Array = r.get("pts", [])
+		if pts.size() < 2:
+			continue
+		var bl_w := 2.05 if hw >= 5.75 else (1.55 if hw >= 4.8 else 1.25)
+		for i in range(pts.size() - 1):
+			var a := Vector2(float(pts[i][0]), float(pts[i][1]))
+			var b := Vector2(float(pts[i + 1][0]), float(pts[i + 1][1]))
+			var d := b - a
+			var seg_len := d.length()
+			if seg_len <= 15.0:
+				continue
+			var dir := d / seg_len
+			var nrm := Vector2(-dir.y, dir.x)
+			var s0 := minf(8.5 if hw >= 5.75 else 6.5, seg_len * 0.24)
+			var s1 := seg_len - s0
+			if s1 - s0 < 4.0:
+				continue
+			for bside: float in [-1.0, 1.0]:
+				var inner_o := bside * (hw - bl_w)
+				var outer_o := bside * (hw - 0.14)
+				var mid_o := (inner_o + outer_o) * 0.5
+				var o_lo := minf(inner_o, outer_o)
+				var o_hi := maxf(inner_o, outer_o)
+				var loff := bside * (hw - bl_w - 0.08)
+				var ln := nrm * 0.08
+				var run_a := -1.0
+				var sc := s0
+				while sc <= s1 + 0.01:
+					var s_cl := minf(sc, s1)
+					var p_mid := a + dir * s_cl + nrm * mid_o
+					var p_in := a + dir * s_cl + nrm * inner_o
+					var ok := not _in_bay(bays, p_mid)
+					if ok and has_tracks:
+						ok = TrackBuilder.track_clearance_dist(clear_idx, p_in) >= 2.25 \
+							and TrackBuilder.track_clearance_dist(clear_idx, p_mid) >= 2.75
+					if ok and sc <= s1:
+						if run_a < 0.0:
+							run_a = s_cl
+					else:
+						if run_a >= 0.0 and s_cl - run_a >= 4.0:
+							var ba := a + dir * run_a
+							var bb := a + dir * s_cl
+							var p0b := ba + nrm * o_lo
+							var p1b := ba + nrm * o_hi
+							var p2b := bb + nrm * o_hi
+							var p3b := bb + nrm * o_lo
+							_add_flat_quad(bike_st, Vector3(p0b.x, yb, p0b.y), Vector3(p1b.x, yb, p1b.y),
+								Vector3(p2b.x, yb, p2b.y), Vector3(p3b.x, yb, p3b.y), Vector3.UP)
+							has_bike = true
+							var l0 := ba + nrm * loff
+							var l1 := bb + nrm * loff
+							_add_flat_quad(line_st, Vector3(l0.x - ln.x, ym, l0.y - ln.y), Vector3(l0.x + ln.x, ym, l0.y + ln.y),
+								Vector3(l1.x + ln.x, ym, l1.y + ln.y), Vector3(l1.x - ln.x, ym, l1.y - ln.y), Vector3.UP)
+							has_line = true
+						run_a = -1.0
+					sc += 4.0
+				if run_a >= 0.0 and s1 - run_a >= 4.0:
+					var ba2 := a + dir * run_a
+					var bb2 := a + dir * s1
+					var p0b2 := ba2 + nrm * o_lo
+					var p1b2 := ba2 + nrm * o_hi
+					var p2b2 := bb2 + nrm * o_hi
+					var p3b2 := bb2 + nrm * o_lo
+					_add_flat_quad(bike_st, Vector3(p0b2.x, yb, p0b2.y), Vector3(p1b2.x, yb, p1b2.y),
+						Vector3(p2b2.x, yb, p2b2.y), Vector3(p3b2.x, yb, p3b2.y), Vector3.UP)
+					has_bike = true
+					var l02 := ba2 + nrm * loff
+					var l12 := bb2 + nrm * loff
+					_add_flat_quad(line_st, Vector3(l02.x - ln.x, ym, l02.y - ln.y), Vector3(l02.x + ln.x, ym, l02.y + ln.y),
+						Vector3(l12.x + ln.x, ym, l12.y + ln.y), Vector3(l12.x - ln.x, ym, l12.y - ln.y), Vector3.UP)
+					has_line = true
+
+	if has_bike:
+		var b_mi := MeshInstance3D.new()
+		b_mi.name = "BikeLaneStrips"
+		b_mi.mesh = Terrain.commit_draped(bike_st, b_mi)
+		var b_mat := ShaderMaterial.new()
+		b_mat.shader = load("res://shaders/road_marking.gdshader") as Shader
+		b_mat.set_shader_parameter("paint_col", Color(0.18, 0.42, 0.34))
+		b_mat.set_shader_parameter("rough_val", 0.88)
+		b_mi.material_override = b_mat
+		b_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		parent.add_child(b_mi)
+	if has_line:
+		var l_mi := MeshInstance3D.new()
+		l_mi.name = "BikeLaneLines"
+		l_mi.mesh = Terrain.commit_draped(line_st, l_mi)
+		var l_mat := ShaderMaterial.new()
+		l_mat.shader = load("res://shaders/road_marking.gdshader") as Shader
+		l_mat.set_shader_parameter("paint_col", Color(0.78, 0.77, 0.73))
+		l_mat.set_shader_parameter("rough_val", 0.82)
+		l_mi.material_override = l_mat
+		l_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		parent.add_child(l_mi)
 
 
 # Low white municipal Chinese bike-lane separation guardrails (机非隔离护栏) on wide bike_lane avenues.

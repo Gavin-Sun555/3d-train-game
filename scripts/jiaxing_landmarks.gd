@@ -664,20 +664,24 @@ static func _jiaxing_station(parent: Node3D, center: Vector3, angle: float, ligh
 	var b1_courtyard_grass := _mat(Color(0.22, 0.48, 0.24), 0.84, 0.0)
 
 	# Structural B1 base deck (176m wide x 192m N-S spanning North Plaza -> Tracks -> South Plaza Interchange)
+	# Central axial corridor (local x in [-13.5 .. +13.5]) is kept 100% UNOBSTRUCTED for the T1 B1 Underground Tramway!
 	_add_box(b1, Vector3(176.0, 0.45, 192.0), Vector3(0.0, -10.2, 6.0), b1_slate, 0.0, 0.0, 0.0, false)
-	# Central Main Waiting Concourse Floor (terrazzo + warm wood axial promenade)
+	# Central Main Waiting Concourse Floor (terrazzo + warm wood side concourses flanking the central tram corridor)
 	_add_box(b1, Vector3(122.0, 0.16, 128.0), Vector3(0.0, -9.90, 0.0), b1_terrazzo, 0.0, 0.0, 0.0, false)
-	_add_box(b1, Vector3(26.0, 0.18, 178.0), Vector3(0.0, -9.84, 6.0), b1_wood_floor, 0.0, 0.0, 0.0, false)
-	# North & South Sunken Garden Lightwells inside B1 (signature MAD daylight courts with indoor trees!)
-	for sc_z: float in [-58.0, 56.0]:
-		_add_cyl(b1, 13.5, 14.0, 0.32, Vector3(0.0, -9.75, sc_z), b1_courtyard_grass, 18)
-		_add_cyl(b1, 14.4, 14.4, 0.55, Vector3(0.0, -9.62, sc_z), granite, 18)
-		for gt_a in range(5):
-			var ang_g := float(gt_a) * TAU / 5.0
-			var gx_t := cos(ang_g) * 6.5
-			var gz_t := sc_z + sin(ang_g) * 6.5
-			_add_cyl(b1, 0.22, 0.28, 3.2, Vector3(gx_t, -8.1, gz_t), ceiling_wood, 7)
-			_add_cyl(b1, 1.4, 2.8, 2.8, Vector3(gx_t, -6.0, gz_t), b1_courtyard_grass, 8)
+	for side_p: float in [-1.0, 1.0]:
+		_add_box(b1, Vector3(14.0, 0.18, 178.0), Vector3(side_p * 21.0, -9.84, 6.0), b1_wood_floor, 0.0, 0.0, 0.0, false)
+	# Twin Flanking Sunken Garden Lightwells inside B1 (signature MAD daylight courts on East & West concourses, clear of central tramway!)
+	for side_g: float in [-1.0, 1.0]:
+		for sc_z: float in [-56.0, 56.0]:
+			var gx_c := side_g * 36.0
+			_add_cyl(b1, 10.5, 11.0, 0.32, Vector3(gx_c, -9.75, sc_z), b1_courtyard_grass, 18)
+			_add_cyl(b1, 11.4, 11.4, 0.55, Vector3(gx_c, -9.62, sc_z), granite, 18)
+			for gt_a in range(4):
+				var ang_g := float(gt_a) * TAU / 4.0
+				var gx_t := gx_c + cos(ang_g) * 4.8
+				var gz_t := sc_z + sin(ang_g) * 4.8
+				_add_cyl(b1, 0.22, 0.28, 3.2, Vector3(gx_t, -8.1, gz_t), ceiling_wood, 7)
+				_add_cyl(b1, 1.3, 2.5, 2.6, Vector3(gx_t, -6.0, gz_t), b1_courtyard_grass, 8)
 	# East & West B1 Commercial Arcade Pavilions & Retail Bays (地下商业街)
 	for side_b: float in [-1.0, 1.0]:
 		var sx_b := side_b * 72.0
@@ -686,29 +690,33 @@ static func _jiaxing_station(parent: Node3D, center: Vector3, angle: float, ligh
 			var sz_shop := float(shop_i) * 14.5 + 4.0
 			_add_box(b1, Vector3(1.2, 3.6, 10.4), Vector3(sx_b - side_b * 11.2, -7.8, sz_shop), b1_shop_warm, 0.0, 0.0, 0.0, false)
 			_add_box(b1, Vector3(1.6, 0.5, 11.2), Vector3(sx_b - side_b * 11.4, -5.8, sz_shop), dark_frame, 0.0, 0.0, 0.0, false)
-	# North & South B1 Perimeter Lining Walls
-	_add_box(b1, Vector3(176.0, 7.2, 1.0), Vector3(0.0, -6.4, -90.0), b1_wall, 0.0, 0.0, 0.0, false)
-	_add_box(b1, Vector3(176.0, 7.2, 1.0), Vector3(0.0, -6.4, 102.0), b1_wall, 0.0, 0.0, 0.0, false)
-	# North B1 Underground Drop-Off / Taxi / Bus Bay Roadway Loop (z = -84..-72)
+	# North & South B1 Perimeter Lining Walls — split symmetrically around the 28m central tram portal (x in [-14..+14]) so ZERO walls ever block the tracks!
+	for side_w: float in [-1.0, 1.0]:
+		_add_box(b1, Vector3(74.0, 7.2, 1.0), Vector3(side_w * 51.0, -6.4, -90.0), b1_wall, 0.0, 0.0, 0.0, false)
+		_add_box(b1, Vector3(74.0, 7.2, 1.0), Vector3(side_w * 51.0, -6.4, 102.0), b1_wall, 0.0, 0.0, 0.0, false)
+	# North B1 Underground Drop-Off / Taxi / Bus Bay Roadway Loop (z = -84..-72, flush floor markings)
 	_add_box(b1, Vector3(148.0, 0.14, 14.0), Vector3(0.0, -9.88, -79.0), b1_road_dark, 0.0, 0.0, 0.0, false)
 	for ln_z: float in [-83.5, -79.0, -74.5]:
-		_add_box(b1, Vector3(140.0, 0.06, 0.35), Vector3(0.0, -9.78, ln_z), b1_lane_amber, 0.0, 0.0, 0.0, false)
+		for side_l: float in [-1.0, 1.0]:
+			_add_box(b1, Vector3(54.0, 0.06, 0.35), Vector3(side_l * 43.0, -9.78, ln_z), b1_lane_amber, 0.0, 0.0, 0.0, false)
 	# South B1 Rail Transit / Tram / Metro Interchange Hall (z = +72..+98, bright cyan transfer zone!)
 	_add_box(b1, Vector3(136.0, 0.22, 26.0), Vector3(0.0, -9.84, 86.0), b1_terrazzo, 0.0, 0.0, 0.0, false)
-	_add_box(b1, Vector3(132.0, 0.12, 1.4), Vector3(0.0, -9.70, 74.0), b1_metro_cyan, 0.0, 0.0, 0.0, false)
-	_add_box(b1, Vector3(132.0, 0.12, 1.4), Vector3(0.0, -9.70, 98.0), b1_metro_cyan, 0.0, 0.0, 0.0, false)
-	# B1 Ticket/Security Gate Arrays & Waiting Hall Seating Islands (rows of blue benches flanking central promenade)
-	for g_idx in range(-5, 6):
-		_add_box(b1, Vector3(1.2, 1.25, 0.6), Vector3(float(g_idx) * 4.4, -9.2, -34.0), b1_metro_cyan, 0.0, 0.0, 0.0, false)
-		_add_box(b1, Vector3(1.2, 1.25, 0.6), Vector3(float(g_idx) * 4.4, -9.2, 34.0), b1_metro_cyan, 0.0, 0.0, 0.0, false)
+	for side_c: float in [-1.0, 1.0]:
+		_add_box(b1, Vector3(50.0, 0.12, 1.4), Vector3(side_c * 41.0, -9.70, 74.0), b1_metro_cyan, 0.0, 0.0, 0.0, false)
+		_add_box(b1, Vector3(50.0, 0.12, 1.4), Vector3(side_c * 41.0, -9.70, 98.0), b1_metro_cyan, 0.0, 0.0, 0.0, false)
+	# B1 Ticket/Security Gate Arrays & Waiting Hall Seating Islands (strictly outside x in [-16..+16] tram clearance!)
 	for side_w: float in [-1.0, 1.0]:
+		for g_idx in range(4):
+			var gx_gate := side_w * (18.5 + float(g_idx) * 4.4)
+			_add_box(b1, Vector3(1.2, 1.25, 0.6), Vector3(gx_gate, -9.2, -34.0), b1_metro_cyan, 0.0, 0.0, 0.0, false)
+			_add_box(b1, Vector3(1.2, 1.25, 0.6), Vector3(gx_gate, -9.2, 34.0), b1_metro_cyan, 0.0, 0.0, 0.0, false)
 		for row_z: float in [-22.0, -10.0, 10.0, 22.0]:
-			_add_box(b1, Vector3(26.0, 0.85, 3.2), Vector3(side_w * 34.0, -9.35, row_z), b1_seat_blue, 0.0, 0.0, 0.0, false)
-	# Structural colonnade & escalators ascending from B1 (-10m) to the 3 surface rail platforms (0m)
-	for rx: float in [-50.0, -25.0, 0.0, 25.0, 50.0]:
+			_add_box(b1, Vector3(24.0, 0.85, 3.2), Vector3(side_w * 36.0, -9.35, row_z), b1_seat_blue, 0.0, 0.0, 0.0, false)
+	# Structural colonnade & escalators ascending from B1 (-10m) to the 3 surface rail platforms (strictly outside central tramway!)
+	for rx: float in [-50.0, -25.0, -14.5, 14.5, 25.0, 50.0]:
 		for rz: float in [-42.0, -18.0, 18.0, 42.0, 76.0]:
 			_add_cyl(b1, 0.52, 0.58, 7.2, Vector3(rx, -6.4, rz), steel_white, 10)
-	for bx_e: float in [-36.0, 0.0, 36.0]:
+	for bx_e: float in [-38.0, 38.0]:
 		for pz_e: float in [-18.5, 0.0, 18.5]:
 			_add_box(b1, Vector3(3.2, 0.65, 16.0), Vector3(bx_e, -5.2, pz_e), dark_frame, 0.0, 0.0, 0.52, false)
 			_add_box(b1, Vector3(3.4, 0.18, 16.0), Vector3(bx_e, -4.85, pz_e), b1_metro_cyan, 0.0, 0.0, 0.52, false)

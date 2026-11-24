@@ -1566,6 +1566,16 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
         for lpos, lrad, _ in lm_zones:
             if math.hypot(cen[0] - lpos[0], cen[1] - lpos[1]) < lrad:
                 return False
+        # Keep Jiaxing T1 open-cut U-trough tunnel ramps 100% free of surface buildings!
+        for (rax, ray, rbx, rby) in (
+            (997.81, -1170.11, 885.0, -1178.5),
+            (618.0, -1425.0, 596.91, -1523.54),
+        ):
+            if seg_dist(cen[0], cen[1], rax, ray, rbx, rby)[0] < 24.0:
+                return False
+            for p in pts:
+                if seg_dist(p[0], p[1], rax, ray, rbx, rby)[0] < 16.0:
+                    return False
         # Check heavy railway clearance (never put buildings on top of 沪昆线 or 沪昆高速线 tracks!)
         for (ax, ay, bx, by, rw) in rail_grid.query(bb[0] - 20, bb[1] - 20, bb[2] + 20, bb[3] + 20):
             if seg_dist(cen[0], cen[1], ax, ay, bx, by)[0] < rw:
@@ -2361,10 +2371,10 @@ def build_t1_starter_network(nodes_list, edges_list):
         path.reverse()
         return path
 
-    # All 21 authentic Phase 1 stations of Jiaxing Tram Line T1 in exact real-world sequence!
-    # Part A (Surface South -> North): 嘉兴南站 -> 庆丰路 -> 由拳路 -> 纺工路 -> 纺工路滨河路
-    # Part B (B1 Underground Tunnel): 纺工路滨河路 -> 嘉兴站南隧道坡道 -> 嘉兴火车站(B1地下站) -> 下穿沪昆铁路 -> 嘉兴站西隧道坡道 -> 人民公园
-    # Part C (Surface West): 人民公园 -> 中山东路 -> 瓶山 -> 禾兴南路 -> 中山东路安乐路（旭辉广场）
+    # All 21 authentic Phase 1 stations of Jiaxing Tram Line T1 in exact real-world sequence (Amap / 高德地图 verified!):
+    # Part A (Surface South -> North): 嘉兴南站 -> 庆丰路 -> 由拳路 -> 纺工路(直行景湖路/滨河路) -> 跨平湖塘桥 -> 纺工路北岸
+    # Part B (B1 Underground Tunnel): 纺工路北岸(干地) -> 东隧道坡道 -> 嘉兴火车站(B1中央无遮挡换乘廊道) -> 下穿沪昆铁路 -> 勤俭路出口坡道
+    # Part C (Surface West): 勤俭路西行 -> 环城东路南行(人民公园站) -> 中山东路(瓶山 -> 禾兴南路 -> 中山东路安乐路·旭辉广场)
     waypoints_south = [
         ("嘉兴南站", 4181.0, 6775.0, "庆丰路"),
         ("庆丰路百川路", 4225.0, 6460.0, "庆丰路"),
@@ -2379,34 +2389,61 @@ def build_t1_starter_network(nodes_list, edges_list):
         ("纺工路由拳路（中央公园）", 1420.0, 2436.0, "纺工路"),
         ("嘉兴一中", 1433.0, 1480.0, "纺工路"),
         ("纺工路烟雨路", 1294.0, 724.0, "纺工路"),
-        ("纺工路南溪西路（南湖湖滨）", 1191.0, 224.0, "纺工路"),
-        ("纺工路景湖路", 1141.0, -265.0, "纺工路"),
-        ("纺工路滨河路", 985.44, -970.49, "纺工路"),
+        ("纺工路南溪西路（南湖湖滨）", 1185.54, 117.30, ""),
+        ("纺工路景湖路", 1139.92, -351.19, ""),
+        ("纺工路滨河路", 985.44, -970.49, ""),
     ]
     waypoints_west = [
-        ("人民公园", 405.0, -1191.0, "中山东路"),
-        ("中山东路建国南路（瓶山）", -265.0, -1010.0, "中山东路"),
-        ("中山东路禾兴南路", -695.0, -990.0, "中山东路"),
-        ("中山东路安乐路（旭辉广场）", -1115.0, -943.0, "中山东路"),
+        ("__qinjian_corner__", 152.51, -1528.44, "勤俭路"),
+        ("人民公园", 198.17, -1343.18, "环城东路"),
+        ("__hcd_zsd_corner__", 238.97, -1172.32, "环城东路"),
+        ("__zsd_east__", 226.44, -1130.44, "中山东路"),
+        ("中山东路建国南路（瓶山）", -214.02, -1088.86, "中山东路"),
+        ("中山东路禾兴南路", -689.30, -1027.66, "中山东路"),
+        ("中山东路安乐路（旭辉广场）", -1119.63, -943.17, "中山东路"),
     ]
     wp_south_nodes = [(nm, nearest_node_xy(x, y, kw), x, y) for nm, x, y, kw in waypoints_south]
-    # Anchor tunnel portal endpoints cleanly on 纺工路滨河路 north junction and 中山东路东段 (人民公园)
-    nid_portal_e = wp_south_nodes[-1][1]
-    nid_portal_w = nearest_node_xy(477.83, -1243.21, "中山东路")
+    # Surface continuation across 平湖塘 bridge (1320 -> 1321) onto dry land north of the canal (1328)!
+    nid_pinghu_n = nearest_node_xy(985.58, -1040.28, "")
+    nid_portal_e = nearest_node_xy(997.81, -1170.11, "")
+    nid_portal_w = nearest_node_xy(596.91, -1523.54, "勤俭路")
     node_pos_by_id = {n["id"]: n["pos"] for n in nodes_list}
     p_portal_e = node_pos_by_id[nid_portal_e]
     p_portal_w = node_pos_by_id[nid_portal_w]
 
-    # Create 2 dedicated B1 underground nodes & 3 subterranean tunnel edges passing right through
-    # Jiaxing Station B1 Hub ([758, -1188], y = -10.0m) and straight UNDER the 沪昆铁路 tracks!
+    # Ensure the dry-land north bank approach edge (1321 -> 1328) is wide enough for clean tramway pavement
+    for ed_chk in edges_list:
+        if (ed_chk["a"] == nid_pinghu_n and ed_chk["b"] == nid_portal_e) or (ed_chk["b"] == nid_pinghu_n and ed_chk["a"] == nid_portal_e):
+            ed_chk["width"] = max(float(ed_chk.get("width", 5.5)), 9.2)
+            ed_chk["name"] = "纺工路"
+
+    # Add a clean direct junction connector edge from 环城东路 (1112 [238.97, -1172.32]) -> 中山东路 (1099 [226.44, -1130.44])
+    # so T1 turns cleanly from People's Park (环城东路) west onto 中山东路 without an OSM dual-carriageway hairpin!
     next_nid = max(n["id"] for n in nodes_list) + 1
     next_eid = max(e["id"] for e in edges_list) + 1
+    nid_hcd_s = nearest_node_xy(238.97, -1172.32, "环城东路")
+    nid_zsd_e = nearest_node_xy(226.44, -1130.44, "中山东路")
+    if nid_hcd_s != nid_zsd_e:
+        pa_hz, pb_hz = node_pos_by_id[nid_hcd_s], node_pos_by_id[nid_zsd_e]
+        L_hz = round(math.hypot(pb_hz[0] - pa_hz[0], pb_hz[1] - pa_hz[1]), 2)
+        e_hz = {
+            "id": next_eid, "a": nid_hcd_s, "b": nid_zsd_e, "name": "环城东路",
+            "width": 9.2, "lanes_f": 1, "lanes_b": 1, "length": L_hz,
+            "pts": [pa_hz, pb_hz],
+        }
+        edges_list.append(e_hz)
+        adj[nid_hcd_s].append((nid_zsd_e, next_eid, L_hz, "环城东路"))
+        adj[nid_zsd_e].append((nid_hcd_s, next_eid, L_hz, "环城东路"))
+        next_eid += 1
+
+    # Create 2 dedicated B1 underground nodes & 3 subterranean tunnel edges running DEAD CENTER along
+    # JiaxingStationB1Hall's unobstructed central corridor (lx = 0, y = -10.0m) straight under 沪昆铁路 -> 勤俭路!
     nid_b1_e = next_nid
     nid_b1_w = next_nid + 1
-    p_b1_e = [840.0, -1135.0]
-    p_b1_w = [645.0, -1280.0]
-    nodes_list.append({"id": nid_b1_e, "pos": p_b1_e, "name": "嘉兴站地下东端"})
-    nodes_list.append({"id": nid_b1_w, "pos": p_b1_w, "name": "嘉兴站地下西端"})
+    p_b1_e = [795.0, -1185.0]
+    p_b1_w = [632.0, -1342.0]
+    nodes_list.append({"id": nid_b1_e, "pos": p_b1_e, "name": "嘉兴站地下南端"})
+    nodes_list.append({"id": nid_b1_w, "pos": p_b1_w, "name": "嘉兴站地下北端"})
 
     def _add_ug_edge(eid_new, na, nb, pa, pb, ename):
         L = round(math.hypot(pb[0] - pa[0], pb[1] - pa[1]), 2)
@@ -2418,17 +2455,21 @@ def build_t1_starter_network(nodes_list, edges_list):
         edges_list.append(ed)
         return ed
 
-    e_ramp_in = _add_ug_edge(next_eid, nid_portal_e, nid_b1_e, p_portal_e, p_b1_e, "嘉兴站南地下隧道坡道")
+    e_ramp_in = _add_ug_edge(next_eid, nid_portal_e, nid_b1_e, p_portal_e, p_b1_e, "嘉兴站东地下隧道坡道")
     e_b1_sta = _add_ug_edge(next_eid + 1, nid_b1_e, nid_b1_w, p_b1_e, p_b1_w, "嘉兴火车站地下隧道")
-    e_ramp_out = _add_ug_edge(next_eid + 2, nid_b1_w, nid_portal_w, p_b1_w, p_portal_w, "嘉兴站西地下隧道坡道")
+    e_ramp_out = _add_ug_edge(next_eid + 2, nid_b1_w, nid_portal_w, p_b1_w, p_portal_w, "嘉兴站北地下隧道坡道")
     ug_elev_map = {
         e_ramp_in["id"]: (0.0, -10.0),
         e_b1_sta["id"]: (-10.0, -10.0),
         e_ramp_out["id"]: (-10.0, 0.0),
     }
 
+    # Extend south surface chain across 平湖塘 bridge to dry-land dive-in node (1328)
+    wp_south_chain = wp_south_nodes + [
+        ("__pinghu_n__", nid_pinghu_n, node_pos_by_id[nid_pinghu_n][0], node_pos_by_id[nid_pinghu_n][1]),
+        ("__portal_e__", nid_portal_e, p_portal_e[0], p_portal_e[1]),
+    ]
     wp_west_nodes = [(nm, nearest_node_xy(x, y, kw), x, y) for nm, x, y, kw in waypoints_west]
-    # Start Part C cleanly at nid_portal_w -> first Zhongshan East Rd node -> ... -> Anle Rd
     wp_west_chain = [("__portal_w__", nid_portal_w, p_portal_w[0], p_portal_w[1])] + wp_west_nodes
 
     track_eids = []
@@ -2436,10 +2477,10 @@ def build_t1_starter_network(nodes_list, edges_list):
     edge_by_id = {e["id"]: e for e in edges_list}
     station_targets = []  # (name, ideal_x, ideal_y, hint_idx_in_track_eids, is_term, forced_eid_or_None)
 
-    # Trace Part A (South Surface: 嘉兴南站 -> 纺工路滨河路)
-    for i in range(len(wp_south_nodes) - 1):
-        nm_a, na, xa, ya = wp_south_nodes[i]
-        nm_b, nb, xb, yb = wp_south_nodes[i + 1]
+    # Trace Part A (South Surface: 嘉兴南站 -> 纺工路滨河路 -> 跨平湖塘桥 -> 干地入口)
+    for i in range(len(wp_south_chain) - 1):
+        nm_a, na, xa, ya = wp_south_chain[i]
+        nm_b, nb, xb, yb = wp_south_chain[i + 1]
         if na == nb:
             continue
         seg_eids = shortest_path_edges(na, nb, seen_e)
@@ -2453,16 +2494,17 @@ def build_t1_starter_network(nodes_list, edges_list):
             if eid not in seen_e:
                 seen_e.add(eid)
                 track_eids.append(eid)
-        station_targets.append((nm_b, xb, yb, len(track_eids) - 1, False, None))
+        if not nm_b.startswith("__"):
+            station_targets.append((nm_b, xb, yb, len(track_eids) - 1, False, None))
 
-    # Trace Part B (Underground B1 Tunnel straight through 嘉兴火车站 & underneath 沪昆铁路!)
+    # Trace Part B (Underground B1 Tunnel straight through 嘉兴火车站 & underneath 沪昆铁路 -> 勤俭路!)
     for ug_ed in (e_ramp_in, e_b1_sta, e_ramp_out):
         seen_e.add(ug_ed["id"])
         track_eids.append(ug_ed["id"])
     b1_hint_idx = len(track_eids) - 2
-    station_targets.append(("嘉兴火车站", 758.0, -1188.0, b1_hint_idx, False, e_b1_sta["id"]))
+    station_targets.append(("嘉兴火车站", 749.0, -1229.0, b1_hint_idx, False, e_b1_sta["id"]))
 
-    # Trace Part C (West Surface: 人民公园 -> 中山东路 -> 安乐路旭辉广场)
+    # Trace Part C (West Surface: 勤俭路 -> 环城东路(人民公园) -> 中山东路 -> 安乐路旭辉广场)
     for i in range(len(wp_west_chain) - 1):
         nm_a, na, xa, ya = wp_west_chain[i]
         nm_b, nb, xb, yb = wp_west_chain[i + 1]
@@ -2477,7 +2519,10 @@ def build_t1_starter_network(nodes_list, edges_list):
             if eid not in seen_e:
                 seen_e.add(eid)
                 track_eids.append(eid)
-        station_targets.append((nm_b, xb, yb, len(track_eids) - 1, i == len(wp_west_chain) - 2, None))
+        if not nm_b.startswith("__"):
+            # Place 人民公园 station centered along 环城东路 (1066 -> 1086, y ~ -1435) matching Amap!
+            sx_use, sy_use = (175.3, -1435.8) if nm_b == "人民公园" else (xb, yb)
+            station_targets.append((nm_b, sx_use, sy_use, len(track_eids) - 1, i == len(wp_west_chain) - 2, None))
 
     # Place terminal scissors crossovers (CrossoverType.DOUBLE = 2) on clean long surface edges near both termini FIRST
     # so NO station ever overlaps a crossover!
@@ -2498,7 +2543,7 @@ def build_t1_starter_network(nodes_list, edges_list):
         chosen_t = 0.5
         if forced_eid is not None:
             chosen_eid = forced_eid
-            chosen_t = 0.40  # Right inside Jiaxing Station B1 South Tram Interchange Hall (y = -10.0m)!
+            chosen_t = 0.28  # Right inside Jiaxing Station B1 South Tram Interchange Hall (lx=0, y=-10.0m)!
             min_track_idx = max(min_track_idx, hint_idx)
         else:
             if st_i == 0:
@@ -2544,7 +2589,7 @@ def build_t1_starter_network(nodes_list, edges_list):
             "side": 0,
             "name": nm,
             "kind": 2,  # StationKind.ISLAND
-            "platform_len": 40.0,  # Fits the real 34.8m 5-module "南湖号" cleanly!
+            "platform_len": 42.0,  # Fits the real 34.8m 5-module "南湖号" with generous 5/5 door alignment margin!
         })
 
     starter_tracks = []

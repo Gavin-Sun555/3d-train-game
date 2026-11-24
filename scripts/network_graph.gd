@@ -1357,7 +1357,9 @@ func compile_line_route(line_dict: Dictionary, b_platform_sids: Dictionary = {},
 			continue
 		var t_eid := int(in_sp["eid"])
 		var s_st := float(in_sp["s1"])
-		var s_cusp := _route_clamp_s(geo_cache, t_eid, s_st + d_in * TURNBACK_EXTEND_M)
+		var tb_plat_len := float(stations.get(sids[j], {}).get("platform_len", 27.0))
+		var tb_ext := maxf(TURNBACK_EXTEND_M, tb_plat_len * 0.5 - 1.5)
+		var s_cusp := _route_clamp_s(geo_cache, t_eid, s_st + d_in * tb_ext)
 		if (s_cusp - s_st) * d_in < 0.0:
 			s_cusp = s_st
 		# Dead-end tail track: the usable track runs on to the buffer stop at the rail end. Trams still stop at
@@ -1402,10 +1404,12 @@ func compile_line_route(line_dict: Dictionary, b_platform_sids: Dictionary = {},
 	if not is_loop:
 		var first_sp: Dictionary = (seg_spans[0] as Array).front()
 		var d_f := signf(float(first_sp["s1"]) - float(first_sp["s0"]))
-		first_sp["s0"] = _route_clamp_s(geo_cache, int(first_sp["eid"]), float(first_sp["s0"]) - d_f * TURNBACK_EXTEND_M)
+		var ext_f := maxf(TURNBACK_EXTEND_M, float(stations.get(sids[0], {}).get("platform_len", 27.0)) * 0.5 - 1.5)
+		first_sp["s0"] = _route_clamp_s(geo_cache, int(first_sp["eid"]), float(first_sp["s0"]) - d_f * ext_f)
 		var last_sp: Dictionary = (seg_spans[n_seg - 1] as Array).back()
 		var d_l := signf(float(last_sp["s1"]) - float(last_sp["s0"]))
-		last_sp["s1"] = _route_clamp_s(geo_cache, int(last_sp["eid"]), float(last_sp["s1"]) + d_l * TURNBACK_EXTEND_M)
+		var ext_l := maxf(TURNBACK_EXTEND_M, float(stations.get(sids[sids.size() - 1], {}).get("platform_len", 27.0)) * 0.5 - 1.5)
+		last_sp["s1"] = _route_clamp_s(geo_cache, int(last_sp["eid"]), float(last_sp["s1"]) + d_l * ext_l)
 
 	# 3. Sample the exact rendered rail geometry (edge curves + junction connector arcs + crossover diagonals)
 	var all_pts: Array[Vector3] = []

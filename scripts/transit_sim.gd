@@ -1253,7 +1253,9 @@ func _stop_target_offset_for_station(tr: Dictionary, stop: Dictionary) -> float:
 	if bool(stop.get("turnback", false)):
 		var term_target := st_off - dir * TURNBACK_STOP_MARGIN
 		return fposmod(term_target, rlen) if is_loop else clampf(term_target, 1.5, maxf(2.0, rlen - 1.5))
-	var align_lead := minf(_consist_length(tr) * 0.38, 9.5)
+	# Exact consist centering: lead bogie is at `s`, rear bogie at `s - dir * consist_len`,
+	# so midpoint of all car doorways is at `s - dir * 0.5 * consist_len`. Center that on `st_off`!
+	var align_lead := _consist_length(tr) * 0.50
 	var target := st_off + dir * align_lead
 	if is_loop:
 		return fposmod(target, rlen)
@@ -1807,8 +1809,8 @@ func _step_ai_driver(
 
 	var at_track_end := (not is_loop) and ((dir > 0.0 and s_now >= rlen - 2.2) or (dir < 0.0 and s_now <= 2.2))
 
-	var stop_snap_spd := 1.15 if ai_style == AIStyle.FURIOUS else 0.55
-	var stop_snap_d := 3.2 if ai_style == AIStyle.FURIOUS else 3.8
+	var stop_snap_spd := 1.15 if ai_style == AIStyle.FURIOUS else 0.65
+	var stop_snap_d := 1.45 if ai_style == AIStyle.FURIOUS else 1.65
 	if float(tr["depart_cooldown"]) <= 0.0 and ((dist_ahead <= stop_snap_d and spd < stop_snap_spd) or (at_track_end and spd < 0.35)):
 		tr["speed_mps"] = 0.0
 		tr["notch"] = 3 # Steady B2 platform holding brake
@@ -1906,11 +1908,11 @@ func _step_ai_driver(
 	var station_final_stop := false
 	var st_decel_fac := 0.84 if ai_style == AIStyle.FURIOUS else (0.36 if ai_style == AIStyle.SLOW else 0.48)
 	if float(tr["depart_cooldown"]) <= 0.0 and dist_ahead < 165.0:
-		var d_st := maxf(0.5, dist_ahead - (0.6 if ai_style == AIStyle.FURIOUS else 1.0))
+		var d_st := maxf(0.5, dist_ahead - (0.35 if ai_style == AIStyle.FURIOUS else 0.55))
 		var v_st_env := sqrt(2.0 * eff_decel * st_decel_fac * d_st)
 		v_env = minf(v_env, v_st_env)
 		var a_st := (spd * spd) / (2.0 * d_st)
-		if dist_ahead <= 2.4:
+		if dist_ahead <= 1.5:
 			station_final_stop = true
 			approaching_station = true
 		elif a_st > eff_decel * (0.42 if ai_style == AIStyle.FURIOUS else 0.17) or dist_ahead < (spd * spd) / maxf(0.4, 2.0 * eff_decel * st_decel_fac) + (3.2 if ai_style == AIStyle.FURIOUS else 9.0):
@@ -1996,11 +1998,11 @@ func _step_ai_driver(
 		if ((approaching_station and ai_style != AIStyle.FURIOUS) or (float(tr["depart_cooldown"]) <= 0.0 and dist_ahead < crawl_zone_d)) and not hard_stop_ahead:
 			# Stopped slightly short of the platform mark: brisk pull-in in Furious, gentle P1 crawl in Normal/Slow
 			var crawling := bool(tr.get("ai_crawl_active", false))
-			var crawl_lo := 2.2 if ai_style == AIStyle.FURIOUS else 0.85
-			var crawl_hi := 3.4 if ai_style == AIStyle.FURIOUS else 1.85
-			if not crawling and spd < crawl_lo and dist_ahead > 3.0:
+			var crawl_lo := 2.0 if ai_style == AIStyle.FURIOUS else 0.85
+			var crawl_hi := 3.2 if ai_style == AIStyle.FURIOUS else 1.75
+			if not crawling and spd < crawl_lo and dist_ahead > 1.35:
 				crawling = true
-			elif crawling and (spd >= crawl_hi or dist_ahead <= 2.6):
+			elif crawling and (spd >= crawl_hi or dist_ahead <= 1.15):
 				crawling = false
 			tr["ai_crawl_active"] = crawling
 			desired_notch = (NOTCH_NEUTRAL + 3 if ai_style == AIStyle.FURIOUS else NOTCH_NEUTRAL + 1) if crawling else NOTCH_NEUTRAL
