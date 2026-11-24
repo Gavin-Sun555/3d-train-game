@@ -2270,7 +2270,8 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
     b_candidates.sort(key=lambda it: it[0])
 
     for _prio, bi, (best_d, best_hw, ei, a, c, el, ccw) in b_candidates:
-        if len(storefronts) >= 22000:
+        # ~54% of street-facing buildings carry ground-floor shops (busiest streets first), as in the real city
+        if len(storefronts) >= 45000:
             break
         if (bi, ei) in used_b_edges:
             continue

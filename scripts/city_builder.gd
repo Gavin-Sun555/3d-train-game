@@ -770,6 +770,13 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 				h = float(lm_o["h"])
 		if Geometry2D.is_polygon_clockwise(poly):
 			poly.reverse()
+		var b_hash := absi(int(poly[0].x * 7.31 + poly[0].y * 3.17))
+		if is_zh and lm_o.get("style", -1) == -1 and str(b.get("lm", "")) == "" and style == 0 and h < 75.0 \
+				and str(b.get("kind", "")) in ["apartments", "residential", "yes"]:
+			# Ordinary apartment blocks are concrete, not CBD glass curtain walls: most get the residential
+			# facade, some the mixed-use stone facade, a few keep glass
+			var pick := b_hash % 20
+			style = 2 if pick < 14 else (1 if pick < 17 else 0)
 
 		if style == 3:
 			var hc: Color = house_pal[int(absf(poly[0].x * 7.0 + poly[0].y * 13.0)) % house_pal.size()]
@@ -820,6 +827,11 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 		if not lm_o.is_empty():
 			base_c = lm_o["color"]
 			trim_c = base_c.lightened(0.10) if style != 0 else trim_c
+		if is_zh and style in [1, 2] and str(b.get("lm", "")) == "":
+			# Real Chinese residential colour schemes instead of six near-identical pale greys: neighbouring
+			# blocks (one compound) share a colour family, each building varies a little
+			base_c = _zh_facade_colour(Vector2(poly[0].x, poly[0].y), b_hash)
+			trim_c = base_c.lerp(Color(0.92, 0.91, 0.88), 0.45)
 		var seed_i := b_idx % 60
 		if not lm_o.is_empty() and bool(lm_o["ashlar"]):
 			seed_i = LandmarkFacades.ASHLAR_SEED
@@ -882,6 +894,15 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 					"slab": base_c.lerp(Color(0.80, 0.80, 0.78), 0.5), "rail": Color(0.20, 0.21, 0.23), "st": bal_st}
 		var top_piece := poly
 		var top_h := h
+		var pitched := {}
+		if is_zh and generic and resid and style == 2 and h >= 9.0 and h <= 25.0 and (b_hash % 10) < 5:
+			var obr := _obb2d(poly)
+			if not obr.is_empty() and absf(_poly_area(poly)) > 0.82 * 4.0 * float(obr[2]) * float(obr[3]):
+				var ou: Vector2 = obr[1]
+				var hs_r := float(obr[3])
+				var tile_c: Color = [Color(0.30, 0.32, 0.35), Color(0.26, 0.28, 0.30), Color(0.56, 0.31, 0.24), Color(0.40, 0.42, 0.45)][b_hash % 4]
+				pitched = {"c": [obr[0].x, obr[0].y], "a": atan2(ou.y, ou.x), "hl": float(obr[2]), "hw": hs_r,
+					"h": clampf(hs_r * 0.55, 1.6, 3.4), "shape": "hipped" if (b_hash / 10) % 3 != 0 else "gabled", "col": tile_c}
 		if has_setback:
 			# Extrude street-edge podium (0 .. podium_h) + setback upper tower (podium_h .. h)
 			_extrude_tier_with_3d_relief(st, frame_st, poly, 0.0, podium_h, style, vcol, trim_c, true)
@@ -893,7 +914,7 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 			# Varied massing instead of one plain box: long slabs step down floor by floor at their ends,
 			# point towers get a set-back crown (top floors), the rest stay simple
 			var fh_m := 3.05 if is_zh else 3.4
-			var pieces: Array = _massing_pieces(poly, h, fh_m) if generic and poly.size() >= 4 else [[poly, 0.0, h]]
+			var pieces: Array = _massing_pieces(poly, h, fh_m) if generic and poly.size() >= 4 and pitched.is_empty() else [[poly, 0.0, h]]
 			for pc: Array in pieces:
 				_extrude_tier_with_3d_relief(st, frame_st, pc[0], float(pc[1]), float(pc[2]), style, vcol, trim_c, float(pc[1]) < 0.5, balc)
 				if float(pc[2]) >= top_h - 0.01:
@@ -902,6 +923,10 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 			any_geom = true
 		if not balc.is_empty() and bool(balc.get("used", false)):
 			bal_used = true
+		if not pitched.is_empty():
+			# Pitched tile roof of an older 6-8 storey residential block (老小区坡屋顶)
+			_emit_roof(st, roof_st, pitched, h + 0.3, vcol, pitched["col"])
+			has_roofs = true
 		if generic and resid and style == 2 and h >= 24.0 and span.x > 14.0 and span.y > 14.0:
 			_emit_roof_core(frame_st, top_piece, top_h, base_c, trim_c, seed_i)
 			has_frames = true
@@ -944,7 +969,7 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 		# Rooftop mechanical penthouse, HVAC chillers batched into BuildingFrames3D + skyscraper beacons
 		var top_poly := tower_poly if has_setback else poly
 		var got_core := str(b.get("kind", "")) in ["apartments", "residential", "dormitory"] and style == 2 and h >= 24.0 and span.x > 14.0 and span.y > 14.0 and (b.get("roof", {}) as Dictionary).is_empty() and str(b.get("lm", "")) == ""
-		if not got_core and Geometry2D.is_point_in_polygon(center2, top_poly) and span.x > 16.0 and span.y > 16.0 and h >= 15.0:
+		if not got_core and pitched.is_empty() and Geometry2D.is_point_in_polygon(center2, top_poly) and span.x > 16.0 and span.y > 16.0 and h >= 15.0:
 			var pw := clampf(span.x * 0.25, 4.2, 11.5)
 			var pd := clampf(span.y * 0.25, 4.2, 11.5)
 			var ph := clampf(h * 0.048 + 2.2, 2.5, 5.2)
@@ -1751,6 +1776,30 @@ static func _massing_pieces(poly: PackedVector2Array, h: float, fh: float) -> Ar
 			var hb := h - fh * 2.0
 			return [[poly, 0.0, hb], [crown, hb, h]]
 	return one
+
+
+# Facade colour of a Chinese residential / mixed-use block: a colour family per ~180 m cell (one compound or
+# street block shares it), per-building variation inside the family
+static func _zh_facade_colour(p: Vector2, b_hash: int) -> Color:
+	var fams: Array = [
+		[Color(0.88, 0.80, 0.62), Color(0.84, 0.76, 0.58)], # cream
+		[Color(0.80, 0.68, 0.52), Color(0.76, 0.64, 0.48)], # warm beige 真石漆
+		[Color(0.77, 0.53, 0.41), Color(0.72, 0.49, 0.38)], # light terracotta
+		[Color(0.87, 0.67, 0.55), Color(0.83, 0.63, 0.51)], # peach
+		[Color(0.88, 0.88, 0.86), Color(0.82, 0.82, 0.80)], # grey-white
+		[Color(0.63, 0.69, 0.76), Color(0.58, 0.64, 0.71)], # grey-blue
+		[Color(0.79, 0.73, 0.58), Color(0.74, 0.68, 0.54)], # sand
+		[Color(0.62, 0.37, 0.29), Color(0.57, 0.34, 0.27)], # brick (older blocks)
+	]
+	var cx := int(floor(p.x / 180.0))
+	var cy := int(floor(p.y / 180.0))
+	var fam_i := absi(cx * 73856093 ^ cy * 19349663) % fams.size()
+	if fam_i == 7 and absi(cx * 31 + cy * 17) % 3 != 0:
+		fam_i = 1 # brick only now and then
+	var fam: Array = fams[fam_i]
+	var c := (fam[0] as Color).lerp(fam[1], float(b_hash % 7) / 6.0)
+	var jit := (float((b_hash / 7) % 9) - 4.0) * 0.008
+	return Color(clampf(c.r + jit, 0.0, 1.0), clampf(c.g + jit, 0.0, 1.0), clampf(c.b + jit, 0.0, 1.0))
 
 
 static func _poly_area(poly: PackedVector2Array) -> float:
@@ -2720,84 +2769,109 @@ static func _build_bike_lane_strips(
 		if pts.size() < 2:
 			continue
 		var bl_w := 2.05 if hw >= 5.75 else (1.55 if hw >= 4.8 else 1.25)
-		for i in range(pts.size() - 1):
-			var a := Vector2(float(pts[i][0]), float(pts[i][1]))
-			var b := Vector2(float(pts[i + 1][0]), float(pts[i + 1][1]))
-			var d := b - a
-			var seg_len := d.length()
-			if seg_len <= 15.0:
-				continue
-			var dir := d / seg_len
+		# The lane follows the whole street polyline continuously (smooth joins at its bends); it is only
+		# trimmed back at the street's two ends, where the junction / crosswalk is
+		var poly: Array[Vector2] = []
+		for pp in pts:
+			var v2 := Vector2(float(pp[0]), float(pp[1]))
+			if poly.is_empty() or poly[poly.size() - 1].distance_to(v2) > 0.05:
+				poly.append(v2)
+		if poly.size() < 2:
+			continue
+		var cum: Array[float] = [0.0]
+		for k in range(1, poly.size()):
+			cum.append(cum[k - 1] + poly[k - 1].distance_to(poly[k]))
+		var total := cum[cum.size() - 1]
+		var end_cap := 8.5 if hw >= 5.75 else 6.5
+		var t0 := minf(end_cap, (cum[1] - cum[0]) * 0.24 if poly.size() == 2 else end_cap)
+		var t1 := total - minf(end_cap, (cum[cum.size() - 1] - cum[cum.size() - 2]) * 0.24 if poly.size() == 2 else end_cap)
+		if t1 - t0 < 4.0:
+			continue
+		# samples: position + smoothed left normal (averaged across a bend)
+		var samp_p: Array[Vector2] = []
+		var samp_n: Array[Vector2] = []
+		var seg := 0
+		var sd := t0
+		while true:
+			var s_cl := minf(sd, t1)
+			while seg < poly.size() - 2 and cum[seg + 1] < s_cl:
+				seg += 1
+			var a := poly[seg]
+			var b := poly[seg + 1]
+			var f := clampf((s_cl - cum[seg]) / maxf(cum[seg + 1] - cum[seg], 0.001), 0.0, 1.0)
+			var dir := (b - a).normalized()
 			var nrm := Vector2(-dir.y, dir.x)
-			var s0 := minf(8.5 if hw >= 5.75 else 6.5, seg_len * 0.24)
-			var s1 := seg_len - s0
-			if s1 - s0 < 4.0:
-				continue
-			for bside: float in _bike_sides(r):
-				# Tram street: start the lane outside the motor lane that keeps clear of the tracks (narrower lane)
+			# ease the normal into the neighbouring segment's within 3 m of a bend
+			if f * (cum[seg + 1] - cum[seg]) > (cum[seg + 1] - cum[seg]) - 3.0 and seg < poly.size() - 2:
+				var dn := (poly[seg + 2] - b).normalized()
+				var w := 0.5 * (1.0 - ((cum[seg + 1] - s_cl) / 3.0))
+				nrm = nrm.lerp(Vector2(-dn.y, dn.x), clampf(w, 0.0, 0.5)).normalized()
+			elif f * (cum[seg + 1] - cum[seg]) < 3.0 and seg > 0:
+				var dp := (a - poly[seg - 1]).normalized()
+				var w2 := 0.5 * (1.0 - ((s_cl - cum[seg]) / 3.0))
+				nrm = nrm.lerp(Vector2(-dp.y, dp.x), clampf(w2, 0.0, 0.5)).normalized()
+			samp_p.append(a.lerp(b, f))
+			samp_n.append(nrm)
+			if sd >= t1:
+				break
+			sd += 2.0
+		for bside: float in _bike_sides(r):
+			# Per sample: on a tram street the lane starts outside the motor lane that keeps clear of the
+			# tracks, so it narrows only where the track comes close (curves, shifted alignment)
+			var samp_in: Array[float] = []
+			for k in range(samp_p.size()):
 				var inner_abs := hw - bl_w
 				if has_tracks:
-					var need := 0.0
-					var sq := s0
-					while sq <= s1 + 0.01:
-						var pq := a + dir * minf(sq, s1) + nrm * (bside * inner_abs)
-						need = maxf(need, NetworkGraph.BIKE_TRACK_CLEAR - TrackBuilder.track_clearance_dist(clear_idx, pq))
-						sq += 4.0
-					inner_abs += maxf(0.0, need)
-				if hw - 0.14 - inner_abs < NetworkGraph.BIKE_MIN_W:
+					for _it in range(2):
+						var pq := samp_p[k] + samp_n[k] * (bside * inner_abs)
+						inner_abs += maxf(0.0, NetworkGraph.BIKE_TRACK_CLEAR - TrackBuilder.track_clearance_dist(clear_idx, pq))
+				samp_in.append(inner_abs)
+			# widen each narrowing over the neighbouring samples so the edge eases in and out
+			var sm_in: Array[float] = []
+			for k in range(samp_in.size()):
+				var v := samp_in[k]
+				for kk in range(maxi(0, k - 2), mini(samp_in.size(), k + 3)):
+					v = maxf(v, samp_in[kk] - 0.25 * float(absi(kk - k)))
+				sm_in.append(v)
+			# Decide per kerb side, not per sample: a side that mostly has room is painted continuously
+			# (at least BIKE_MIN_W wide), so the lane never blinks on and off along a street; only station
+			# bays cut it
+			var n_room := 0
+			for k0 in range(sm_in.size()):
+				if hw - 0.14 - sm_in[k0] >= NetworkGraph.BIKE_MIN_W + 0.3:
+					n_room += 1
+			if float(n_room) < NetworkGraph.BIKE_SIDE_MIN_SHARE * float(sm_in.size()):
+				continue
+			for k1 in range(sm_in.size()):
+				sm_in[k1] = minf(sm_in[k1], hw - 0.14 - NetworkGraph.BIKE_MIN_W)
+			var ok_arr: Array[bool] = []
+			for k in range(samp_p.size()):
+				var pm := samp_p[k] + samp_n[k] * (bside * ((sm_in[k] + hw - 0.14) * 0.5))
+				ok_arr.append(not _in_bay(bays, pm))
+			for k in range(samp_p.size() - 1):
+				if not (ok_arr[k] and ok_arr[k + 1]):
 					continue
-				var inner_o := bside * inner_abs
-				var outer_o := bside * (hw - 0.14)
-				var mid_o := (inner_o + outer_o) * 0.5
-				var o_lo := minf(inner_o, outer_o)
-				var o_hi := maxf(inner_o, outer_o)
-				var loff := bside * (hw - bl_w - 0.08)
-				var ln := nrm * 0.08
-				var run_a := -1.0
-				var sc := s0
-				while sc <= s1 + 0.01:
-					var s_cl := minf(sc, s1)
-					var p_mid := a + dir * s_cl + nrm * mid_o
-					var p_in := a + dir * s_cl + nrm * inner_o
-					var ok := not _in_bay(bays, p_mid)
-					if ok and has_tracks:
-						ok = TrackBuilder.track_clearance_dist(clear_idx, p_in) >= NetworkGraph.BIKE_TRACK_CLEAR - 0.05
-					if ok and sc <= s1:
-						if run_a < 0.0:
-							run_a = s_cl
-					else:
-						if run_a >= 0.0 and s_cl - run_a >= 4.0:
-							var ba := a + dir * run_a
-							var bb := a + dir * s_cl
-							var p0b := ba + nrm * o_lo
-							var p1b := ba + nrm * o_hi
-							var p2b := bb + nrm * o_hi
-							var p3b := bb + nrm * o_lo
-							_add_flat_quad(bike_st, Vector3(p0b.x, yb, p0b.y), Vector3(p1b.x, yb, p1b.y),
-								Vector3(p2b.x, yb, p2b.y), Vector3(p3b.x, yb, p3b.y), Vector3.UP)
-							has_bike = true
-							var l0 := ba + nrm * loff
-							var l1 := bb + nrm * loff
-							_add_flat_quad(line_st, Vector3(l0.x - ln.x, ym, l0.y - ln.y), Vector3(l0.x + ln.x, ym, l0.y + ln.y),
-								Vector3(l1.x + ln.x, ym, l1.y + ln.y), Vector3(l1.x - ln.x, ym, l1.y - ln.y), Vector3.UP)
-							has_line = true
-						run_a = -1.0
-					sc += 4.0
-				if run_a >= 0.0 and s1 - run_a >= 4.0:
-					var ba2 := a + dir * run_a
-					var bb2 := a + dir * s1
-					var p0b2 := ba2 + nrm * o_lo
-					var p1b2 := ba2 + nrm * o_hi
-					var p2b2 := bb2 + nrm * o_hi
-					var p3b2 := bb2 + nrm * o_lo
-					_add_flat_quad(bike_st, Vector3(p0b2.x, yb, p0b2.y), Vector3(p1b2.x, yb, p1b2.y),
-						Vector3(p2b2.x, yb, p2b2.y), Vector3(p3b2.x, yb, p3b2.y), Vector3.UP)
-					has_bike = true
-					var l02 := ba2 + nrm * loff
-					var l12 := bb2 + nrm * loff
-					_add_flat_quad(line_st, Vector3(l02.x - ln.x, ym, l02.y - ln.y), Vector3(l02.x + ln.x, ym, l02.y + ln.y),
-						Vector3(l12.x + ln.x, ym, l12.y + ln.y), Vector3(l12.x - ln.x, ym, l12.y - ln.y), Vector3.UP)
-					has_line = true
+				if samp_p[k].distance_to(samp_p[k + 1]) < 0.05:
+					continue
+				var qa_in := samp_p[k] + samp_n[k] * (bside * sm_in[k])
+				var qb_in := samp_p[k + 1] + samp_n[k + 1] * (bside * sm_in[k + 1])
+				var qa_out := samp_p[k] + samp_n[k] * (bside * (hw - 0.14))
+				var qb_out := samp_p[k + 1] + samp_n[k + 1] * (bside * (hw - 0.14))
+				if bside > 0.0:
+					_add_flat_quad(bike_st, Vector3(qa_in.x, yb, qa_in.y), Vector3(qa_out.x, yb, qa_out.y),
+						Vector3(qb_out.x, yb, qb_out.y), Vector3(qb_in.x, yb, qb_in.y), Vector3.UP)
+				else:
+					_add_flat_quad(bike_st, Vector3(qa_out.x, yb, qa_out.y), Vector3(qa_in.x, yb, qa_in.y),
+						Vector3(qb_in.x, yb, qb_in.y), Vector3(qb_out.x, yb, qb_out.y), Vector3.UP)
+				has_bike = true
+				# solid white divider along the (possibly narrowed) inner edge
+				var la := samp_p[k] + samp_n[k] * (bside * (sm_in[k] - 0.08))
+				var lb := samp_p[k + 1] + samp_n[k + 1] * (bside * (sm_in[k + 1] - 0.08))
+				var ln_a := samp_n[k] * 0.08
+				var ln_b := samp_n[k + 1] * 0.08
+				_add_flat_quad(line_st, Vector3(la.x - ln_a.x, ym, la.y - ln_a.y), Vector3(la.x + ln_a.x, ym, la.y + ln_a.y),
+					Vector3(lb.x + ln_b.x, ym, lb.y + ln_b.y), Vector3(lb.x - ln_b.x, ym, lb.y - ln_b.y), Vector3.UP)
+				has_line = true
 
 	if has_bike:
 		var b_mi := MeshInstance3D.new()

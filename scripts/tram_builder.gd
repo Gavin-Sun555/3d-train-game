@@ -34,23 +34,24 @@ static func build_tram(spec: Dictionary, override_sections: int = -1) -> Diction
 	var mat_body := ShaderMaterial.new()
 	mat_body.shader = body_sh
 	mat_body.set_shader_parameter("base_color", body_col)
-	mat_body.set_shader_parameter("metallic_val", 0.28 if not vintage else 0.14)
-	mat_body.set_shader_parameter("rough_val", 0.22 if not vintage else 0.32)
-	mat_body.set_shader_parameter("clearcoat_val", 0.90 if not vintage else 0.65)
+	# Painted car body: dielectric paint under a satin clear coat (no chrome-like sky mirroring)
+	mat_body.set_shader_parameter("metallic_val", 0.04 if not vintage else 0.06)
+	mat_body.set_shader_parameter("rough_val", 0.30 if not vintage else 0.36)
+	mat_body.set_shader_parameter("clearcoat_val", 0.55 if not vintage else 0.45)
 	mat_body.set_shader_parameter("seam_strength", 0.42)
 
 	var mat_accent := ShaderMaterial.new()
 	mat_accent.shader = body_sh
 	mat_accent.set_shader_parameter("base_color", accent_col)
-	mat_accent.set_shader_parameter("metallic_val", 0.32 if not vintage else 0.16)
-	mat_accent.set_shader_parameter("rough_val", 0.20)
-	mat_accent.set_shader_parameter("clearcoat_val", 0.92)
+	mat_accent.set_shader_parameter("metallic_val", 0.04)
+	mat_accent.set_shader_parameter("rough_val", 0.28)
+	mat_accent.set_shader_parameter("clearcoat_val", 0.55)
 	mat_accent.set_shader_parameter("seam_strength", 0.30)
 
 	var mat_roof := ShaderMaterial.new()
 	mat_roof.shader = body_sh
 	mat_roof.set_shader_parameter("base_color", roof_col)
-	mat_roof.set_shader_parameter("metallic_val", 0.46)
+	mat_roof.set_shader_parameter("metallic_val", 0.12)
 	mat_roof.set_shader_parameter("rough_val", 0.48)
 	mat_roof.set_shader_parameter("clearcoat_val", 0.20)
 	mat_roof.set_shader_parameter("seam_strength", 0.50)
@@ -96,10 +97,20 @@ static func build_tram(spec: Dictionary, override_sections: int = -1) -> Diction
 	var mat_brass := _make_mat(Color(0.85, 0.68, 0.26), 0.24, 0.86)
 	var mat_yellow_thresh := _make_mat(Color(0.92, 0.76, 0.14), 0.68, 0.0)
 
+	# Jiaxing T1 (CRRC Changchun 嘉兴有轨电车): pearl-white body, black glazing band, charcoal glazed doors,
+	# maroon nose sweep, thin red cantrail line, smooth roof fairing (see _build_jx_nose / _build_jx_fairing)
+	var is_jx := nose_kind == "nanhu_swift"
 	var mat_glass := ShaderMaterial.new()
 	mat_glass.shader = glass_sh
-	mat_glass.set_shader_parameter("tint_color", Color(0.08, 0.16, 0.22))
-	mat_glass.set_shader_parameter("base_alpha", 0.30)
+	mat_glass.set_shader_parameter("tint_color", Color(0.03, 0.035, 0.04) if is_jx else Color(0.08, 0.16, 0.22))
+	mat_glass.set_shader_parameter("base_alpha", 0.62 if is_jx else 0.30)
+	var mat_door_jx := ShaderMaterial.new()
+	mat_door_jx.shader = body_sh
+	mat_door_jx.set_shader_parameter("base_color", Color(0.20, 0.21, 0.23))
+	mat_door_jx.set_shader_parameter("metallic_val", 0.10)
+	mat_door_jx.set_shader_parameter("rough_val", 0.32)
+	mat_door_jx.set_shader_parameter("clearcoat_val", 0.6)
+	mat_door_jx.set_shader_parameter("seam_strength", 0.2)
 
 	var mat_part_glass := ShaderMaterial.new()
 	mat_part_glass.shader = glass_sh
@@ -148,6 +159,11 @@ static func build_tram(spec: Dictionary, override_sections: int = -1) -> Diction
 
 		var hw := width * 0.5
 		var hl := sec_len * 0.5
+		# Jiaxing raked nose: longitudinal roof / ceiling / cantrail parts stop short of the cab nose
+		var zf_cut := -hl + (1.42 if (is_jx and is_front) else 0.0)
+		var zr_cut := hl - (1.42 if (is_jx and is_rear) else 0.0)
+		var span_c := (zf_cut + zr_cut) * 0.5
+		var span_l := zr_cut - zf_cut
 
 		# Doorway center(s) along Z: real open portal cut through side walls!
 		var door_z := 0.25 if (is_front and sections_count > 1) else 0.0
@@ -185,10 +201,10 @@ static func build_tram(spec: Dictionary, override_sections: int = -1) -> Diction
 			})
 
 		# 2. Roof structure + Interior Ceiling + Cove LED Lighting Strips + HVAC Diffusers!
-		_add_box(sec, Vector3(width - 0.04, 0.22, sec_len - 0.16), Vector3(0.0, 3.04, 0.0), mat_roof)
-		_add_box(sec, Vector3(width - 0.18, 0.04, sec_len - 0.34), Vector3(0.0, 2.91, 0.0), mat_ceiling)
+		_add_box(sec, Vector3(width - 0.04, 0.22, span_l - 0.16), Vector3(0.0, 3.04, span_c), mat_roof)
+		_add_box(sec, Vector3(width - 0.18, 0.04, span_l - 0.34), Vector3(0.0, 2.91, span_c), mat_ceiling)
 		for side: float in [-0.52, 0.52]:
-			_add_box(sec, Vector3(0.20, 0.03, sec_len - 1.4), Vector3(side, 2.885, 0.0), mat_cove_light)
+			_add_box(sec, Vector3(0.20, 0.03, span_l - 1.4), Vector3(side, 2.885, span_c), mat_cove_light)
 		# Angled cove panels from cantrail to ceiling carrying ad frames + route-map strip
 		var cove_x0 := hw - 0.08
 		var cove_dx := cove_x0 - 0.66
@@ -196,12 +212,12 @@ static func build_tram(spec: Dictionary, override_sections: int = -1) -> Diction
 		var cove_len := sqrt(cove_dx * cove_dx + cove_dy * cove_dy)
 		var cove_ang := atan2(cove_dy, cove_dx)
 		for c_side: float in [-1.0, 1.0]:
-			var cove_mid := Vector3(c_side * (cove_x0 + 0.66) * 0.5, 2.64 + cove_dy * 0.5, 0.0)
-			var cove := _add_box(sec, Vector3(cove_len, 0.025, sec_len - 0.5), cove_mid, mat_ceiling)
+			var cove_mid := Vector3(c_side * (cove_x0 + 0.66) * 0.5, 2.64 + cove_dy * 0.5, span_c)
+			var cove := _add_box(sec, Vector3(cove_len, 0.025, span_l - 0.5), cove_mid, mat_ceiling)
 			cove.rotation.z = -c_side * cove_ang
-			var n_frames := maxi(1, int((sec_len - 1.6) / 1.05))
+			var n_frames := maxi(1, int((span_l - 1.6) / 1.05))
 			for f_i in range(n_frames):
-				var fz := -((sec_len - 1.6) * 0.5) + (float(f_i) + 0.5) * ((sec_len - 1.6) / float(n_frames))
+				var fz := -((span_l - 1.6) * 0.5) + (float(f_i) + 0.5) * ((span_l - 1.6) / float(n_frames))
 				var f_mat: Material = mat_route_map if f_i == n_frames / 2 else (mat_ad_a if (f_i + idx) % 2 == 0 else mat_ad_b)
 				var fr := _add_box(sec, Vector3(cove_len * 0.62, 0.012, 0.86), cove_mid + Vector3(-c_side * 0.006, -0.016, fz), f_mat)
 				fr.rotation.z = -c_side * cove_ang
@@ -218,8 +234,8 @@ static func build_tram(spec: Dictionary, override_sections: int = -1) -> Diction
 		# Upper cantrail header band above windows & doors (y = 2.66 .. 2.94)
 		# (side-wall strips only: a full-width slab here would form a low lid over the cabin)
 		for cr_side: float in [-1.0, 1.0]:
-			_add_box(sec, Vector3(0.10, 0.28, sec_len - 0.16), Vector3(cr_side * (hw - 0.05), 2.80, 0.0), mat_body)
-			_add_box(sec, Vector3(0.11, 0.08, sec_len - 0.16), Vector3(cr_side * (hw - 0.0475), 2.68, 0.0), mat_accent)
+			_add_box(sec, Vector3(0.10, 0.28, span_l - 0.16), Vector3(cr_side * (hw - 0.05), 2.80, span_c), mat_body)
+			_add_box(sec, Vector3(0.11, 0.08, span_l - 0.16), Vector3(cr_side * (hw - 0.0475), 2.68, span_c), mat_accent)
 
 		# 3. Split Side Walls & Windows cleanly BEFORE and AFTER the open 1.36m Doorway!
 		var z_body_front := -hl + (1.42 if is_front else 0.22)
@@ -237,7 +253,8 @@ static func build_tram(spec: Dictionary, override_sections: int = -1) -> Diction
 				var span_mid := (sp.x + sp.y) * 0.5
 				# Lower waist wall (y = 0.55 .. 1.28) + livery belt stripe
 				_add_box(sec, Vector3(0.08, 0.74, span_len), Vector3(side * (hw - 0.04), 0.92, span_mid), mat_body)
-				_add_box(sec, Vector3(0.095, 0.20, span_len), Vector3(side * (hw - 0.04), 0.96, span_mid), mat_accent)
+				if not is_jx:
+					_add_box(sec, Vector3(0.095, 0.20, span_len), Vector3(side * (hw - 0.04), 0.96, span_mid), mat_accent)
 				# Interior lining below the windows with dark kick plate, rubber window gaskets
 				_add_box(sec, Vector3(0.02, 0.62, span_len - 0.04), Vector3(side * (hw - 0.095), 1.0, span_mid), mat_lining)
 				_add_box(sec, Vector3(0.022, 0.13, span_len - 0.04), Vector3(side * (hw - 0.096), 0.635, span_mid), mat_dark)
@@ -268,8 +285,11 @@ static func build_tram(spec: Dictionary, override_sections: int = -1) -> Diction
 				var closed_z := door_z + leaf_dir * (door_half_w * 0.5)
 				leaf.position = Vector3(side * (hw - 0.01), 1.60, closed_z)
 				sec.add_child(leaf)
-				_add_box(leaf, Vector3(0.05, 2.06, door_half_w - 0.02), Vector3.ZERO, mat_accent if not vintage else mat_wood_trim)
-				_add_box(leaf, Vector3(0.06, 1.22, door_half_w - 0.18), Vector3(0.0, 0.18, 0.0), mat_glass)
+				_add_box(leaf, Vector3(0.05, 2.06, door_half_w - 0.02), Vector3.ZERO, mat_door_jx if is_jx else (mat_accent if not vintage else mat_wood_trim))
+				if is_jx:
+					_add_box(leaf, Vector3(0.06, 1.66, door_half_w - 0.14), Vector3(0.0, 0.12, 0.0), mat_glass)
+				else:
+					_add_box(leaf, Vector3(0.06, 1.22, door_half_w - 0.18), Vector3(0.0, 0.18, 0.0), mat_glass)
 				# Interior door grab bar
 				_add_box(leaf, Vector3(0.04, 0.04, door_half_w - 0.24), Vector3(-side * 0.05, -0.18, 0.0), pole_mat)
 				door_leaves.append({
@@ -418,7 +438,21 @@ static func build_tram(spec: Dictionary, override_sections: int = -1) -> Diction
 				_build_detailed_bogie(sec, bz, mat_dark, mat_steel, mat_accent)
 
 		# 6. Rooftop Shrouds / HVAC / Supercap Pods / Vintage Clerestory Lantern Roof
-		_build_roof_equipment(sec, width, sec_len, roof_kind, vintage, mat_roof, mat_body, mat_dark, mat_cove_light, mat_accent)
+		if is_jx:
+			# Smooth full-length roof fairing (supercapacitors are under it), white skirts over the bogies and
+			# the round red line logo near the first door
+			_build_jx_fairing(sec, width, zf_cut, zr_cut, mat_body)
+			for sk_side: float in [-1.0, 1.0]:
+				_add_box(sec, Vector3(0.06, 0.30, span_l - 0.1), Vector3(sk_side * (hw - 0.05), 0.33, span_c), mat_body)
+			if is_front or is_rear:
+				for lg_side: float in [-1.0, 1.0]:
+					var lz := (door_z - door_half_w - 0.45) if is_front else (door_z + door_half_w + 0.45)
+					var lg := _add_cyl(sec, 0.17, 0.02, Vector3(lg_side * (hw + 0.012), 2.38, lz), mat_accent, Vector3(0.0, 0.0, 90.0))
+					lg.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+					_add_cyl(sec, 0.12, 0.024, Vector3(lg_side * (hw + 0.014), 2.38, lz), mat_body, Vector3(0.0, 0.0, 90.0))
+					_add_cyl(sec, 0.075, 0.028, Vector3(lg_side * (hw + 0.016), 2.38, lz), mat_accent, Vector3(0.0, 0.0, 90.0))
+		else:
+			_build_roof_equipment(sec, width, sec_len, roof_kind, vintage, mat_roof, mat_body, mat_dark, mat_cove_light, mat_accent)
 
 		var panto_sec_idx := (sections_count / 2) if sections_count >= 3 else 0
 		if idx == panto_sec_idx and not monorail:
@@ -595,7 +629,7 @@ static func _merge_static_tram_meshes(tinfo: Dictionary) -> void:
 			for mi: MeshInstance3D in items:
 				if mi.mesh.get_surface_count() <= 0:
 					continue
-				st.append_from(mi.mesh, 0, mi.transform)
+				append_mesh_flat(st, mi.mesh, mi.transform)
 				appended += 1
 			if appended == 0:
 				continue
@@ -612,6 +646,27 @@ static func _merge_static_tram_meshes(tinfo: Dictionary) -> void:
 			for old_mi: MeshInstance3D in items:
 				cont.remove_child(old_mi)
 				old_mi.queue_free()
+
+
+# SurfaceTool.append_from keeps the index list of whatever was appended first: mixing indexed parts
+# (BoxMesh / CylinderMesh) with non-indexed sculpted parts (seats ...) silently drops the triangles of the
+# latter. Always append de-indexed geometry (cached per source mesh).
+static var _flat_cache := {}
+
+static func append_mesh_flat(st: SurfaceTool, mesh: Mesh, xf: Transform3D) -> void:
+	if mesh == null or mesh.get_surface_count() <= 0:
+		return
+	var key := mesh.get_instance_id()
+	var src: Mesh = _flat_cache.get(key)
+	if src == null:
+		src = mesh
+		if mesh.surface_get_arrays(0)[Mesh.ARRAY_INDEX] != null:
+			var tmp := SurfaceTool.new()
+			tmp.create_from(mesh, 0)
+			tmp.deindex()
+			src = tmp.commit()
+		_flat_cache[key] = src
+	st.append_from(src, 0, xf)
 
 
 # Hide/restore onboard passenger rig trees on distant trams so 30+ trams never clutter RenderingServer!
@@ -879,12 +934,15 @@ static func _build_front_cab_and_nose(
 	var is_nanhu := (nose_kind == "nanhu_swift")
 	var slope_deg := 21.0 if is_nanhu else (18.0 if nose_kind == "sleek" else (12.0 if nose_kind in ["streamlined", "faceted"] else 5.0))
 
-	# Sculpted bumper, coupler pocket & lower nose apron
-	_add_box(sec, Vector3(width - 0.10, 0.32, 0.64), Vector3(0.0, 0.48, fz + 0.14), mat_dark)
-	var nose_apron := _add_box(sec, Vector3(width - 0.04, 0.76, 0.58), Vector3(0.0, 0.94, fz + 0.24), mat_body)
-	nose_apron.rotation.x = deg_to_rad(slope_deg * 0.45)
-	_add_box(sec, Vector3(width + 0.015, 0.20, 0.60), Vector3(0.0, 0.96, fz + 0.22), mat_accent)
 	if is_nanhu:
+		_build_jx_nose(sec, width, fz, mat_body, mat_accent, mat_headlight, mat_led_sign)
+	else:
+		# Sculpted bumper, coupler pocket & lower nose apron
+		_add_box(sec, Vector3(width - 0.10, 0.32, 0.64), Vector3(0.0, 0.48, fz + 0.14), mat_dark)
+		var nose_apron := _add_box(sec, Vector3(width - 0.04, 0.76, 0.58), Vector3(0.0, 0.94, fz + 0.24), mat_body)
+		nose_apron.rotation.x = deg_to_rad(slope_deg * 0.45)
+		_add_box(sec, Vector3(width + 0.015, 0.20, 0.60), Vector3(0.0, 0.96, fz + 0.22), mat_accent)
+	if false:
 		# Iconic Jiaxing "南湖号" CRRC Changchun aerodynamic "南湖雨燕 / 红船" prow:
 		var prow := _add_box(sec, Vector3(width - 0.16, 0.68, 0.42), Vector3(0.0, 0.88, fz - 0.06), mat_body)
 		prow.rotation.x = deg_to_rad(14.0)
@@ -907,6 +965,11 @@ static func _build_front_cab_and_nose(
 
 	# Left & right A-pillars + side cab cheek windows + rearview mirrors
 	for side: float in [-1.0, 1.0]:
+		if is_nanhu:
+			# Compact white camera-mirror pod on a short arm at the cab corner
+			_add_box(sec, Vector3(0.16, 0.035, 0.035), Vector3(side * (hw + 0.07), 2.52, fz + 0.86), mat_dark)
+			_add_box(sec, Vector3(0.10, 0.20, 0.14), Vector3(side * (hw + 0.15), 2.46, fz + 0.86), mat_body)
+			continue
 		var pil := _add_box(sec, Vector3(0.13, 1.66, 0.20), Vector3(side * (hw - 0.08), 2.04, fz + 0.34), mat_dark)
 		pil.rotation.x = deg_to_rad(slope_deg)
 		_add_box(sec, Vector3(0.04, 1.38, 1.02), Vector3(side * (hw - 0.04), 1.97, fz + 0.92), mat_cab_glass)
@@ -915,16 +978,15 @@ static func _build_front_cab_and_nose(
 		_add_box(sec, Vector3(0.18, 0.04, 0.04), Vector3(side * (hw + 0.08), 2.34, fz + 0.44), mat_dark)
 		_add_box(sec, Vector3(0.14, 0.34, 0.08), Vector3(side * (hw + 0.16), 2.22, fz + 0.44), mat_dark)
 
-	# Sloped panoramic front windshield + sun visor + wiper
-	var ws := _add_box(sec, Vector3(width - 0.24, 1.52, 0.035), Vector3(0.0, 2.02, fz + 0.32), mat_cab_glass)
-	ws.rotation.x = deg_to_rad(slope_deg)
-	_add_box(sec, Vector3(width - 0.36, 0.14, 0.05), Vector3(0.0, 2.62, fz + 0.42), mat_dark)
-
-	var wiper := _add_box(sec, Vector3(0.56, 0.024, 0.024), Vector3(0.16, 1.38, fz + 0.21), mat_dark)
-	wiper.rotation.z = deg_to_rad(13.0)
-
-	# Front destination matrix board
-	_add_box(sec, Vector3(width * 0.64, 0.24, 0.08), Vector3(0.0, 2.82, fz + 0.16), mat_led_sign)
+	if not is_nanhu:
+		# Sloped panoramic front windshield + sun visor + wiper
+		var ws := _add_box(sec, Vector3(width - 0.24, 1.52, 0.035), Vector3(0.0, 2.02, fz + 0.32), mat_cab_glass)
+		ws.rotation.x = deg_to_rad(slope_deg)
+		_add_box(sec, Vector3(width - 0.36, 0.14, 0.05), Vector3(0.0, 2.62, fz + 0.42), mat_dark)
+		var wiper := _add_box(sec, Vector3(0.56, 0.024, 0.024), Vector3(0.16, 1.38, fz + 0.21), mat_dark)
+		wiper.rotation.z = deg_to_rad(13.0)
+		# Front destination matrix board
+		_add_box(sec, Vector3(width * 0.64, 0.24, 0.08), Vector3(0.0, 2.82, fz + 0.16), mat_led_sign)
 
 	# Detailed Cab Interior: Partition Bulkhead with Doorway, Wrap-Around Sculpted Console, High-Res MFD/CCTV/Switches & Props!
 	var part_z := fz + 1.58
@@ -941,12 +1003,12 @@ static func _build_front_cab_and_nose(
 	_add_box(sec, Vector3(0.90, 0.18, 0.012), Vector3(0.0, 2.52, fz + 0.45), mat_visor)
 	# Dual articulated windshield wiper blades on front glass (animated when WIPER switch is ON!)
 	var wiper_l_piv := Node3D.new()
-	wiper_l_piv.position = Vector3(-0.32, 1.30, fz + 0.21)
+	wiper_l_piv.position = Vector3(-0.32, 1.30, (fz - 0.50) if is_nanhu else (fz + 0.21))
 	sec.add_child(wiper_l_piv)
 	var wiper2 := _add_box(wiper_l_piv, Vector3(0.56, 0.022, 0.022), Vector3(0.18, 0.08, 0.0), mat_dark)
 	wiper2.rotation.z = deg_to_rad(-11.0)
 	var wiper_r_piv := Node3D.new()
-	wiper_r_piv.position = Vector3(0.18, 1.30, fz + 0.21)
+	wiper_r_piv.position = Vector3(0.18, 1.30, (fz - 0.52) if is_nanhu else (fz + 0.21))
 	sec.add_child(wiper_r_piv)
 	var wiper1 := _add_box(wiper_r_piv, Vector3(0.56, 0.022, 0.022), Vector3(0.18, 0.08, 0.0), mat_dark)
 	wiper1.rotation.z = deg_to_rad(11.0)
@@ -1169,6 +1231,304 @@ static func _build_front_cab_and_nose(
 			"door_btn_mat": mat_btn_green,
 		},
 	}
+
+
+# ---------------------------------------------------------------------------------------------
+# Jiaxing T1 tram (CRRC Changchun, 2021) exterior. The cab front is one smooth surface P(u, y): u -1..1
+# across, y = height; in plan it bulges forward (superellipse), in side view the chin juts out and the large
+# windscreen rakes back into the roof fairing. Regions painted on it: black glass mask (see-through
+# windscreen + opaque upper band with the LED destination display), maroon lower nose that sweeps back
+# along the cab flanks, slanted headlight clusters, white elsewhere. Cab flanks are flat strips back to the
+# body side walls, shoulders follow the roof-fairing profile so nose, flanks and fairing meet seamlessly.
+# ---------------------------------------------------------------------------------------------
+const JX_TOP := 3.38
+const JX_SHOULDER_Y := 2.95
+const JX_SHOULDER_R := 0.43
+const JX_CAB_LEN := 1.42 # nose tip .. body side walls
+
+static var _jx_mat_cache := {}
+
+static func _jx_mat(key: String) -> Material:
+	if _jx_mat_cache.has(key):
+		return _jx_mat_cache[key]
+	var m: Material
+	var body_sh := load("res://shaders/tram_body_pbr.gdshader") as Shader
+	match key:
+		"maroon":
+			var sm := ShaderMaterial.new()
+			sm.shader = body_sh
+			sm.set_shader_parameter("base_color", Color(0.33, 0.14, 0.11))
+			sm.set_shader_parameter("metallic_val", 0.0)
+			sm.set_shader_parameter("rough_val", 0.32)
+			sm.set_shader_parameter("clearcoat_val", 0.5)
+			sm.set_shader_parameter("seam_strength", 0.0)
+			m = sm
+		"black":
+			var sb := ShaderMaterial.new()
+			sb.shader = body_sh
+			sb.set_shader_parameter("base_color", Color(0.03, 0.032, 0.036))
+			sb.set_shader_parameter("metallic_val", 0.0)
+			sb.set_shader_parameter("rough_val", 0.30)
+			sb.set_shader_parameter("clearcoat_val", 0.5)
+			sb.set_shader_parameter("seam_strength", 0.0)
+			m = sb
+		"glass":
+			var sg := ShaderMaterial.new()
+			sg.shader = load("res://shaders/tram_glass_pbr.gdshader") as Shader
+			sg.set_shader_parameter("tint_color", Color(0.015, 0.018, 0.022))
+			sg.set_shader_parameter("base_alpha", 0.86)
+			m = sg
+	_jx_mat_cache[key] = m
+	return m
+
+
+static func _jx_lerp_tab(tab: Array, y: float) -> float:
+	if y <= float(tab[0][0]):
+		return float(tab[0][1])
+	for i in range(tab.size() - 1):
+		var a: Array = tab[i]
+		var b: Array = tab[i + 1]
+		if y <= float(b[0]):
+			var t := (y - float(a[0])) / maxf(0.0001, float(b[0]) - float(a[0]))
+			t = t * t * (3.0 - 2.0 * t)
+			return lerpf(float(a[1]), float(b[1]), t)
+	return float(tab[tab.size() - 1][1])
+
+
+# Half width of the body / fairing cross-section at height y (rounded shoulders, slight tuck at the bottom)
+static func _jx_half_w(hw: float, y: float) -> float:
+	if y > JX_SHOULDER_Y:
+		var dy := minf(y - JX_SHOULDER_Y, JX_SHOULDER_R)
+		return hw - JX_SHOULDER_R + sqrt(maxf(0.0, JX_SHOULDER_R * JX_SHOULDER_R - dy * dy))
+	if y < 0.5:
+		return hw - 0.06 * (0.5 - y) / 0.28
+	return hw
+
+
+static func _jx_point(hw: float, fz: float, u: float, y: float) -> Vector3:
+	# centre-line profile (z relative to the tip plane fz; negative = forward) and plan bulge
+	var zb := _jx_lerp_tab([[0.22, -0.18], [0.45, -0.33], [0.80, -0.37], [1.10, -0.33], [1.30, -0.22], [1.60, -0.02],
+		[2.40, 0.42], [2.80, 0.66], [3.05, 0.90], [3.25, 1.15], [JX_TOP, JX_CAB_LEN]], y)
+	var dep := _jx_lerp_tab([[0.22, 0.26], [0.80, 0.36], [1.30, 0.34], [2.40, 0.26], [3.00, 0.16], [JX_TOP, 0.0]], y)
+	var au := absf(u)
+	var x := u * _jx_half_w(hw, y)
+	var z := fz + zb - dep * (1.0 - pow(au, 2.4))
+	return Vector3(x, y, z)
+
+
+static func _jx_front_region(u: float, y: float) -> String:
+	var au := absf(u)
+	if y >= 1.24 and y <= 2.96:
+		if y < 2.46:
+			return "glass"
+		if y > 2.55 and y < 2.78 and au < 0.50:
+			return "led"
+		return "black"
+	var hl_lo := 0.98 + 0.20 * (au - 0.40)
+	if au > 0.40 and au < 0.90 and y > hl_lo - 0.035 and y < hl_lo + 0.145:
+		if y > hl_lo and y < hl_lo + 0.11 and au > 0.43 and au < 0.87:
+			return "lamp"
+		return "black"
+	if y < 0.98 + 0.30 * au * au:
+		return "maroon"
+	return "white"
+
+
+static func _jx_side_region(t: float, y: float) -> String:
+	# t: 0 at the nose edge .. 1 at the body side wall
+	if y >= 1.30 and y <= 2.70 and t < 0.80 - 0.22 * ((y - 1.30) / 1.40):
+		return "glass" if y < 2.46 else "black"
+	if y >= 2.64 and y <= 2.72 and t > 0.45:
+		return "red"
+	if y >= 0.25 + 0.75 * t and y <= 1.28 + 0.02 * t:
+		return "maroon"
+	return "white"
+
+
+static func _build_jx_nose(sec: Node3D, width: float, fz: float, mat_body: Material, mat_red: Material, mat_lamp: Material, mat_led: Material) -> void:
+	var hw := width * 0.5
+	var mats := {"white": mat_body, "red": mat_red, "lamp": mat_lamp, "led": _jx_mat("black"),
+		"maroon": _jx_mat("maroon"), "black": _jx_mat("black"), "glass": _jx_mat("glass")}
+	var sts := {}
+	var get_st := func(k: String) -> SurfaceTool:
+		if not sts.has(k):
+			var st0 := SurfaceTool.new()
+			st0.begin(Mesh.PRIMITIVE_TRIANGLES)
+			sts[k] = st0
+		return sts[k]
+	# rows: denser around the region boundaries
+	var ys: Array[float] = []
+	var yy := 0.22
+	while yy < JX_TOP - 0.001:
+		ys.append(yy)
+		var step := 0.04 if (yy > 0.22 and yy < 1.40) or (yy > 2.40 and yy < 3.00) else 0.08
+		yy += step
+	ys.append(JX_TOP)
+	for yb: float in [1.24, 2.46, 2.55, 2.78, 2.96, 1.30, 2.70, 2.64, 2.72]:
+		if not ys.has(yb):
+			ys.append(yb)
+	ys.sort()
+	var NU := 56
+	var nrm_at := func(u: float, y: float) -> Vector3:
+		var du := 0.01
+		var dy := 0.01
+		var pu: Vector3 = _jx_point(hw, fz, clampf(u + du, -1.0, 1.0), y) - _jx_point(hw, fz, clampf(u - du, -1.0, 1.0), y)
+		var py: Vector3 = _jx_point(hw, fz, u, y + dy) - _jx_point(hw, fz, u, y - dy)
+		var n: Vector3 = pu.cross(py).normalized()
+		if n.z > 0.0:
+			n = -n
+		return n
+	# --- front surface (double-sided except glass so the cab view stays clear) ---
+	for j in range(ys.size() - 1):
+		var y0 := ys[j]
+		var y1 := ys[j + 1]
+		for i in range(NU):
+			var u0 := -1.0 + 2.0 * float(i) / float(NU)
+			var u1 := -1.0 + 2.0 * float(i + 1) / float(NU)
+			var reg := _jx_front_region((u0 + u1) * 0.5, (y0 + y1) * 0.5)
+			var st: SurfaceTool = get_st.call(reg)
+			var q := [[u0, y0], [u1, y0], [u1, y1], [u0, y1]]
+			var vs: Array[Vector3] = []
+			var ns: Array[Vector3] = []
+			for c: Array in q:
+				vs.append(_jx_point(hw, fz, c[0], c[1]))
+				ns.append(nrm_at.call(c[0], c[1]))
+			_jx_quad(st, vs, ns, reg != "glass")
+	# --- cab flanks: strips from the nose edge back to the body side wall ---
+	var NZ := 30
+	for side: float in [-1.0, 1.0]:
+		for j in range(ys.size() - 1):
+			var y0 := ys[j]
+			var y1 := ys[j + 1]
+			var e0 := _jx_point(hw, fz, side, y0)
+			var e1 := _jx_point(hw, fz, side, y1)
+			var zb0 := fz + JX_CAB_LEN
+			for k in range(NZ):
+				var t0 := float(k) / float(NZ)
+				var t1 := float(k + 1) / float(NZ)
+				var reg2 := _jx_side_region((t0 + t1) * 0.5, (y0 + y1) * 0.5)
+				var st2: SurfaceTool = get_st.call(reg2)
+				var a := Vector3(e0.x, y0, lerpf(e0.z, zb0, t0))
+				var b := Vector3(e0.x, y0, lerpf(e0.z, zb0, t1))
+				var c2 := Vector3(e1.x, y1, lerpf(e1.z, zb0, t1))
+				var d := Vector3(e1.x, y1, lerpf(e1.z, zb0, t0))
+				var n0 := _jx_side_normal(hw, y0, side)
+				var n1 := _jx_side_normal(hw, y1, side)
+				var vs2: Array[Vector3] = [a, b, c2, d]
+				var ns2: Array[Vector3] = [n0, n0, n1, n1]
+				if side < 0.0:
+					vs2.assign([b, a, d, c2])
+				_jx_quad(st2, vs2, ns2, reg2 != "glass")
+	# --- underside of the chin ---
+	var stb: SurfaceTool = get_st.call("maroon")
+	for i in range(NU):
+		var u0 := -1.0 + 2.0 * float(i) / float(NU)
+		var u1 := -1.0 + 2.0 * float(i + 1) / float(NU)
+		var p0 := _jx_point(hw, fz, u0, 0.22)
+		var p1 := _jx_point(hw, fz, u1, 0.22)
+		var vs3: Array[Vector3] = [p1, p0, Vector3(p0.x, 0.22, fz + JX_CAB_LEN), Vector3(p1.x, 0.22, fz + JX_CAB_LEN)]
+		var ns3: Array[Vector3] = [Vector3.DOWN, Vector3.DOWN, Vector3.DOWN, Vector3.DOWN]
+		_jx_quad(stb, vs3, ns3, true)
+	for k: String in sts.keys():
+		var mi := MeshInstance3D.new()
+		mi.name = "JxNose_" + k
+		mi.mesh = (sts[k] as SurfaceTool).commit()
+		mi.material_override = mats[k]
+		mi.visibility_range_end = 800.0
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF if k == "glass" else GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		sec.add_child(mi)
+	# Orange LED destination text on the black display band (front: route + destination)
+	var dp := _jx_point(hw, fz, 0.0, 2.665)
+	var dn := _jx_point(hw, fz, 0.0, 2.70) - _jx_point(hw, fz, 0.0, 2.63)
+	var dest := Label3D.new()
+	dest.name = "JxDestination"
+	dest.text = "T1  嘉兴南站"
+	dest.font_size = 48
+	dest.pixel_size = 0.0042
+	dest.outline_size = 0
+	dest.modulate = Color(1.0, 0.42, 0.12)
+	dest.shaded = false
+	dest.double_sided = false
+	dest.visibility_range_end = 220.0
+	dest.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var tilt := atan2(dn.z, dn.y)
+	dest.transform = Transform3D(Basis(Vector3.UP, PI) * Basis(Vector3.RIGHT, tilt), dp + Vector3(0.0, 0.0, -0.012))
+	sec.add_child(dest)
+	# Round red-ring logo on the nose + headlight housings' inner LED strip
+	var lp := _jx_point(hw, fz, 0.0, 0.90)
+	var logo := _add_cyl(sec, 0.11, 0.02, lp + Vector3(0.0, 0.0, -0.005), mat_red, Vector3(90.0, 0.0, 0.0))
+	logo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_add_cyl(sec, 0.075, 0.022, lp + Vector3(0.0, 0.0, -0.008), mat_body, Vector3(90.0, 0.0, 0.0))
+	_add_cyl(sec, 0.045, 0.024, lp + Vector3(0.0, 0.0, -0.011), mat_red, Vector3(90.0, 0.0, 0.0))
+
+
+static func _jx_side_normal(hw: float, y: float, side: float) -> Vector3:
+	if y > JX_SHOULDER_Y:
+		var dy := minf(y - JX_SHOULDER_Y, JX_SHOULDER_R - 0.001)
+		var dx := sqrt(maxf(0.0, JX_SHOULDER_R * JX_SHOULDER_R - dy * dy))
+		return Vector3(side * dx, dy, 0.0).normalized()
+	return Vector3(side, 0.0, 0.0)
+
+
+# Quad (CCW seen from outside) with per-vertex normals; optionally also the back face (seen from inside)
+static func _jx_quad(st: SurfaceTool, vs: Array[Vector3], ns: Array[Vector3], both: bool) -> void:
+	# Godot front faces wind clockwise as seen by the viewer; vs run counter-clockwise seen from outside
+	for idx: int in [0, 1, 2, 0, 2, 3]:
+		st.set_normal(ns[idx])
+		st.set_uv(Vector2(vs[idx].x, vs[idx].y))
+		st.add_vertex(vs[idx])
+	if both:
+		for idx: int in [0, 2, 1, 0, 3, 2]:
+			st.set_normal(-ns[idx])
+			st.set_uv(Vector2(vs[idx].x, vs[idx].y))
+			st.add_vertex(vs[idx])
+
+
+# Roof fairing over one body section: wall top (y = shoulder) rounding into a flat top, closed at both ends
+static func _build_jx_fairing(sec: Node3D, width: float, z0: float, z1: float, mat_body: Material) -> void:
+	var hw := width * 0.5
+	var prof: Array[Vector2] = []
+	var n_arc := 8
+	for k in range(n_arc + 1):
+		var a := float(k) / float(n_arc) * PI * 0.5
+		prof.append(Vector2(hw - JX_SHOULDER_R + cos(a) * JX_SHOULDER_R, JX_SHOULDER_Y + sin(a) * JX_SHOULDER_R))
+	var full: Array[Vector2] = []
+	for p in prof:
+		full.append(p)
+	for k in range(prof.size() - 1, -1, -1):
+		full.append(Vector2(-prof[k].x, prof[k].y))
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for k in range(full.size() - 1):
+		var a2 := full[k]
+		var b2 := full[k + 1]
+		var na := Vector3(a2.x, a2.y - JX_SHOULDER_Y + 0.05, 0.0).normalized()
+		var nb := Vector3(b2.x, b2.y - JX_SHOULDER_Y + 0.05, 0.0).normalized()
+		if absf(a2.x) < hw - JX_SHOULDER_R + 0.001:
+			na = Vector3.UP
+		if absf(b2.x) < hw - JX_SHOULDER_R + 0.001:
+			nb = Vector3.UP
+		var vs: Array[Vector3] = [Vector3(a2.x, a2.y, z1), Vector3(b2.x, b2.y, z1), Vector3(b2.x, b2.y, z0), Vector3(a2.x, a2.y, z0)]
+		var ns: Array[Vector3] = [na, nb, nb, na]
+		_jx_quad(st, vs, ns, false)
+	# end caps (visible at the gangways)
+	for zc: float in [z0, z1]:
+		var nz := Vector3(0.0, 0.0, -1.0 if zc == z0 else 1.0)
+		var ctr := Vector3(0.0, JX_SHOULDER_Y, zc)
+		for k in range(full.size() - 1):
+			var p0 := Vector3(full[k].x, full[k].y, zc)
+			var p1 := Vector3(full[k + 1].x, full[k + 1].y, zc)
+			var tri: Array = [ctr, p0, p1] if zc == z0 else [ctr, p1, p0]
+			for v: Vector3 in tri:
+				st.set_normal(nz)
+				st.set_uv(Vector2(v.x, v.y))
+				st.add_vertex(v)
+	var mi := MeshInstance3D.new()
+	mi.name = "JxFairing"
+	mi.mesh = st.commit()
+	mi.material_override = mat_body
+	mi.visibility_range_end = 900.0
+	sec.add_child(mi)
 
 
 static func _build_roof_equipment(

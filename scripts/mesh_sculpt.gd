@@ -214,7 +214,7 @@ static func add_sculpted_wheel(
 # Computes area-weighted smooth vertex normals across adjacent longitudinal & cross-section stations!
 static func add_lofted_hull(
 	st: SurfaceTool, stations: Array, col: Color, closed_ring: bool = true,
-	cap_start: bool = true, cap_end: bool = true
+	cap_start: bool = true, cap_end: bool = true, color_fn: Callable = Callable()
 ) -> void:
 	var n_st := stations.size()
 	if n_st < 2:
@@ -247,7 +247,15 @@ static func add_lofted_hull(
 		var n1: Array = nrms[i + 1]
 		for j in range(j_lim):
 			var jn := (j + 1) % n_p
-			emit_smooth_quad(st, r0[j], n0[j], r1[j], n1[j], r1[jn], n1[jn], r0[jn], n0[jn], col)
+			if color_fn.is_valid():
+				# per-face colour (e.g. glass / pillars / wheel wells painted onto a car body loft)
+				var ctr: Vector3 = ((r0[j] as Vector3) + (r1[j] as Vector3) + (r1[jn] as Vector3) + (r0[jn] as Vector3)) * 0.25
+				var fn: Vector3 = ((n0[j] as Vector3) + (n1[j] as Vector3) + (n1[jn] as Vector3) + (n0[jn] as Vector3)).normalized()
+				var qc: Color = color_fn.call(ctr, fn)
+				var huv := Vector2(0.5, 0.5)
+				emit_smooth_quad(st, r0[j], n0[j], r1[j], n1[j], r1[jn], n1[jn], r0[jn], n0[jn], qc, huv, huv, huv, huv)
+			else:
+				emit_smooth_quad(st, r0[j], n0[j], r1[j], n1[j], r1[jn], n1[jn], r0[jn], n0[jn], col)
 
 	if cap_start:
 		var r_first: Array = stations[0]

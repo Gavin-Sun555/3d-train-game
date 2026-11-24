@@ -584,7 +584,7 @@ static func _merge_static_station_meshes(st_node: Node3D) -> void:
 			var m_src := mi.mesh
 			if m_src.get_surface_count() <= 0:
 				continue
-			st.append_from(m_src, 0, mi.transform)
+			TramBuilder.append_mesh_flat(st, m_src, mi.transform)
 			appended += 1
 		if appended == 0:
 			continue

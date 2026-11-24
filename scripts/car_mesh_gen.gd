@@ -158,12 +158,34 @@ static func _build_car_lod(sp: Dictionary, lod: int) -> ArrayMesh:
 					lerpf(float(cur[4]), float(nxt[4]), frac),
 					belt_y, ring_segs
 				))
-	MeshSculpt.add_lofted_hull(st, stations, c_paint, true, true, true)
-
-	# Wheel-arch fender flare trim rings on LOD0 & LOD1
 	var wr := 0.27 if is_micro else (0.36 if is_suv else 0.33)
 	var wz_f := -0.96 if is_micro else (-1.22 if is_hatch else -1.38)
 	var wz_r := 0.96 if is_micro else (1.20 if is_hatch else 1.36)
+	# Glazing, pillars, sill cladding and wheel wells are painted onto the body loft itself, so the windows
+	# follow the body surface exactly (no glass panels floating over / buried in the paint)
+	var c_well := _pbr(Color(0.035, 0.037, 0.04), 3)
+	var pano := is_ev and not is_micro and not is_taxi
+	var clad := is_suv or is_xover
+	var b_z := lerpf(ws_z1, rw_z0, 0.42)
+	# Greenhouse sides / glass areas of the shell are dark trim; the glass itself is shrink-wrapped panels
+	# laid on the shell below (clean outlines at every LOD, no staircase edges)
+	var region := func(c: Vector3, n: Vector3) -> Color:
+		if c.y > belt_y + 0.025:
+			if n.y > 0.78 and c.y > roof_y - 0.10:
+				return c_paint
+			if c.z > ws_z1 and c.z < rw_z0 and absf(n.x) > 0.30:
+				return c_trim # window frames / B-pillar band between the A- and C-pillars
+			return c_paint
+		if absf(n.x) > 0.45:
+			for wz: float in [wz_f, wz_r]:
+				if Vector2(c.y - wr, c.z - wz).length() < wr + 0.07 and c.y < wr + 0.34:
+					return c_well
+			if c.y < sill_y + (0.13 if clad else 0.07):
+				return c_trim
+		return c_paint
+	MeshSculpt.add_lofted_hull(st, stations, c_paint, true, true, true, region)
+
+	# Wheel-arch fender flare trim rings on LOD0 & LOD1
 	if lod <= 1:
 		var arch_segs := 14 if lod == 0 else 8
 		for sx: float in [-1.0, 1.0]:
@@ -175,31 +197,109 @@ static func _build_car_lod(sp: Dictionary, lod: int) -> ArrayMesh:
 		CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(0.0, roof_y + 0.025, (ws_z1 + rw_z0) * 0.5)),
 			Vector3(hw * 1.48, 0.04, maxf(0.85, rw_z0 - ws_z1)), c_white)
 
-	# 2. Flush Curved Automotive Glass (Windshield, Backlight, Panoramic EV Roof, Side Greenhouse + B-Pillars)
-	var gh_top_w := hw * 0.78
-	var gh_bot_w := hw * 0.89
-	_emit_curved_glass_panel(st, Vector3(-gh_bot_w, belt_y + 0.02, ws_z0 - 0.01), Vector3(gh_bot_w, belt_y + 0.02, ws_z0 - 0.01),
-		Vector3(gh_top_w, roof_y - 0.01, ws_z1 - 0.01), Vector3(-gh_top_w, roof_y - 0.01, ws_z1 - 0.01), 0.045, 4 if lod == 0 else 1, c_glass)
-	_emit_curved_glass_panel(st, Vector3(gh_top_w, roof_y - 0.02, rw_z0 + 0.01), Vector3(-gh_top_w, roof_y - 0.02, rw_z0 + 0.01),
-		Vector3(-gh_bot_w, trunk_y + 0.02, rw_z1 + 0.01), Vector3(gh_bot_w, trunk_y + 0.02, rw_z1 + 0.01), 0.04, 4 if lod == 0 else 1, c_glass)
-	if is_ev and not is_micro and not is_taxi:
-		_emit_curved_glass_panel(st, Vector3(-gh_top_w * 0.90, roof_y + 0.024, ws_z1), Vector3(gh_top_w * 0.90, roof_y + 0.024, ws_z1),
-			Vector3(gh_top_w * 0.90, roof_y + 0.008, rw_z0), Vector3(-gh_top_w * 0.90, roof_y + 0.008, rw_z0), 0.025, 2 if lod == 0 else 1, c_glass)
+	# 2. Glazing: panels shrink-wrapped onto the shell surface (windscreen, backlight, side windows split by the
+	# B-pillar, panoramic roof) with UVs so the shader draws the black ceramic frit border
+	if lod <= 1:
+		var ring_at := func(z: float) -> Array[Vector3]:
+			var ci := 0
+			while ci < prof_ctrl.size() - 2 and float(prof_ctrl[ci + 1][0]) < z:
+				ci += 1
+			var a0: Array = prof_ctrl[ci]
+			var a1: Array = prof_ctrl[ci + 1]
+			var f := clampf((z - float(a0[0])) / maxf(0.001, float(a1[0]) - float(a0[0])), 0.0, 1.0)
+			return _make_car_section_ring(z, lerpf(float(a0[1]), float(a1[1]), f), lerpf(float(a0[2]), float(a1[2]), f),
+				hw * lerpf(float(a0[3]), float(a1[3]), f), lerpf(float(a0[4]), float(a1[4]), f), belt_y, ring_segs)
+		var off := 0.02 if lod == 0 else 0.035
+		var gn := 7 if lod == 0 else 3
+		# top surface point at (z, x): windscreen / backlight / roof
+		var top_pt := func(z: float, x: float) -> Vector3:
+			var r: Array[Vector3] = ring_at.call(z)
+			var y_lo := 1e9
+			var y_hi := -1e9
+			for v: Vector3 in r:
+				y_lo = minf(y_lo, v.y)
+				y_hi = maxf(y_hi, v.y)
+			var y_mid := (y_lo + y_hi) * 0.5
+			var found := false
+			var best := Vector3(x, y_hi, z)
+			var near_d := 1e9
+			for k in range(r.size()):
+				var a := r[k]
+				var b := r[(k + 1) % r.size()]
+				if a.y < y_mid or b.y < y_mid:
+					continue
+				if absf(a.x - x) < near_d:
+					near_d = absf(a.x - x)
+					if not found:
+						best = a
+				if (a.x - x) * (b.x - x) <= 0.0 and absf(a.x - b.x) > 1e-5:
+					var t := (x - a.x) / (b.x - a.x)
+					var y := lerpf(a.y, b.y, t)
+					if not found or y > best.y:
+						best = Vector3(x, y, z)
+						found = true
+			return best
+		# side surface point at (z, y) on side sgn
+		var side_pt := func(z: float, y: float, sgn: float) -> Vector3:
+			var r: Array[Vector3] = ring_at.call(z)
+			for k in range(r.size()):
+				var a := r[k]
+				var b := r[(k + 1) % r.size()]
+				if a.x * sgn < hw * 0.3 or b.x * sgn < hw * 0.3:
+					continue
+				if (a.y - y) * (b.y - y) <= 0.0 and absf(a.y - b.y) > 1e-5:
+					var t := (y - a.y) / (b.y - a.y)
+					return Vector3(lerpf(a.x, b.x, t), y, z)
+			return Vector3(sgn * hw * 0.85, y, z)
+		var panel := func(pt_fn: Callable, u0: float, u1: float, v0: float, v1: float, nu: int, nv: int, flip: bool) -> void:
+			var grid: Array = []
+			for iv in range(nv + 1):
+				var row: Array[Vector3] = []
+				for iu in range(nu + 1):
+					row.append(pt_fn.call(lerpf(u0, u1, float(iu) / float(nu)), lerpf(v0, v1, float(iv) / float(nv))))
+				grid.append(row)
+			var ctr_body := Vector3(0.0, (belt_y + roof_y) * 0.5, 0.0)
+			for iv in range(nv):
+				for iu in range(nu):
+					var p00: Vector3 = grid[iv][iu]
+					var p10: Vector3 = grid[iv][iu + 1]
+					var p11: Vector3 = grid[iv + 1][iu + 1]
+					var p01: Vector3 = grid[iv + 1][iu]
+					var n := (p10 - p00).cross(p01 - p00).normalized()
+					if n.dot(p00 - Vector3(0.0, ctr_body.y, p00.z * 0.3)) < 0.0:
+						n = -n
+					var uv00 := Vector2(float(iu) / float(nu), float(iv) / float(nv))
+					var uv10 := Vector2(float(iu + 1) / float(nu), float(iv) / float(nv))
+					var uv11 := Vector2(float(iu + 1) / float(nu), float(iv + 1) / float(nv))
+					var uv01 := Vector2(float(iu) / float(nu), float(iv + 1) / float(nv))
+					var q := [p00 + n * off, p10 + n * off, p11 + n * off, p01 + n * off]
+					if flip:
+						MeshSculpt.emit_smooth_quad(st, q[0], n, q[3], n, q[2], n, q[1], n, c_glass, uv00, uv01, uv11, uv10)
+					else:
+						MeshSculpt.emit_smooth_quad(st, q[0], n, q[1], n, q[2], n, q[3], n, c_glass, uv00, uv10, uv11, uv01)
+		var ws_w := func(z: float) -> float:
+			var r: Array[Vector3] = ring_at.call(z)
+			var mx := 0.0
+			for v: Vector3 in r:
+				if v.y > belt_y + 0.05:
+					mx = maxf(mx, absf(v.x))
+			return mx
+		var w_ws := hw * 0.80 # between the A-pillars
+		var w_rw := hw * 0.70
+		panel.call(func(u: float, v: float) -> Vector3: return top_pt.call(v, u), -w_ws, w_ws, ws_z0 + 0.03, ws_z1 - 0.02, gn, gn, false)
+		panel.call(func(u: float, v: float) -> Vector3: return top_pt.call(v, u), -w_rw, w_rw, rw_z0 + 0.02, rw_z1 - 0.03, gn, gn, false)
+		if pano:
+			var w_rf := hw * 0.58
+			panel.call(func(u: float, v: float) -> Vector3: return top_pt.call(v, u), -w_rf, w_rf, ws_z1 + 0.08, rw_z0 - 0.08, gn, gn, false)
+		for sgn: float in [-1.0, 1.0]:
+			var y0 := belt_y + 0.045
+			for zr: Vector2 in [Vector2(ws_z1 + 0.10, b_z - 0.05), Vector2(b_z + 0.05, rw_z0 - 0.14)]:
+				# window top follows the roof line: sample the side at the cant rail height of that z
+				var y1 := roof_y - 0.075
+				panel.call(func(u: float, v: float) -> Vector3: return side_pt.call(u, v, sgn), zr.x, zr.y, y0, y1, gn + 2, maxi(2, gn - 3), sgn < 0.0)
+
+	# 3. Mirrors and door handles
 	for side: float in [-1.0, 1.0]:
-		var sx_b := side * (hw * 0.985)
-		var sx_t := side * (hw * 0.84)
-		var out_n := Vector3(side, 0.14, 0.0).normalized()
-		MeshSculpt.emit_smooth_quad(
-			st,
-			Vector3(sx_b, belt_y + 0.03, ws_z0 + 0.16), out_n,
-			Vector3(sx_b, belt_y + 0.03, rw_z1 - 0.14), out_n,
-			Vector3(sx_t, roof_y - 0.04, rw_z0 - 0.04), out_n,
-			Vector3(sx_t, roof_y - 0.04, ws_z1 + 0.05), out_n,
-			c_glass, Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1)
-		)
-		# Matte black B-pillar & window sill chrome trim
-		CityBuilder._emit_colored_box(st, Transform3D(Basis.IDENTITY, Vector3(side * (hw * 0.91), (belt_y + roof_y) * 0.5, (ws_z1 + rw_z0) * 0.34)),
-			Vector3(0.06, roof_y - belt_y - 0.06, 0.09), c_trim)
 		# Sculpted aerodynamic wing mirrors + flush door handles on LOD0 & LOD1
 		if lod <= 1:
 			var m_pos := Vector3(side * (hw + 0.10), belt_y + 0.08, ws_z0 + 0.24)

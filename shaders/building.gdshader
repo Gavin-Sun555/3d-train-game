@@ -292,7 +292,7 @@ void fragment() {
 				float fy = fract(h / fh);
 				float fx = fract(u / bw);
 				bool is_balcony_bay = (mod(bay_idx + floor(b_seed * 0.5), 2.0) < 0.5);
-				vec3 wall_main = mix(base_col, vec3(0.84, 0.80, 0.73), 0.32);
+				vec3 wall_main = mix(base_col, vec3(0.84, 0.80, 0.73), 0.10);
 				vec3 accent_trim = mix(wall_main * 0.78, vec3(0.46, 0.44, 0.42), 0.42);
 				float grain = hash21(floor(vec2(u, h) * 10.0));
 				bool slab_line = (fy < 0.085);

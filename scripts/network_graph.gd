@@ -297,8 +297,9 @@ static func bike_lane_width(hw: float) -> float:
 
 # On a tram street the motor lane must keep TrafficSim.TRAM_CAR_CLEAR (3.8 m) from the nearest track centre, so the
 # non-motorised lane starts no closer to the track than that plus a car half-width and a small gap
-const BIKE_TRACK_CLEAR := 4.9
-const BIKE_MIN_W := 0.9 # narrower than this the lane is not painted (bikes share the kerb lane)
+const BIKE_TRACK_CLEAR := 4.8
+const BIKE_MIN_W := 0.6 # a painted lane is never narrower than this
+const BIKE_SIDE_MIN_SHARE := 0.6 # a kerb side is painted (continuously) when this share of it has room
 
 
 func load_from_map_data(map_data: Dictionary, use_starter: bool = true) -> void:

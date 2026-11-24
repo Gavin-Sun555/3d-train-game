@@ -55,8 +55,8 @@ void fragment() {
 	col = mix(col, col * vec3(0.84, 0.82, 0.79), low_mask * grime * 0.35);
 
 	ALBEDO = col;
-	METALLIC = mix(metallic_val, max(metallic_val, 0.45), is_roof);
+	METALLIC = metallic_val; // painted car body: no chrome-like roof boost
 	ROUGHNESS = clamp(rough_val + seam * 0.25 + low_mask * 0.12 - (1.0 - flake) * 0.03, 0.08, 0.92);
 	CLEARCOAT = clearcoat_val * (1.0 - low_mask * 0.4);
-	CLEARCOAT_ROUGHNESS = 0.09;
+	CLEARCOAT_ROUGHNESS = 0.2;
 }

@@ -28,6 +28,12 @@ var _task_result: Node3D = null
 # instant there, but waits a frame per call on a worker), a few milliseconds per frame, then swapped in
 var _drape := {} # {"key", "node", "sig", "queue": Array[Node]} while one is in progress
 const DRAPE_BUDGET_MS := 2.0
+# Streaming window: tiles are built within BUILD_RADIUS of the camera (building masses are drawn to ~2.7 km)
+# and freed again beyond UNLOAD_RADIUS, so a long ride across the map does not pile every tile of the city
+# (tens of thousands of meshes, signs and lamps) into the scene
+const BUILD_RADIUS := 2600.0
+const UNLOAD_RADIUS := 3300.0
+var _unload_tick := 0
 var _swap_cooldown := 0
 const SWAP_COOLDOWN_FRAMES := 4
 
@@ -431,6 +437,10 @@ func _thread_build(td: Dictionary, near_bays: Array, clear_idx: Dictionary, ctx_
 
 # Called every frame by main: finish the tile in flight, then start the nearest tile that needs building
 func step() -> void:
+	_unload_tick += 1
+	if _unload_tick >= 45:
+		_unload_tick = 0
+		_unload_far()
 	if not _drape.is_empty():
 		_drape_step()
 		return
@@ -456,9 +466,27 @@ func step() -> void:
 	_task_id = WorkerThreadPool.add_task(_thread_build.bind(t["data"], near_bays, _clear_idx, track_ctx_ver), false, "city tile")
 
 
+# Frees built tiles far outside the view (rebuilt from their data when the camera comes back)
+func _unload_far() -> void:
+	var f := Vector2(focus.x, focus.z)
+	var r2 := UNLOAD_RADIUS * UNLOAD_RADIUS
+	for key: Vector2i in _tiles.keys():
+		var t: Dictionary = _tiles[key]
+		var n = t.get("node")
+		if not is_instance_valid(n):
+			continue
+		if not _drape.is_empty() and _drape.get("key") == key:
+			continue
+		var c := (Vector2(key) + Vector2(0.5, 0.5)) * TILE
+		if c.distance_squared_to(f) > r2:
+			(n as Node).queue_free()
+			t["node"] = null
+			t["built_sig"] = -1
+
+
 func _next_tile() -> Vector2i:
 	var best := Vector2i(2147483647, 0)
-	var best_d := 1e18
+	var best_d := BUILD_RADIUS * BUILD_RADIUS
 	var f := Vector2(focus.x, focus.z)
 	for key: Vector2i in _tiles.keys():
 		var t: Dictionary = _tiles[key]

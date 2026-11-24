@@ -847,7 +847,7 @@ func _effective_land_data() -> Dictionary:
 			var pts: Array = []
 			for p2: Vector2 in ed["pts"]:
 				pts.append([p2.x, p2.y])
-			roads.append({"name": ed["name"], "width": ed["width"], "lanes_f": ed.get("lanes_f", 1), "lanes_b": ed.get("lanes_b", 1), "layer": 0, "pts": pts})
+			roads.append({"name": ed["name"], "width": ed["width"], "lanes_f": ed.get("lanes_f", 1), "lanes_b": ed.get("lanes_b", 1), "layer": 0, "pts": pts, "bike_lane": bool(ed.get("bike_lane", false))})
 			if bool(ed.get("bridge", false)):
 				roads[roads.size() - 1]["bridge"] = true
 		d["roads"] = roads

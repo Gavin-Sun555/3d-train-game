@@ -1013,6 +1013,8 @@ func _update_walkers(dt: float) -> void:
 			continue
 
 		var mode := str(ag.get("mode", "wait"))
+		if bool(ag.get("baked_on", false)):
+			_set_idle_baked(ag, false) # moving again: back to the articulated rig
 		# If tram starts moving away while a walker is still boarding, dynamically track its live door anchor or complete boarding!
 		if mode == "board_enter":
 			var tr_ref: Dictionary = ag.get("tram_ref", {})
@@ -1191,9 +1193,105 @@ func _finish_boarding_if_needed(ag: Dictionary) -> void:
 		TramBuilder.update_onboard_passengers(tinfo, onboard_list.size(), int(tr_ref.get("capacity", 120)))
 
 
+# Standing (waiting) passengers near the camera are drawn as one merged body mesh (one surface per material)
+# instead of ~35 separate limb / clothing meshes; the head stays separate so it can still glance around.
+# Built once per person (cached while the pose is unchanged), released again when far from the camera.
+const BAKE_NEAR := 46.0
+const BAKE_FAR := 70.0
+var _bake_timer := 0.0
+
+func _bake_parts_of(ag: Dictionary) -> Array:
+	var root: Node3D = ag["node"]
+	var head: Node3D = ag.get("head")
+	var torso_mi = ag.get("torso_mi")
+	var out: Array = []
+	var stack: Array = [root]
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		if n == head:
+			continue
+		if n is MeshInstance3D and n != torso_mi and str(n.name) != "NpcLOD1" and str(n.name) != "BakedBody":
+			out.append(n)
+		for ch in n.get_children():
+			stack.append(ch)
+	return out
+
+
+func _set_idle_baked(ag: Dictionary, on: bool) -> void:
+	var root = ag.get("node")
+	if not is_instance_valid(root):
+		return
+	if not on:
+		if not bool(ag.get("baked_on", false)):
+			return
+		for mi in ag.get("baked_parts", []):
+			if is_instance_valid(mi):
+				(mi as MeshInstance3D).visible = true
+		var bmi = ag.get("baked_mi")
+		if is_instance_valid(bmi):
+			(bmi as MeshInstance3D).visible = false
+		ag["baked_on"] = false
+		return
+	if bool(ag.get("baked_on", false)):
+		return
+	var sig := snappedf((ag["elbow_r"] as Node3D).rotation.x, 0.01)
+	var bmi2 = ag.get("baked_mi")
+	if not is_instance_valid(bmi2) or float(ag.get("baked_sig", 999.0)) != sig:
+		if is_instance_valid(bmi2):
+			(bmi2 as Node).queue_free()
+		var parts := _bake_parts_of(ag)
+		var inv: Transform3D = (root as Node3D).global_transform.affine_inverse()
+		var groups := {}
+		for mi: MeshInstance3D in parts:
+			var mat: Material = mi.material_override
+			var k := mat.get_instance_id() if mat != null else 0
+			if not groups.has(k):
+				var st0 := SurfaceTool.new()
+				st0.begin(Mesh.PRIMITIVE_TRIANGLES)
+				groups[k] = [st0, mat]
+			TramBuilder.append_mesh_flat(groups[k][0], mi.mesh, inv * mi.global_transform)
+		var am := ArrayMesh.new()
+		for k2 in groups.keys():
+			var g: Array = groups[k2]
+			(g[0] as SurfaceTool).commit(am)
+			am.surface_set_material(am.get_surface_count() - 1, g[1])
+		bmi2 = MeshInstance3D.new()
+		bmi2.name = "BakedBody"
+		bmi2.mesh = am
+		bmi2.visibility_range_end = 40.0
+		bmi2.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		(root as Node3D).add_child(bmi2)
+		ag["baked_mi"] = bmi2
+		ag["baked_sig"] = sig
+		ag["baked_parts"] = parts
+	(bmi2 as MeshInstance3D).visible = true
+	for mi2 in ag.get("baked_parts", []):
+		if is_instance_valid(mi2):
+			(mi2 as MeshInstance3D).visible = false
+	ag["baked_on"] = true
+
+
+func _release_baked(ag: Dictionary) -> void:
+	_set_idle_baked(ag, false)
+	var bmi = ag.get("baked_mi")
+	if is_instance_valid(bmi):
+		(bmi as Node).queue_free()
+	ag.erase("baked_mi")
+	ag.erase("baked_parts")
+
+
 func _update_waiting_visibility_and_idle(focus_pos: Vector3) -> void:
 	var use_cull := focus_pos.x < 1e8
 	var max_r2 := 155.0 * 155.0
+	var do_bake := false
+	var cam_p := Vector3(1e9, 0.0, 1e9)
+	_bake_timer -= 1.0 / 60.0
+	if _bake_timer <= 0.0:
+		_bake_timer = 0.4
+		do_bake = true
+		var cam := get_viewport().get_camera_3d() if is_inside_tree() else null
+		if cam != null:
+			cam_p = cam.global_position
 	for sid: int in station_queues.keys():
 		var sv: Dictionary = _station_views.get(sid, {})
 		var show_st := true
@@ -1212,6 +1310,12 @@ func _update_waiting_visibility_and_idle(focus_pos: Vector3) -> void:
 				var want_vis := show_st or str(ag.get("mode", "")) == "board_enter"
 				if n.visible != want_vis:
 					n.visible = want_vis
+				if do_bake and str(ag.get("mode", "")) == "wait":
+					var dcam := n.global_position.distance_to(cam_p)
+					if show_st and dcam < BAKE_NEAR:
+						_set_idle_baked(ag, true)
+					elif dcam > BAKE_FAR and ag.has("baked_mi"):
+						_release_baked(ag)
 			if not show_st or i >= 18 or str(ag.get("mode", "")) != "wait":
 				continue
 			var head: Node3D = ag.get("head")
@@ -1220,7 +1324,7 @@ func _update_waiting_visibility_and_idle(focus_pos: Vector3) -> void:
 			if is_instance_valid(head):
 				var glance := sin(_idle_time * 0.42 + ph) * 0.14 + sin(_idle_time * 0.17 + ph * 2.1) * 0.10
 				head.rotation.y = glance
-			if is_instance_valid(torso):
+			if is_instance_valid(torso) and not bool(ag.get("baked_on", false)):
 				torso.rotation.z = sin(_idle_time * 0.75 + ph) * 0.012
 				torso.position.y = 1.12 + sin(_idle_time * 1.6 + ph) * 0.004
 
@@ -1278,7 +1382,7 @@ func _create_3d_person(world_pos: Vector3) -> Dictionary:
 	var torso := Node3D.new()
 	torso.position = Vector3(0.0, 1.12, 0.0)
 	root.add_child(torso)
-	_inst(torso, torso_m, Vector3.ZERO, coat_mat, true)
+	var torso_mi := _inst(torso, torso_m, Vector3.ZERO, coat_mat, true)
 	if wears_skirt:
 		var skirt_mat: Material = coat_mat if arch == 2 else _coat_mats[_rng.randi() % _coat_mats.size()]
 		_inst(root, HumanMeshGen.get_skirt_mesh(_rng.randf() < 0.45), Vector3(0.0, 0.90, 0.0), skirt_mat)
@@ -1386,6 +1490,7 @@ func _create_3d_person(world_pos: Vector3) -> Dictionary:
 		"elbow_l": elbow_l,
 		"elbow_r": elbow_r,
 		"torso": torso,
+		"torso_mi": torso_mi,
 		"head": head,
 		"phase": _rng.randf() * TAU,
 		"speed": 1.38 + _rng.randf() * 0.28,
