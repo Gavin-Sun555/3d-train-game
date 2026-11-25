@@ -911,6 +911,17 @@ static func animate_onboard_passengers(
 				arm_r.rotation.x = deg_to_rad(-44.0) + sin(time_sec * 2.1 + seed) * 0.05
 
 
+# Rear-view camera position on a mirror pod / housing: looks back along the car (+z of the section), a little
+# outward and down. CabMirrors (main) puts its low-res mirror cameras here.
+static func _mirror_eye(sec: Node3D, pos: Vector3, side: float) -> Node3D:
+	var eye := Node3D.new()
+	eye.name = "MirrorEye"
+	eye.position = pos
+	eye.rotation = Vector3(deg_to_rad(-4.0), PI + side * deg_to_rad(-9.0), 0.0)
+	sec.add_child(eye)
+	return eye
+
+
 static func _build_front_cab_and_nose(
 	sec: Node3D,
 	width: float,
@@ -964,11 +975,14 @@ static func _build_front_cab_and_nose(
 			_add_box(sec, Vector3(0.035, 0.22, 0.36), Vector3(float(slat_x) * 0.26, 0.30, fz - 0.02), mat_dark)
 
 	# Left & right A-pillars + side cab cheek windows + rearview mirrors
+	var mirror_eyes: Array = []
+	var mirror_screens: Array = []
 	for side: float in [-1.0, 1.0]:
 		if is_nanhu:
-			# Compact white camera-mirror pod on a short arm at the cab corner
+			# Compact white camera-mirror pod on a short arm at the cab corner (its camera feeds the cab monitors)
 			_add_box(sec, Vector3(0.16, 0.035, 0.035), Vector3(side * (hw + 0.07), 2.52, fz + 0.86), mat_dark)
 			_add_box(sec, Vector3(0.10, 0.20, 0.14), Vector3(side * (hw + 0.15), 2.46, fz + 0.86), mat_body)
+			mirror_eyes.append(_mirror_eye(sec, Vector3(side * (hw + 0.17), 2.42, fz + 0.94), side))
 			continue
 		var pil := _add_box(sec, Vector3(0.13, 1.66, 0.20), Vector3(side * (hw - 0.08), 2.04, fz + 0.34), mat_dark)
 		pil.rotation.x = deg_to_rad(slope_deg)
@@ -977,6 +991,7 @@ static func _build_front_cab_and_nose(
 		# Exterior mirror arm & housing
 		_add_box(sec, Vector3(0.18, 0.04, 0.04), Vector3(side * (hw + 0.08), 2.34, fz + 0.44), mat_dark)
 		_add_box(sec, Vector3(0.14, 0.34, 0.08), Vector3(side * (hw + 0.16), 2.22, fz + 0.44), mat_dark)
+		mirror_eyes.append(_mirror_eye(sec, Vector3(side * (hw + 0.17), 2.22, fz + 0.50), side))
 
 	if not is_nanhu:
 		# Sloped panoramic front windshield + sun visor + wiper
@@ -993,8 +1008,9 @@ static func _build_front_cab_and_nose(
 	for side: float in [-1.0, 1.0]:
 		_add_box(sec, Vector3(0.62, 2.28, 0.06), Vector3(side * (hw - 0.35), 1.72, part_z), mat_dark)
 		_add_box(sec, Vector3(0.48, 1.05, 0.07), Vector3(side * (hw - 0.35), 2.02, part_z), mat_part_glass)
-		# Interior A-pillar stainless grab handles
-		_add_cyl(sec, 0.016, 0.62, Vector3(side * (hw - 0.16), 1.98, fz + 0.56), mat_steel, Vector3(slope_deg, 0.0, 0.0))
+		# Interior A-pillar stainless grab handles (the Jiaxing cab is glazed there: none)
+		if not is_nanhu:
+			_add_cyl(sec, 0.016, 0.62, Vector3(side * (hw - 0.16), 1.98, fz + 0.56), mat_steel, Vector3(slope_deg, 0.0, 0.0))
 
 	# Overhead pull-down translucent tinted sun visor + interior cab dome light
 	var mat_visor := _make_mat(Color(0.05, 0.08, 0.10, 0.72), 0.18, 0.0)
@@ -1003,15 +1019,82 @@ static func _build_front_cab_and_nose(
 	_add_box(sec, Vector3(0.90, 0.18, 0.012), Vector3(0.0, 2.52, fz + 0.45), mat_visor)
 	# Dual articulated windshield wiper blades on front glass (animated when WIPER switch is ON!)
 	var wiper_l_piv := Node3D.new()
-	wiper_l_piv.position = Vector3(-0.32, 1.30, (fz - 0.50) if is_nanhu else (fz + 0.21))
-	sec.add_child(wiper_l_piv)
-	var wiper2 := _add_box(wiper_l_piv, Vector3(0.56, 0.022, 0.022), Vector3(0.18, 0.08, 0.0), mat_dark)
-	wiper2.rotation.z = deg_to_rad(-11.0)
 	var wiper_r_piv := Node3D.new()
-	wiper_r_piv.position = Vector3(0.18, 1.30, (fz - 0.52) if is_nanhu else (fz + 0.21))
-	sec.add_child(wiper_r_piv)
-	var wiper1 := _add_box(wiper_r_piv, Vector3(0.56, 0.022, 0.022), Vector3(0.18, 0.08, 0.0), mat_dark)
-	wiper1.rotation.z = deg_to_rad(11.0)
+	if is_nanhu:
+		# on the raked Jiaxing windscreen: pivots just above its lower edge, tilted into the glass plane so the
+		# rotation.z sweep stays on the glass; parked along the bottom of the screen
+		for wi in range(2):
+			var u_w := -0.62 if wi == 0 else 0.04
+			var p0 := _jx_point(hw, fz, u_w, 1.40)
+			var p1 := _jx_point(hw, fz, u_w, 1.52)
+			var up_t := (p1 - p0).normalized()
+			var nrm_out := Vector3(0.0, -up_t.z, up_t.y) * -1.0 # toward the front (-z), off the glass
+			var piv := wiper_l_piv if wi == 0 else wiper_r_piv
+			piv.position = p0 + nrm_out * 0.035
+			piv.rotation.x = atan2(up_t.z, up_t.y)
+			sec.add_child(piv)
+			_add_box(piv, Vector3(0.06, 0.06, 0.05), Vector3.ZERO, mat_dark) # spindle cap
+			var arm := _add_box(piv, Vector3(0.86, 0.026, 0.026), Vector3(0.43, 0.02, -0.01), mat_dark)
+			arm.rotation.z = deg_to_rad(7.0)
+			var blade := _add_box(piv, Vector3(0.80, 0.018, 0.034), Vector3(0.47, 0.075, -0.025), _make_mat(Color(0.05, 0.05, 0.06), 0.6, 0.0))
+			blade.rotation.z = deg_to_rad(7.0)
+		# Cab interior trims: dark A-pillar posts where the screen wraps round, sill / console side panels,
+		# a light headliner under the black upper mask, window-head rails along the side glazing
+		var trim := _make_mat(Color(0.20, 0.21, 0.23), 0.7, 0.05)
+		var liner := _make_mat(Color(0.78, 0.79, 0.80), 0.8, 0.0)
+		for side_t: float in [-1.0, 1.0]:
+			var a0 := _jx_point(hw, fz, side_t * 0.90, 1.30)
+			var a1 := _jx_point(hw, fz, side_t * 0.90, 2.46)
+			var inward := Vector3(-side_t * 0.07, 0.0, 0.06)
+			var post := MeshInstance3D.new()
+			var pm := BoxMesh.new()
+			pm.size = Vector3(0.11, a0.distance_to(a1), 0.07)
+			post.mesh = pm
+			post.material_override = trim
+			var mid := (a0 + a1) * 0.5 + inward
+			post.transform = Transform3D(Basis.looking_at((a1 - a0).normalized(), Vector3(side_t, 0.0, 0.0)).rotated(Vector3.UP, 0.0) * Basis(Vector3.RIGHT, -PI * 0.5), mid)
+			sec.add_child(post)
+			_add_box(sec, Vector3(0.05, 0.52, 1.40), Vector3(side_t * (hw - 0.09), 1.02, fz + 0.86), trim)
+			_add_box(sec, Vector3(0.18, 0.05, 1.40), Vector3(side_t * (hw - 0.14), 1.28, fz + 0.86), trim)
+			_add_box(sec, Vector3(0.10, 0.06, 1.20), Vector3(side_t * (hw - 0.11), 2.47, fz + 0.94), trim)
+		_add_box(sec, Vector3(width - 0.34, 0.03, 0.95), Vector3(0.0, 2.50, fz + 1.08), liner)
+		# camera-mirror monitors on the console corners, angled to the driver
+		var cam_eye := Vector3(0.0, 1.88, fz + 1.18)
+		for side_m: float in [-1.0, 1.0]:
+			var mpos := Vector3(side_m * 0.54, 1.57, fz + 0.56)
+			var bezel := MeshInstance3D.new()
+			var bm := BoxMesh.new()
+			bm.size = Vector3(0.30, 0.19, 0.03)
+			bezel.mesh = bm
+			bezel.material_override = mat_dark
+			bezel.transform = Transform3D(Basis.looking_at(cam_eye - mpos, Vector3.UP), mpos)
+			sec.add_child(bezel)
+			var scr := MeshInstance3D.new()
+			scr.name = "MirrorScreen"
+			var qm := QuadMesh.new()
+			qm.size = Vector2(0.27, 0.16)
+			scr.mesh = qm
+			var smat := StandardMaterial3D.new()
+			smat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			smat.albedo_color = Color(0.10, 0.12, 0.14)
+			smat.uv1_scale = Vector3(-1.0, 1.0, 1.0) # mirror image
+			smat.uv1_offset = Vector3(1.0, 0.0, 0.0)
+			scr.material_override = smat
+			scr.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			# quad faces +Z: turn it toward the driver, a hair in front of the bezel
+			scr.transform = Transform3D(Basis.looking_at(mpos - cam_eye, Vector3.UP), mpos + (cam_eye - mpos).normalized() * 0.018)
+			sec.add_child(scr)
+			mirror_screens.append(scr)
+			_add_box(sec, Vector3(0.04, 0.10, 0.04), mpos + Vector3(0.0, -0.13, 0.02), mat_dark)
+	else:
+		wiper_l_piv.position = Vector3(-0.32, 1.30, fz + 0.21)
+		sec.add_child(wiper_l_piv)
+		var wiper2 := _add_box(wiper_l_piv, Vector3(0.56, 0.022, 0.022), Vector3(0.18, 0.08, 0.0), mat_dark)
+		wiper2.rotation.z = deg_to_rad(-11.0)
+		wiper_r_piv.position = Vector3(0.18, 1.30, fz + 0.21)
+		sec.add_child(wiper_r_piv)
+		var wiper1 := _add_box(wiper_r_piv, Vector3(0.56, 0.022, 0.022), Vector3(0.18, 0.08, 0.0), mat_dark)
+		wiper1.rotation.z = deg_to_rad(11.0)
 
 	# Crisp UNSHADED OLED-style instrument materials (zero sun washout, deep dark-navy contrast!)
 	var mat_mfd := StandardMaterial3D.new()
@@ -1228,6 +1311,8 @@ static func _build_front_cab_and_nose(
 			"sig_label": sig_lbl,
 			"speed_needle": speed_needle,
 			"wipers": [wiper_l_piv, wiper_r_piv],
+			"mirror_eyes": mirror_eyes,
+			"mirror_screens": mirror_screens,
 			"door_btn_mat": mat_btn_green,
 		},
 	}
@@ -1336,7 +1421,8 @@ static func _jx_front_region(u: float, y: float) -> String:
 
 static func _jx_side_region(t: float, y: float) -> String:
 	# t: 0 at the nose edge .. 1 at the body side wall
-	if y >= 1.30 and y <= 2.70 and t < 0.80 - 0.22 * ((y - 1.30) / 1.40):
+	# the black glazing wraps right round the cab to the body side wall: the driver's side windows
+	if y >= 1.30 and y <= 2.70 and t < 0.985 - 0.05 * ((y - 1.30) / 1.40):
 		return "glass" if y < 2.46 else "black"
 	if y >= 2.64 and y <= 2.72 and t > 0.45:
 		return "red"

@@ -127,6 +127,13 @@ var _night_mats: Array[ShaderMaterial] = []
 var _globe_mat: StandardMaterial3D
 
 var _world_env: WorldEnvironment
+# Cab rear-view mirrors: two small SubViewports rendered from the active cab's mirror pods, alternately, only
+# while driving in cab view
+var _mirror_vps: Array[SubViewport] = []
+var _mirror_cams: Array[Camera3D] = []
+var _mirror_tick := 0
+var _mirror_bound: Array = []
+const MIRROR_RES := Vector2i(208, 120)
 var _sun: DirectionalLight3D
 var _camera: Camera3D
 var _sound: SoundSynth
@@ -3670,6 +3677,7 @@ func _process(delta: float) -> void:
 		_sound.overspeed_squeal = 0.0
 
 	_update_camera(dt)
+	_update_cab_mirrors()
 	var is_raining := (_weather_mode == WeatherSystem.WeatherType.RAINY)
 	var is_in_cab := (_game_mode == GameMode.RUN and (_cam_mode == CamMode.CAB or _cam_mode == CamMode.INTERIOR))
 	if _weather != null:
@@ -3679,6 +3687,68 @@ func _process(delta: float) -> void:
 		_sound.weather_rain_intensity = 1.0 if (is_raining and _game_mode == GameMode.RUN and not paused_run) else 0.0
 		_sound.weather_rain_muffled = is_in_cab
 	_process_shot_tour()
+
+
+func _update_cab_mirrors() -> void:
+	var active := _game_mode == GameMode.RUN and _cam_mode == CamMode.CAB and _transit_sim != null and not _transit_sim.trams.is_empty()
+	if not active:
+		for vp in _mirror_vps:
+			vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
+		return
+	var cc: Dictionary = _transit_sim.get_active_tram()["tram_info"].get("cab_controls", {})
+	var eyes: Array = cc.get("mirror_eyes", [])
+	var screens: Array = cc.get("mirror_screens", [])
+	if eyes.size() < 2 or screens.size() < 2:
+		return
+	if _mirror_vps.is_empty():
+		# a lean look for the mirrors: no SSAO / SSIL / glow / volumetrics, 110 m view distance
+		var m_env: Environment = null
+		if _world_env != null and _world_env.environment != null:
+			m_env = _world_env.environment.duplicate() as Environment
+			m_env.ssao_enabled = false
+			m_env.ssil_enabled = false
+			m_env.glow_enabled = false
+			m_env.sdfgi_enabled = false
+			m_env.volumetric_fog_enabled = false
+		for i in range(2):
+			var vp := SubViewport.new()
+			vp.name = "CabMirror%d" % i
+			vp.size = MIRROR_RES
+			vp.msaa_3d = Viewport.MSAA_DISABLED
+			vp.positional_shadow_atlas_size = 0
+			vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+			add_child(vp)
+			var cam := Camera3D.new()
+			cam.fov = 34.0
+			cam.near = 0.1
+			cam.far = 110.0
+			if m_env != null:
+				cam.environment = m_env
+			vp.add_child(cam)
+			cam.current = true
+			_mirror_vps.append(vp)
+			_mirror_cams.append(cam)
+	# put the mirror cameras on the pods and the pictures on the cab monitors (rebind when the tram / end changes)
+	for i in range(2):
+		var eye = eyes[i]
+		if is_instance_valid(eye):
+			_mirror_cams[i].global_transform = (eye as Node3D).global_transform
+	if _mirror_bound != screens:
+		for i in range(2):
+			var scr = screens[i]
+			if is_instance_valid(scr):
+				var mat := (scr as MeshInstance3D).material_override as StandardMaterial3D
+				if mat != null:
+					mat.albedo_color = Color.WHITE
+					mat.albedo_texture = _mirror_vps[i].get_texture()
+		_mirror_bound = screens.duplicate()
+	# alternate: each mirror refreshes every 8th frame (~7.5 Hz each at 60 fps); a full extra scene pass per
+	# refresh, so this keeps the mirrors to roughly a quarter of a frame's cost on average
+	_mirror_tick = (_mirror_tick + 1) % 8
+	if _mirror_tick == 0:
+		_mirror_vps[0].render_target_update_mode = SubViewport.UPDATE_ONCE
+	elif _mirror_tick == 4:
+		_mirror_vps[1].render_target_update_mode = SubViewport.UPDATE_ONCE
 
 
 func _update_home_backdrop_camera() -> void:

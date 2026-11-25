@@ -14,8 +14,8 @@ extends RefCounted
 # pixels of the reference satellite image (campus = px 80..1100 x 60..1000) and mapped by _rect().
 
 const WHITE := Color(0.93, 0.92, 0.89)
-const BRICK := Color(0.70, 0.45, 0.33) # muted orange-brown brick (the real walls are less saturated than photos)
-const BRICK_D := Color(0.58, 0.36, 0.27)
+const BRICK := Color(0.82, 0.50, 0.41) # salmon-orange brick sampled from the campus photos (sRGB)
+const BRICK_D := Color(0.66, 0.38, 0.30)
 const SLATE := Color(0.29, 0.31, 0.35)
 const STONE := Color(0.56, 0.56, 0.57)
 const STONE_LT := Color(0.76, 0.74, 0.70)
@@ -23,7 +23,7 @@ const TAN := Color(0.78, 0.68, 0.57) # forecourt tiles
 const FRAME := Color(0.20, 0.22, 0.25)
 const GLASS := Color(0.28, 0.40, 0.50)
 const TRACK := Color(0.70, 0.34, 0.24)
-const PITCH := Color(0.24, 0.45, 0.21)
+const PITCH := Color(0.33, 0.58, 0.29)
 const LINE := Color(0.95, 0.96, 0.95)
 const COURT := Color(0.50, 0.24, 0.21) # maroon court banks
 const COURT_IN := Color(0.30, 0.42, 0.33)
@@ -45,59 +45,58 @@ static func _px(px: float, py: float) -> Vector3:
 	return Vector3((px - 590.0) * 0.408, 0.0, (py - 530.0) * 0.413)
 
 
+static var _labels: Node3D = null
+
+
 static func build(sc: Node3D, lights: Array) -> void:
 	var kit := {"op": _st(), "gl": _st(), "em": _st()}
 	var labels := Node3D.new()
 	labels.name = "SchoolSigns"
 	sc.add_child(labels)
+	_labels = labels
 
 	_grounds(sc, kit)
 	_fence(kit)
 	_main_gate(sc, kit, labels)
 
-	# --- buildings, from the satellite view ---
-	# north-west main complex: long main block + short west wing
-	_bld(kit, _rect(100, 72, 390, 160), 4)
+	# --- buildings: footprints from the satellite view, names and roles from the campus master plan ---
+	_bld(kit, _rect(100, 72, 390, 160), 4, "精研楼", {"arch": true, "stone": true})
 	_bld(kit, _rect(100, 160, 150, 205), 3)
-	# west teaching blocks (two parallel slabs joined by a west wing)
-	_bld(kit, _rect(150, 192, 300, 248), 4)
-	_bld(kit, _rect(150, 258, 300, 322), 4)
+	_bld(kit, _rect(150, 192, 300, 248), 4, "严实楼", {"arch": true, "stone": true})
+	_bld(kit, _rect(150, 258, 300, 322), 4, "", {"arch": true, "stone": true})
 	_bld(kit, _rect(122, 200, 158, 318), 4)
-	# square science hall with the observatory dome
-	var sci := _rect(365, 232, 488, 360)
-	_bld(kit, sci, 4)
-	_dome(sc, Vector3(sci[0].x, 4.0 * 3.8 + 2.5, sci[0].y))
-	# north-centre academic blocks
+	_bld(kit, _rect(365, 232, 488, 360), 4, "清芬图书馆", {"stone": true})
+	_auditorium(kit, _rect(410, 95, 500, 185), "明伦礼堂")
 	_bld(kit, _rect(560, 72, 700, 112), 3)
-	_bld(kit, _rect(572, 120, 696, 214), 4)
-	_bld(kit, _rect(566, 218, 696, 300), 4)
-	# north-east dormitory rows
-	for r: Array in [[720, 70, 860, 120], [870, 70, 1010, 120], [1020, 70, 1095, 120], [720, 175, 905, 230], [912, 175, 1095, 230]]:
-		_bld(kit, _rect(r[0], r[1], r[2], r[3]), 5, true)
-	# canteen / student-centre cluster
-	_bld(kit, _rect(930, 290, 1095, 330), 3)
-	_bld(kit, _rect(830, 330, 940, 412), 2)
-	_bld(kit, _rect(915, 400, 1020, 440), 2)
-	_flat_hall(kit, _rect(1040, 332, 1090, 462), 8.0)
-	# south-west courtyard building round its garden + east extension + fan plaza
-	_bld(kit, _rect(188, 524, 404, 562), 4)
-	_bld(kit, _rect(188, 652, 404, 700), 4)
+	_bld(kit, _rect(572, 120, 696, 214), 3, "蒲香苑", {"stone": true})
+	_bld(kit, _rect(566, 218, 696, 300), 3)
+	# dormitories / teachers' apartments (north-east)
+	var dorms := [[720, 70, 860, 120, "行健楼"], [870, 70, 1010, 120, "慕雅楼"], [1020, 70, 1095, 120, "教师公寓"],
+		[720, 175, 905, 230, "尚刚楼"], [912, 175, 1095, 230, "怀淑楼"]]
+	for d: Array in dorms:
+		_bld(kit, _rect(d[0], d[1], d[2], d[3]), 5, str(d[4]), {"dorm": true})
+	_qiudeng(kit)
+	# 春诵楼 / 夏弦楼 courtyard with 君莘天文台 on its east wing, 正音艺术楼 and its fan plaza
+	_bld(kit, _rect(188, 524, 404, 562), 4, "春诵楼", {"arch": true, "stone": true})
+	_bld(kit, _rect(188, 652, 404, 700), 4, "夏弦楼", {"arch": true, "stone": true})
 	_bld(kit, _rect(188, 562, 236, 652), 4)
-	_bld(kit, _rect(358, 562, 404, 652), 4)
-	_bld(kit, _rect(404, 596, 600, 660), 3)
+	var obs := _rect(358, 562, 404, 652)
+	_bld(kit, obs, 4, "君莘天文台", {"stone": true})
+	_dome(sc, Vector3(obs[0].x, 4.0 * 3.8 + 2.5, obs[0].y))
+	_bld(kit, _rect(404, 596, 600, 660), 3, "正音艺术楼", {"stone": true, "balcony": true})
 	_bld(kit, _rect(404, 660, 486, 712), 3)
 	_courtyard_garden(kit, _rect(236, 562, 358, 652))
 	_fan_plaza(kit, _px(540, 700), 17.0)
-	# sports halls (white flat roofs) and courts
-	_flat_hall(kit, _rect(200, 760, 388, 916), 12.0)
-	_flat_hall(kit, _rect(386, 852, 512, 946), 10.0)
+	# sports: 崇实体育馆, 羽毛球馆, 网球场, 篮球场, 田径场
+	_flat_hall(kit, _rect(200, 760, 388, 916), 12.0, "崇实体育馆")
+	_flat_hall(kit, _rect(386, 852, 512, 946), 10.0, "羽毛球馆")
 	_courts(kit, _rect(394, 762, 506, 850), 2, 1)
 	_courts(kit, _rect(545, 775, 765, 960), 4, 2)
-	_courts(kit, _rect(410, 95, 500, 185), 1, 1)
 	_stadium(kit, Vector3(132.0, 0.0, 92.0))
 	_clock_tower(sc, kit, Vector3(-30.0, 0.0, GATE_Z))
+	_pond_pavilion(kit, Vector3(38.0, 0.0, 66.0))
 
-	_trees(sc)
+	_trees(sc, kit)
 	_commit(sc, kit)
 	JiaxingCivicLandmarks._add_light(sc, Vector3(-200.0, 8.0, GATE_Z), Color(1.0, 0.90, 0.72), 50.0, lights)
 	JiaxingCivicLandmarks._add_light(sc, Vector3(-106.0, 8.0, GATE_Z), Color(1.0, 0.90, 0.72), 40.0, lights)
@@ -148,6 +147,7 @@ static func _commit(sc: Node3D, kit: Dictionary) -> void:
 		(kit["op"] as SurfaceTool).commit(am)
 		var m := StandardMaterial3D.new()
 		m.vertex_color_use_as_albedo = true
+		m.vertex_color_is_srgb = true # colours here are picked as sRGB (as from a photo), not linear
 		m.roughness = 0.82
 		m.cull_mode = BaseMaterial3D.CULL_DISABLED
 		mats.append(m)
@@ -155,6 +155,7 @@ static func _commit(sc: Node3D, kit: Dictionary) -> void:
 		(kit["gl"] as SurfaceTool).commit(am)
 		var g := StandardMaterial3D.new()
 		g.vertex_color_use_as_albedo = true
+		g.vertex_color_is_srgb = true
 		g.metallic = 0.35
 		g.roughness = 0.06
 		g.metallic_specular = 0.8
@@ -163,6 +164,7 @@ static func _commit(sc: Node3D, kit: Dictionary) -> void:
 		(kit["em"] as SurfaceTool).commit(am)
 		var e := StandardMaterial3D.new()
 		e.vertex_color_use_as_albedo = true
+		e.vertex_color_is_srgb = true
 		e.emission_enabled = true
 		e.emission = Color(1.0, 0.96, 0.86)
 		e.emission_energy_multiplier = 1.2
@@ -201,13 +203,21 @@ static func _grounds(sc: Node3D, kit: Dictionary) -> void:
 	_b(kit, "op", I, Vector3(70.0, 0.05, 0.0), Vector3(7.0, 0.06, 380.0), STONE_LT)
 	_b(kit, "op", I, Vector3(0.0, 0.05, -60.0), Vector3(132.0, 0.06, 6.0), STONE_LT)
 	_b(kit, "op", I, Vector3(0.0, 0.05, 92.0), Vector3(140.0, 0.06, 7.0), STONE_LT)
-	# round plaza with a ring pattern
+	# round plaza on a raised terrace, reached from the avenue by a broad flight of granite steps (photo)
 	var pc := Vector2(-106.0, GATE_Z)
+	var lift := 1.8
+	_b(kit, "op", I, Vector3(pc.x, lift * 0.5, pc.y), Vector3(32.0, lift, 32.0), Color(0.70, 0.69, 0.66))
+	for st_i in range(12):
+		var sxp := pc.x - 16.0 - 0.36 * float(12 - st_i) + 0.18
+		_b(kit, "op", I, Vector3(sxp, lift * float(st_i + 1) / 12.0 * 0.5, pc.y), Vector3(0.38, lift * float(st_i + 1) / 12.0, 12.0), Color(0.74, 0.73, 0.70))
+	for sw: float in [-1.0, 1.0]:
+		var wxf := Transform3D(Basis(Vector3(0, 0, 1), atan2(lift, 4.4)), Vector3(pc.x - 18.2, lift * 0.55, pc.y + sw * 6.4))
+		RoadSignBuilder._box(kit["op"], wxf, Vector3(5.0, 0.7, 0.7), Color(0.80, 0.79, 0.76))
 	var disc: Array = []
 	for k in range(48):
 		var a := TAU * float(k) / 48.0
 		disc.append(pc + Vector2(cos(a), sin(a)) * 14.0)
-	_flat(kit, disc, 0.09, Color(0.80, 0.77, 0.72))
+	_flat(kit, disc, lift + 0.03, Color(0.80, 0.77, 0.72))
 	for rr: float in [5.0, 9.5, 13.6]:
 		var ri: Array = []
 		var ro: Array = []
@@ -215,7 +225,7 @@ static func _grounds(sc: Node3D, kit: Dictionary) -> void:
 			var a2 := TAU * float(k2) / 48.0
 			ri.append(pc + Vector2(cos(a2), sin(a2)) * (rr - 0.25))
 			ro.append(pc + Vector2(cos(a2), sin(a2)) * (rr + 0.25))
-		_strip(kit, ri, ro, 0.095, Color(0.62, 0.58, 0.54))
+		_strip(kit, ri, ro, lift + 0.05, Color(0.62, 0.58, 0.54))
 	# wooded heart: the pond (irregular, from the satellite view)
 	var pond: Array = []
 	var pcen := Vector2(38.0, 50.0)
@@ -323,13 +333,29 @@ static func _main_gate(sc: Node3D, kit: Dictionary, labels: Node3D) -> void:
 		kit["op_n"] = true
 		# end posts with the track wheels' housing
 		_b(kit, "op", I, Vector3(-207.4, 1.0, z1), Vector3(0.5, 2.0, 0.5), steel.darkened(0.2))
-	# white V sculpture on a plinth behind the stone
-	var vx := -196.0
-	_b(kit, "op", I, Vector3(vx, 0.4, gz), Vector3(3.0, 0.8, 3.0), STONE_LT)
+	# the V sculpture (photo: pale granite V on a tall rough-stone pedestal) on the axis behind the stone
+	var vx := -192.0
+	_b(kit, "op", I, Vector3(vx, 1.3, gz), Vector3(2.2, 2.6, 2.2), Color(0.58, 0.52, 0.47))
+	_b(kit, "op", I, Vector3(vx, 0.15, gz), Vector3(3.6, 0.3, 3.6), STONE_LT)
 	for sgn2: float in [-1.0, 1.0]:
-		var xf2 := Transform3D(Basis(Vector3(1, 0, 0), sgn2 * 0.62), Vector3(vx, 3.0, gz + sgn2 * 1.25))
-		RoadSignBuilder._box(kit["op"], xf2, Vector3(0.6, 4.6, 1.0), Color(0.90, 0.90, 0.88))
+		var xf2 := Transform3D(Basis(Vector3(1, 0, 0), sgn2 * 0.68), Vector3(vx, 4.5, gz + sgn2 * 1.45))
+		RoadSignBuilder._box(kit["op"], xf2, Vector3(0.9, 4.6, 1.2), Color(0.78, 0.74, 0.70))
 	kit["op_n"] = true
+	# guardhouse (photo): small brick lodge with a slate hipped roof and a maroon awning over the turnstiles
+	var gh := Vector3(-199.0, 0.0, gz + 13.0)
+	_b(kit, "op", I, gh + Vector3(0.0, 1.6, 0.0), Vector3(6.0, 3.2, 5.0), BRICK)
+	_b(kit, "gl", I, gh + Vector3(-3.04, 1.8, 0.0), Vector3(0.06, 1.4, 3.6), GLASS)
+	_b(kit, "op", I, gh + Vector3(0.0, 3.3, 0.0), Vector3(6.6, 0.25, 5.6), WHITE)
+	_hip_roof(kit, gh, Vector2(6.0, 5.0), 3.4, 0.7)
+	_b(kit, "op", I, gh + Vector3(-5.0, 2.7, -1.0), Vector3(4.2, 0.12, 5.0), Color(0.40, 0.20, 0.22))
+	for az: float in [-3.4, 1.4]:
+		_b(kit, "op", I, gh + Vector3(-6.9, 1.35, az), Vector3(0.08, 2.7, 0.08), Color(0.78, 0.80, 0.82))
+	for tz: float in [-2.4, -0.8, 0.8]:
+		_b(kit, "op", I, gh + Vector3(-5.0, 0.5, tz), Vector3(1.2, 1.0, 0.3), Color(0.80, 0.82, 0.84))
+	# plate-recognition barrier sign with the LED display
+	_b(kit, "op", I, Vector3(-209.0, 0.7, gz - 7.0), Vector3(0.12, 1.4, 0.12), Color(0.12, 0.12, 0.13))
+	_b(kit, "op", I, Vector3(-209.0, 1.75, gz - 7.0), Vector3(0.3, 1.1, 0.55), Color(0.10, 0.10, 0.11))
+	_b(kit, "em", I, Vector3(-209.17, 1.75, gz - 7.0), Vector3(0.02, 0.7, 0.42), Color(0.30, 0.95, 0.40))
 	# notice board on the right of the gate
 	_b(kit, "op", I, Vector3(-203.0, 1.6, gz + 24.0), Vector3(0.3, 3.2, 7.0), Color(0.86, 0.87, 0.88))
 	_b(kit, "op", I, Vector3(-203.2, 2.0, gz + 24.0), Vector3(0.05, 2.2, 6.4), Color(0.70, 0.22, 0.20))
@@ -344,21 +370,29 @@ static func _main_gate(sc: Node3D, kit: Dictionary, labels: Node3D) -> void:
 
 
 # ------------------------------------------------------------------------------------------------- buildings
-# Brick building under a slate hipped roof: stone plinth, white floor bands and cornice, white-framed windows on
-# every face; dorms get a balcony rail per bay on their south face
-static func _bld(kit: Dictionary, r: Array, floors: int, dorm: bool = false) -> void:
+# Brick building under a slate hipped roof (campus style): white floor bands and cornice, white-framed windows on
+# every face, air-conditioner units on the end walls. opts: "stone" = light granite ground floor (main teaching
+# and public buildings), "arch" = arched top-floor loggia, "dorm" = balcony per bay on the south face,
+# "balcony" = continuous white balustraded galleries with planter boxes (as on the arts building)
+static func _bld(kit: Dictionary, r: Array, floors: int, name_zh: String = "", opts: Dictionary = {}) -> void:
 	var c: Vector2 = r[0]
 	var sz: Vector2 = r[1]
-	var fh := 3.6 if dorm else 3.8
+	var dorm := bool(opts.get("dorm", false))
+	var stone := bool(opts.get("stone", false))
+	var arch := bool(opts.get("arch", false))
+	var gallery := bool(opts.get("balcony", false))
+	var fh := 3.5 if dorm else 3.8
 	var H := float(floors) * fh
 	var I := Transform3D.IDENTITY
 	var cen := Vector3(c.x, 0.0, c.y)
 	_b(kit, "op", I, cen + Vector3(0.0, H * 0.5, 0.0), Vector3(sz.x, H, sz.y), BRICK)
-	_b(kit, "op", I, cen + Vector3(0.0, 0.6, 0.0), Vector3(sz.x + 0.3, 1.2, sz.y + 0.3), STONE)
+	if stone:
+		_b(kit, "op", I, cen + Vector3(0.0, fh * 0.5, 0.0), Vector3(sz.x + 0.24, fh, sz.y + 0.24), Color(0.80, 0.80, 0.78))
+	else:
+		_b(kit, "op", I, cen + Vector3(0.0, 0.6, 0.0), Vector3(sz.x + 0.3, 1.2, sz.y + 0.3), STONE)
 	for f in range(1, floors):
 		_b(kit, "op", I, cen + Vector3(0.0, float(f) * fh, 0.0), Vector3(sz.x + 0.16, 0.22, sz.y + 0.16), WHITE)
 	_b(kit, "op", I, cen + Vector3(0.0, H - 0.25, 0.0), Vector3(sz.x + 0.5, 0.5, sz.y + 0.5), WHITE)
-	# windows on the four faces
 	for face in range(4):
 		var along_x := face < 2
 		var sgn := 1.0 if face % 2 == 0 else -1.0
@@ -368,19 +402,160 @@ static func _bld(kit: Dictionary, r: Array, floors: int, dorm: bool = false) -> 
 		if nb < 1:
 			continue
 		for f2 in range(floors):
+			var top_floor := f2 == floors - 1
 			var y := float(f2) * fh + fh * 0.55
 			for k in range(nb):
 				var t := -span * 0.5 + 1.0 + (float(k) + 0.5) * (span - 2.0) / float(nb)
 				var p := cen + (Vector3(t, y, sgn * off) if along_x else Vector3(sgn * off, y, t))
-				var fsz := Vector3(2.0, 2.2, 0.12) if along_x else Vector3(0.12, 2.2, 2.0)
-				var gsz := Vector3(1.6, 1.85, 0.06) if along_x else Vector3(0.06, 1.85, 1.6)
-				var out := Vector3(0.0, 0.0, sgn * 0.05) if along_x else Vector3(sgn * 0.05, 0.0, 0.0)
-				_b(kit, "op", I, p + out, fsz, WHITE)
-				_b(kit, "gl", I, p + out * 2.0, gsz, GLASS)
+				var out := Vector3(0.0, 0.0, sgn) if along_x else Vector3(sgn, 0.0, 0.0)
+				var tang := Vector3(1.0, 0.0, 0.0) if along_x else Vector3(0.0, 0.0, 1.0)
+				var wsz := 1.6
+				var whgt := 1.85
+				if stone and f2 == 0:
+					wsz = 2.6
+					whgt = 2.4
+				if arch and top_floor and along_x:
+					# arched loggia bay: white piers, tall opening, arched head built from short tilted segments
+					whgt = 2.3
+					_b(kit, "op", I, p + out * 0.06 - tang * 1.62 + Vector3(0.0, 0.05, 0.0), _sz(along_x, 0.36, fh - 0.4, 0.2), WHITE)
+					for seg in range(5):
+						var ang := PI * (float(seg) + 0.5) / 5.0
+						var hp := p + tang * cos(ang) * 1.0 + Vector3(0.0, whgt * 0.5 + sin(ang) * 0.55 - 0.1, 0.0) + out * 0.07
+						var xf := Transform3D(Basis(Vector3(0, 0, 1), ang + PI * 0.5), hp)
+						RoadSignBuilder._box(kit["op"], xf, _sz(along_x, 0.72, 0.16, 0.14), WHITE)
+					_b(kit, "gl", I, p + out * 0.09, _sz(along_x, 1.8, whgt, 0.06), GLASS)
+					_b(kit, "op", I, p + out * 0.4 - Vector3(0.0, whgt * 0.5 - 0.5, 0.0), _sz(along_x, 3.2, 0.9, 0.12), WHITE)
+					kit["op_n"] = true
+					continue
+				_b(kit, "op", I, p + out * 0.05, _sz(along_x, wsz + 0.4, whgt + 0.35, 0.12), WHITE)
+				_b(kit, "gl", I, p + out * 0.10, _sz(along_x, wsz, whgt, 0.06), GLASS)
+				if not along_x and not stone and f2 > 0 and k % 2 == 0:
+					# air-conditioner unit under the window
+					_b(kit, "op", I, p + out * 0.32 - Vector3(0.0, 1.35, 0.0), _sz(along_x, 0.85, 0.6, 0.5), Color(0.86, 0.86, 0.84))
 				if dorm and face == 0 and f2 > 0:
 					_b(kit, "op", I, p + Vector3(0.0, -1.1, 0.75), Vector3(2.6, 0.12, 1.4), WHITE)
 					_b(kit, "op", I, p + Vector3(0.0, -0.6, 1.42), Vector3(2.6, 0.9, 0.08), WHITE)
+		if gallery and face == 0:
+			for f3 in range(1, floors):
+				var gy := float(f3) * fh
+				_b(kit, "op", I, cen + Vector3(0.0, gy + 0.06, off + 1.0), Vector3(sz.x - 2.0, 0.2, 2.0), WHITE)
+				_b(kit, "op", I, cen + Vector3(0.0, gy + 0.62, off + 1.95), Vector3(sz.x - 2.0, 0.95, 0.12), Color(0.86, 0.55, 0.45))
+				_b(kit, "op", I, cen + Vector3(0.0, gy + 1.12, off + 1.95), Vector3(sz.x - 1.8, 0.1, 0.22), WHITE)
+				for pk in range(int((sz.x - 3.0) / 4.0)):
+					_b(kit, "op", I, cen + Vector3(-sz.x * 0.5 + 2.5 + float(pk) * 4.0, gy + 1.25, off + 2.05), Vector3(1.0, 0.3, 0.35), Color(0.26, 0.42, 0.18))
 	_hip_roof(kit, cen, sz, H, 0.9)
+	if name_zh != "" and _labels != null:
+		_sign(_labels, name_zh, cen + Vector3(0.0, H - 1.2, sz.y * 0.5 + 0.2), 0.0, 96, 0.020, Color(0.80, 0.16, 0.12))
+
+
+static func _sz(along_x: bool, w: float, h: float, d: float) -> Vector3:
+	return Vector3(w, h, d) if along_x else Vector3(d, h, w)
+
+
+# 明伦礼堂: tall brick assembly hall with a dark red hipped roof (the dark square seen from above)
+static func _auditorium(kit: Dictionary, r: Array, name_zh: String) -> void:
+	var c: Vector2 = r[0]
+	var sz: Vector2 = r[1]
+	var I := Transform3D.IDENTITY
+	var cen := Vector3(c.x, 0.0, c.y)
+	var H := 13.0
+	_b(kit, "op", I, cen + Vector3(0.0, H * 0.5, 0.0), Vector3(sz.x, H, sz.y), BRICK)
+	_b(kit, "op", I, cen + Vector3(0.0, 2.2, 0.0), Vector3(sz.x + 0.24, 4.4, sz.y + 0.24), Color(0.80, 0.80, 0.78))
+	_b(kit, "op", I, cen + Vector3(0.0, H - 0.3, 0.0), Vector3(sz.x + 0.5, 0.6, sz.y + 0.5), WHITE)
+	for s: float in [-1.0, 1.0]:
+		for k in range(int(sz.y / 5.0)):
+			var z := -sz.y * 0.5 + 2.5 + float(k) * 5.0
+			_b(kit, "gl", I, cen + Vector3(s * (sz.x * 0.5 + 0.08), 8.0, z), Vector3(0.06, 6.0, 2.0), GLASS)
+			_b(kit, "op", I, cen + Vector3(s * (sz.x * 0.5 + 0.1), 11.2, z), Vector3(0.12, 0.4, 2.6), WHITE)
+	_b(kit, "op", I, cen + Vector3(0.0, 3.0, sz.y * 0.5 + 2.0), Vector3(12.0, 0.4, 4.0), WHITE)
+	_hip_roof(kit, cen, sz, H, 0.8)
+	# dark red roof: re-tint by laying a second, slightly higher roof in the auditorium's colour
+	var st: SurfaceTool = kit["op"]
+	var a := sz.x * 0.5 + 0.8
+	var b := sz.y * 0.5 + 0.8
+	var rise := minf(minf(a, b) * 0.62, 6.5)
+	for tri: Array in [[Vector3(-a, H + 0.02, -b), Vector3(a, H + 0.02, -b), Vector3(0, H + rise + 0.02, 0)], [Vector3(a, H + 0.02, -b), Vector3(a, H + 0.02, b), Vector3(0, H + rise + 0.02, 0)],
+			[Vector3(a, H + 0.02, b), Vector3(-a, H + 0.02, b), Vector3(0, H + rise + 0.02, 0)], [Vector3(-a, H + 0.02, b), Vector3(-a, H + 0.02, -b), Vector3(0, H + rise + 0.02, 0)]]:
+		var n: Vector3 = ((tri[1] as Vector3) - (tri[0] as Vector3)).cross((tri[2] as Vector3) - (tri[0] as Vector3)).normalized()
+		if n.y < 0.0:
+			n = -n
+		for v: Vector3 in tri:
+			st.set_color(Color(0.42, 0.16, 0.14))
+			st.set_normal(n)
+			st.add_vertex(cen + v)
+	if _labels != null:
+		_sign(_labels, name_zh, cen + Vector3(0.0, 6.0, sz.y * 0.5 + 0.2), 0.0, 96, 0.022, Color(0.80, 0.16, 0.12))
+
+
+# 秋登楼 (photo from the stadium): long five-storey brick block facing the track with protruding end pavilions,
+# arched top-floor loggias, a light granite ground floor, and the white stone central tower with a pediment,
+# the school emblem and the arched main entrance; courtyard wings behind
+static func _qiudeng(kit: Dictionary) -> void:
+	_bld(kit, _rect(930, 418, 1043, 470), 5, "", {"arch": true, "stone": true})
+	_bld(kit, _rect(883, 405, 935, 482), 5, "", {"stone": true})
+	_bld(kit, _rect(1038, 405, 1090, 482), 5, "", {"stone": true})
+	_bld(kit, _rect(883, 314, 1090, 352), 4, "", {"stone": true})
+	_bld(kit, _rect(883, 352, 905, 405), 4)
+	_bld(kit, _rect(1068, 352, 1090, 405), 4)
+	var tr := _rect(962, 410, 1010, 476)
+	var c: Vector2 = tr[0]
+	var sz: Vector2 = tr[1]
+	var I := Transform3D.IDENTITY
+	var cen := Vector3(c.x, 0.0, c.y)
+	var white_stone := Color(0.88, 0.88, 0.86)
+	var H := 6.0 * 3.8
+	_b(kit, "op", I, cen + Vector3(0.0, H * 0.5, 0.0), Vector3(sz.x, H, sz.y), white_stone)
+	# ashlar joints
+	for f in range(1, 6):
+		_b(kit, "op", I, cen + Vector3(0.0, float(f) * 3.8, 0.0), Vector3(sz.x + 0.1, 0.1, sz.y + 0.1), Color(0.76, 0.76, 0.74))
+	var fz := sz.y * 0.5
+	# windows in rows of three, the arched main entrance (two storeys) at the bottom
+	for f2 in range(2, 6):
+		for k in range(3):
+			var p := cen + Vector3((float(k) - 1.0) * 3.4, float(f2) * 3.8 + 2.0, fz + 0.06)
+			_b(kit, "gl", I, p, Vector3(1.6, 1.9, 0.06), GLASS)
+	_b(kit, "gl", I, cen + Vector3(0.0, 3.4, fz + 0.06), Vector3(5.6, 6.0, 0.06), GLASS)
+	for seg in range(7):
+		var ang := PI * (float(seg) + 0.5) / 7.0
+		var hp := cen + Vector3(cos(ang) * 2.9, 6.4 + sin(ang) * 1.6, fz + 0.1)
+		RoadSignBuilder._box(kit["op"], Transform3D(Basis(Vector3(0, 0, 1), ang - PI * 0.5), hp), Vector3(1.4, 0.35, 0.25), white_stone.darkened(0.06))
+	_b(kit, "op", I, cen + Vector3(0.0, 0.25, fz + 3.0), Vector3(12.0, 0.5, 6.0), Color(0.80, 0.80, 0.78))
+	# triangular pediment with the emblem
+	var st: SurfaceTool = kit["op"]
+	var pw := sz.x * 0.5 + 0.6
+	for tri: Array in [[Vector3(-pw, H, fz + 0.3), Vector3(pw, H, fz + 0.3), Vector3(0.0, H + 3.4, fz + 0.3)], [Vector3(pw, H, -fz), Vector3(-pw, H, -fz), Vector3(0.0, H + 3.4, -fz)]]:
+		for v: Vector3 in tri:
+			st.set_color(white_stone)
+			st.set_normal(Vector3(0, 0, 1) if v.z > 0.0 else Vector3(0, 0, -1))
+			st.add_vertex(cen + v)
+	_hip_roof(kit, cen, sz, H, 0.6)
+	_b(kit, "em", I, cen + Vector3(0.0, H + 1.3, fz + 0.4), Vector3(1.6, 1.6, 0.1), Color(0.95, 0.78, 0.30))
+	if _labels != null:
+		_sign(_labels, "秋登楼", cen + Vector3(0.0, 7.6, fz + 0.3), 0.0, 96, 0.016, Color(0.80, 0.62, 0.18))
+
+
+# 求實亭 on 蠡池: square granite-pillared pavilion with a slate pyramid roof on a timber deck, steel railings,
+# the black stele with gold characters
+static func _pond_pavilion(kit: Dictionary, c: Vector3) -> void:
+	var I := Transform3D.IDENTITY
+	var deck := Color(0.46, 0.33, 0.25)
+	var granite := Color(0.74, 0.68, 0.64)
+	_b(kit, "op", I, c + Vector3(0.0, 0.42, 0.0), Vector3(9.0, 0.16, 9.0), deck)
+	_b(kit, "op", I, c + Vector3(-8.0, 0.42, 0.0), Vector3(8.0, 0.16, 2.2), deck) # boardwalk to the bank
+	for px: float in [-1.0, 1.0]:
+		for pz: float in [-1.0, 1.0]:
+			_b(kit, "op", I, c + Vector3(px * 2.4, 2.1, pz * 2.4), Vector3(0.6, 3.4, 0.6), granite)
+			_b(kit, "op", I, c + Vector3(px * 3.6, 0.2, pz * 3.6), Vector3(0.3, 0.6, 0.3), Color(0.40, 0.40, 0.40))
+	_b(kit, "op", I, c + Vector3(0.0, 3.9, 0.0), Vector3(6.2, 0.45, 6.2), granite.darkened(0.15))
+	_hip_roof(kit, c, Vector2(5.2, 5.2), 4.1, 0.9)
+	var rail := Color(0.78, 0.80, 0.82)
+	for s: float in [-1.0, 1.0]:
+		_b(kit, "op", I, c + Vector3(0.0, 1.35, s * 4.4), Vector3(9.0, 0.06, 0.06), rail)
+		_b(kit, "op", I, c + Vector3(s * 4.4, 1.35, 1.2), Vector3(0.06, 0.06, 6.6), rail)
+		_b(kit, "op", I, c + Vector3(-8.0, 1.35, s * 1.1), Vector3(8.0, 0.06, 0.06), rail)
+	_b(kit, "op", I, c + Vector3(0.0, 1.5, 0.0), Vector3(0.3, 1.9, 1.0), Color(0.12, 0.12, 0.13))
+	if _labels != null:
+		_sign(_labels, "求\n實\n亭", c + Vector3(-0.17, 1.65, 0.0), -PI * 0.5, 64, 0.0055, Color(0.90, 0.70, 0.20))
 
 
 # hipped slate roof over a footprint, white eaves board
@@ -432,7 +607,7 @@ static func _hip_roof(kit: Dictionary, cen: Vector3, sz: Vector2, base_y: float,
 
 
 # white flat-roofed sports hall with roof seams, brick walls, clerestory band
-static func _flat_hall(kit: Dictionary, r: Array, h: float) -> void:
+static func _flat_hall(kit: Dictionary, r: Array, h: float, name_zh: String = "") -> void:
 	var c: Vector2 = r[0]
 	var sz: Vector2 = r[1]
 	var I := Transform3D.IDENTITY
@@ -446,6 +621,8 @@ static func _flat_hall(kit: Dictionary, r: Array, h: float) -> void:
 	var n := int(sz.x / 9.0)
 	for k in range(1, n):
 		_b(kit, "op", I, cen + Vector3(-sz.x * 0.5 + float(k) * sz.x / float(n), h + 0.65, 0.0), Vector3(0.35, 0.12, sz.y + 0.9), Color(0.80, 0.82, 0.84))
+	if name_zh != "" and _labels != null:
+		_sign(_labels, name_zh, cen + Vector3(0.0, h - 1.4, -sz.y * 0.5 - 0.2), PI, 96, 0.022, Color(0.80, 0.16, 0.12))
 
 
 static func _dome(sc: Node3D, top: Vector3) -> void:
@@ -492,11 +669,14 @@ static func _courtyard_garden(kit: Dictionary, r: Array) -> void:
 	var sz: Vector2 = r[1]
 	var I := Transform3D.IDENTITY
 	_b(kit, "op", I, Vector3(c.x, 0.06, c.y), Vector3(sz.x, 0.06, sz.y), Color(0.25, 0.42, 0.20))
-	# diamond / cross path pattern with a round centre bed (as seen from above)
-	for k in range(2):
-		var ang := 0.6 if k == 0 else -0.6
-		var xf := Transform3D(Basis(Vector3.UP, ang), Vector3(c.x, 0.11, c.y))
-		RoadSignBuilder._box(kit["op"], xf, Vector3(sz.x * 1.05, 0.04, 2.2), STONE_LT)
+	# oval path ring (as on the master plan) + cross paths and a round centre bed
+	var oi: Array = []
+	var oo: Array = []
+	for k in range(49):
+		var ang := TAU * float(k) / 48.0
+		oi.append(c + Vector2(cos(ang) * (sz.x * 0.36 - 1.0), sin(ang) * (sz.y * 0.36 - 1.0)))
+		oo.append(c + Vector2(cos(ang) * sz.x * 0.36, sin(ang) * sz.y * 0.36))
+	_strip(kit, oi, oo, 0.12, STONE_LT)
 	_b(kit, "op", I, Vector3(c.x, 0.12, c.y), Vector3(sz.x, 0.04, 2.0), STONE_LT)
 	_b(kit, "op", I, Vector3(c.x, 0.12, c.y), Vector3(2.0, 0.04, sz.y), STONE_LT)
 	var ring_i: Array = []
@@ -546,15 +726,34 @@ static func _courts(kit: Dictionary, r: Array, nx: int, nz: int) -> void:
 		_b(kit, "op", I, Vector3(c.x, 1.8, c.y + s * sz.y * 0.5), Vector3(sz.x, 0.08, 0.08), FRAME)
 
 
-static func _trees(sc: Node3D) -> void:
+static var _tree_kit: Dictionary = {}
+
+
+# lime-washed white band round the foot of a campus tree trunk (as in the photos)
+static func _lime(pos: Vector3, scale: float) -> void:
+	if _tree_kit.is_empty():
+		return
+	var r := 0.62 * scale
+	_b(_tree_kit, "op", Transform3D.IDENTITY, pos + Vector3(0.0, 0.6, 0.0), Vector3(r, 1.2, r), Color(0.94, 0.94, 0.92))
+
+
+static func _trees(sc: Node3D, kit: Dictionary = {}) -> void:
 	var P := ParkLandscapeBuilder
+	_tree_kit = kit
+	# weeping willows round 蠡池
+	for k0 in range(9):
+		var a0 := TAU * (float(k0) + 0.3) / 9.0
+		var wp := Vector2(38.0, 50.0) + Vector2(cos(a0) * 17.5, sin(a0) * 31.0)
+		P.plant_tree(sc, Vector3(wp.x, 0.0, wp.y), 5, 1.15, Color(0.30, 0.48, 0.20))
+		_lime(Vector3(wp.x, 0.0, wp.y), 1.15)
 	# camphor avenue from the gate to the round plaza
 	for ax in range(-196, -118, 10):
 		for side: float in [-1.0, 1.0]:
 			P.plant_tree(sc, Vector3(float(ax), 0.0, GATE_Z + side * 13.0), 1, 1.7, P.CAMPHOR if ax % 20 == 0 else P.CAMPHOR_LT)
+			_lime(Vector3(float(ax), 0.0, GATE_Z + side * 13.0), 1.7)
 	# the wooded heart of the campus (dense camphor grove, pond excluded)
 	var blocked := func(p: Vector2) -> bool:
-		if Vector2((p.x - 38.0) / 16.0, (p.y - 50.0) / 30.0).length() < 1.0:
+		if Vector2((p.x - 38.0) / 21.0, (p.y - 50.0) / 35.0).length() < 1.0:
 			return true
 		if p.x < -40.0 and p.y > -126.0 and p.y < -68.0:
 			return true # science hall
@@ -585,7 +784,9 @@ static func _trees(sc: Node3D) -> void:
 			continue
 		placed.append(p)
 		k += 1
-		P.plant_tree(sc, Vector3(p.x, 0.0, p.y), 1, 1.6 + 0.6 * fposmod(h1 * 7.0, 1.0), P.CAMPHOR if k % 3 != 0 else P.CAMPHOR_LT)
+		var tsc := 1.6 + 0.6 * fposmod(h1 * 7.0, 1.0)
+		P.plant_tree(sc, Vector3(p.x, 0.0, p.y), 1, tsc, P.CAMPHOR if k % 3 != 0 else P.CAMPHOR_LT)
+		_lime(Vector3(p.x, 0.0, p.y), tsc)
 	# perimeter rows (north, east, south) and between the north-east dorm rows
 	for x in range(-196, 206, 20):
 		P.plant_tree(sc, Vector3(float(x), 0.0, -190.0), 1, 1.5, P.CAMPHOR_LT)
@@ -616,38 +817,38 @@ static func _stadium(kit: Dictionary, c: Vector3) -> void:
 			pts.append(Vector2(c.x + cos(a2) * r, c.z + half_s + sin(a2) * r))
 		pts.append(pts[0])
 		return pts
-	# green surround (the field's corners), track, infield
-	_b(kit, "op", I, Vector3(c.x, 0.05, c.z), Vector3(2.0 * (ro + 4.0), 0.04, 2.0 * (half_s + ro + 4.0)), Color(0.27, 0.46, 0.24))
-	_strip(kit, outline.call(ri), outline.call(ro), 0.07, TRACK)
+	# green surround (the field's corners), track, infield: distinct heights, never coplanar
+	_b(kit, "op", I, Vector3(c.x, 0.04, c.z), Vector3(2.0 * (ro + 4.0), 0.04, 2.0 * (half_s + ro + 4.0)), Color(0.27, 0.46, 0.24))
+	_strip(kit, outline.call(ri), outline.call(ro), 0.085, TRACK)
 	var inner: Array = outline.call(ri)
 	inner.pop_back()
-	_flat(kit, inner, 0.065, PITCH)
+	_flat(kit, inner, 0.08, PITCH)
 	for li in range(lanes + 1):
 		var r := ri + float(li) * lw
-		_strip(kit, outline.call(r - 0.025), outline.call(r + 0.025), 0.078, LINE)
+		_strip(kit, outline.call(r - 0.025), outline.call(r + 0.025), 0.10, LINE)
 	# start / finish line across the home straight
-	_b(kit, "op", I, Vector3(c.x - ri - float(lanes) * lw * 0.5, 0.079, c.z + half_s - 2.0), Vector3(float(lanes) * lw, 0.01, 0.06), LINE)
+	_b(kit, "op", I, Vector3(c.x - ri - float(lanes) * lw * 0.5, 0.10, c.z + half_s - 2.0), Vector3(float(lanes) * lw, 0.01, 0.06), LINE)
 	# football pitch 100 x 64 with markings and goals
 	var pw := 64.0
 	var pl := 100.0
 	for z: float in [-pl * 0.5, 0.0, pl * 0.5]:
-		_b(kit, "op", I, Vector3(c.x, 0.08, c.z + z), Vector3(pw, 0.01, 0.12), LINE)
+		_b(kit, "op", I, Vector3(c.x, 0.095, c.z + z), Vector3(pw, 0.01, 0.12), LINE)
 	for x: float in [-pw * 0.5, pw * 0.5]:
-		_b(kit, "op", I, Vector3(c.x + x, 0.08, c.z), Vector3(0.12, 0.01, pl), LINE)
+		_b(kit, "op", I, Vector3(c.x + x, 0.095, c.z), Vector3(0.12, 0.01, pl), LINE)
 	var cc_in: Array = []
 	var cc_out: Array = []
 	for k3 in range(41):
 		var a3 := TAU * float(k3) / 40.0
 		cc_in.append(Vector2(c.x + cos(a3) * 9.08, c.z + sin(a3) * 9.08))
 		cc_out.append(Vector2(c.x + cos(a3) * 9.2, c.z + sin(a3) * 9.2))
-	_strip(kit, cc_in, cc_out, 0.081, LINE)
+	_strip(kit, cc_in, cc_out, 0.096, LINE)
 	for s: float in [-1.0, 1.0]:
 		var gz := c.z + s * pl * 0.5
 		# penalty / goal boxes
-		_b(kit, "op", I, Vector3(c.x, 0.08, gz - s * 16.5), Vector3(40.3, 0.01, 0.12), LINE)
+		_b(kit, "op", I, Vector3(c.x, 0.095, gz - s * 16.5), Vector3(40.3, 0.01, 0.12), LINE)
 		for bx: float in [-20.15, 20.15]:
-			_b(kit, "op", I, Vector3(c.x + bx, 0.08, gz - s * 8.25), Vector3(0.12, 0.01, 16.5), LINE)
-		_b(kit, "op", I, Vector3(c.x, 0.08, gz - s * 5.5), Vector3(18.3, 0.01, 0.12), LINE)
+			_b(kit, "op", I, Vector3(c.x + bx, 0.095, gz - s * 8.25), Vector3(0.12, 0.01, 16.5), LINE)
+		_b(kit, "op", I, Vector3(c.x, 0.095, gz - s * 5.5), Vector3(18.3, 0.01, 0.12), LINE)
 		# goal frame + net back
 		for gx: float in [-3.66, 3.66]:
 			_b(kit, "op", I, Vector3(c.x + gx, 1.22, gz), Vector3(0.12, 2.44, 0.12), LINE)
