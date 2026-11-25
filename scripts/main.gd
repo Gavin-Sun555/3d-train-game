@@ -586,6 +586,38 @@ func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
 		if not _in_home_menu and not _is_demo_readonly and not _game_over:
 			_save_current_progress(false)
+	if what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_EXIT_TREE:
+		_release_static_caches()
+
+
+# Materials, shaders and meshes held in builders' static caches outlive the scene and would otherwise be
+# reported as leaked RIDs / ObjectDB instances when the rendering server shuts down: drop them on the way out
+static func _release_static_caches() -> void:
+	CityBuilder._curb_mat_cache = null
+	CityBuilder._sidewalk_mat_cache = null
+	CityBuilder._furn_meshes.clear()
+	JiaxingLandmarks._lawn_mat_cache = null
+	JiaxingLandmarks._jet_mat_cache = null
+	_overlay_shader = null
+	LandmarkFacades._weave_cache = null
+	PassengerSim._box_cache.clear()
+	CabTextureGen._cache.clear()
+	HumanMeshGen._cache.clear()
+	RoadSignBuilder._mat = null
+	SeattleV2Landmarks._plank_mat_cache = null
+	TrackBuilder._buffer_mat_cache.clear()
+	StorefrontBuilder._frame_mat_cache = null
+	StorefrontBuilder._glass_mat_cache = null
+	ParkLandscapeBuilder._species_cache.clear()
+	ParkLandscapeBuilder._prop_cache.clear()
+	ParkLandscapeBuilder._plant_mats.clear()
+	TramBuilder._flat_cache.clear()
+	TramBuilder._jx_mat_cache.clear()
+	TramBuilder._shape_cache.clear()
+	SchoolBuilder._tree_kit.clear()
+	StationBuilder._jx_mat_cache.clear()
+	StationBuilder._mat_cache.clear()
+	TrafficSim._sig_box_cache.clear()
 
 
 func _setup_font() -> void:

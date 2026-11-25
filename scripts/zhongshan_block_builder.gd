@@ -241,7 +241,7 @@ static func _cinema(parent: Node3D, lights: Array) -> void:
 	BatchKit.label(parent, xf, "中 山 影 院", Vector3(17.25, 16.6, 0.0), PI * 0.5, 120, 0.03, Color(0.10, 0.16, 0.36))
 	# fan of planted terraces stepping down to the corner plaza, stairs up the middle
 	var cen := Vector3(18.0, 0.0, 0.0)
-	var a0 := deg_to_rad(-62.0)
+	var a0 := deg_to_rad(-45.0) # the north edge stays clear of the 中山东路 pavement and tram stop
 	var a1 := deg_to_rad(62.0)
 	for k in 6:
 		var r := 6.6 + 3.6 * float(k)
@@ -264,7 +264,6 @@ static func _cinema(parent: Node3D, lights: Array) -> void:
 			var rr := 4.0 + 3.0 * float(k)
 			var hh := 5.6 - 0.72 * float(k)
 			BatchKit.box("op", xf, cen + d3 * (rr + 1.5) + Vector3(0.0, hh * 0.5, 0.0), Vector3(3.05, hh, 0.7), white, -am2)
-			BatchKit.box("gl", xf, cen + d3 * (rr + 1.5) + Vector3(0.0, hh + 0.5, 0.0), Vector3(3.05, 1.0, 0.08), Color(0.70, 0.80, 0.84), -am2)
 	# round corner plaza: paving rings and the music-staff railing
 	var pc := Vector3(39.0, 0.0, 3.0)
 	BatchKit.prism("op", xf, pc, 17.0, 17.0, 0.07, 28, Color(0.62, 0.59, 0.54))
@@ -489,8 +488,6 @@ static func _cifi(parent: Node3D, lights: Array) -> void:
 	BatchKit.entrance(parent, xf, Vector3(0.0, 0.0, 23.85), Vector3.FORWARD, 9.0)
 	for wx: float in [-38.0, 38.0]:
 		BatchKit.entrance(parent, xf, Vector3(wx, 0.0, -44.15), Vector3.FORWARD, 6.0, "旭辉广场")
-		BatchKit.shop_signs(parent, xf, Vector3(wx - 15.0, 0.0, -44.7), Vector3(wx - 5.0, 0.0, -44.7), Vector3.FORWARD, 5.0, int(wx))
-		BatchKit.shop_signs(parent, xf, Vector3(wx + 5.0, 0.0, -44.7), Vector3(wx + 15.0, 0.0, -44.7), Vector3.FORWARD, 5.0, int(wx) + 3)
 	# shop boards over the ground-floor glazing inside the forecourt, in front of the copper fins
 	BatchKit.shop_signs(parent, xf, Vector3(-21.0, 0.0, -42.0), Vector3(-21.0, 0.0, 16.0), Vector3.RIGHT, 3.9, 13)
 	BatchKit.shop_signs(parent, xf, Vector3(21.0, 0.0, 16.0), Vector3(21.0, 0.0, -42.0), Vector3.LEFT, 3.9, 17)
