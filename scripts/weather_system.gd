@@ -110,8 +110,13 @@ func _build_rain_particles() -> void:
 	add_child(_rain_particles)
 
 
+# read by TransitSim for rain on the tram windscreens
+static var raining := false
+
+
 func set_weather(mode: int) -> void:
 	weather_mode = clampi(mode, 0, 2)
+	raining = weather_mode == WeatherType.RAINY
 	if _rain_particles == null:
 		return
 	var is_rain := (weather_mode == WeatherType.RAINY)

@@ -2444,6 +2444,26 @@ func _step_tram_physics_and_doors(
 		var norm_n := float(notch - NOTCH_NEUTRAL) / 4.0
 		lever.rotation.x = lerpf(lever.rotation.x, deg_to_rad(-norm_n * 30.0), minf(1.0, dt * 15.0))
 
+	# Rain on the windscreens: water builds up over ~25 s in the rain and stays until the wipers run (an AI
+	# driver switches them on in the rain; driving yourself, it is the WIPER switch in the cab)
+	var raining := WeatherSystem.raining
+	var wipe_eff := bool(tr.get("wipers_on", false)) or (raining and not _is_player_manual)
+	tr["wipers_eff"] = wipe_eff
+	var wet := float(tr.get("glass_wet", 0.0))
+	var wet_target := (0.10 if wipe_eff else 1.0) if raining else 0.0
+	var wet_rate := (1.0 / 25.0) if wet_target > wet else ((1.0 / 1.2) if wipe_eff else (1.0 / 40.0))
+	wet = move_toward(wet, wet_target, dt * wet_rate)
+	tr["glass_wet"] = wet
+	if absf(wet - float(tr.get("glass_wet_set", -1.0))) > 0.004 or (wet > 0.0 and is_active_cam):
+		tr["glass_wet_set"] = wet
+		for cc_k: String in ["front_cab_controls", "rear_cab_controls"]:
+			var rg = (tinfo.get(cc_k, {}) as Dictionary).get("rain_glass")
+			if rg is MeshInstance3D and is_instance_valid(rg):
+				var rmat := (rg as MeshInstance3D).material_override as ShaderMaterial
+				if rmat != null:
+					rmat.set_shader_parameter("wet", wet)
+					rmat.set_shader_parameter("speed", float(tr["speed_mps"]))
+
 	if is_active_cam:
 		var cab_ctrls: Dictionary = tinfo.get("cab_controls", {})
 		var mfd_lbl: Label3D = cab_ctrls.get("mfd_label")
@@ -2462,7 +2482,7 @@ func _step_tram_physics_and_doors(
 			d_mat.emission_energy_multiplier = 2.0 if door_r > 0.1 else 0.75
 		var wipers: Array = cab_ctrls.get("wipers", [])
 		if not wipers.is_empty():
-			var w_ang := sin(_anim_time * 4.2) * deg_to_rad(32.0) if bool(tr.get("wipers_on", false)) else 0.0
+			var w_ang := sin(_anim_time * 4.2) * deg_to_rad(32.0) if bool(tr.get("wipers_eff", false)) else 0.0
 			for wp in wipers:
 				if is_instance_valid(wp):
 					(wp as Node3D).rotation.z = lerpf((wp as Node3D).rotation.z, w_ang, minf(1.0, dt * 12.0))

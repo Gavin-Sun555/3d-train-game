@@ -913,6 +913,81 @@ static func animate_onboard_passengers(
 
 # Rear-view camera position on a mirror pod / housing: looks back along the car (+z of the section), a little
 # outward and down. CabMirrors (main) puts its low-res mirror cameras here.
+# A tram rear-view mirror: an arm swept out from the cab corner and a tall housing whose mirror glass looks back
+# along the car (side = -1 left, +1 right)
+static func _build_rear_mirror(sec: Node3D, side: float, root: Vector3, reach: float, mat_shell: Material, mat_dark: Material) -> void:
+	var arm := _add_box(sec, Vector3(reach, 0.045, 0.045), root + Vector3(side * reach * 0.5, 0.0, 0.0), mat_dark)
+	arm.rotation.z = side * deg_to_rad(-8.0)
+	var drop := _add_box(sec, Vector3(0.04, 0.16, 0.04), root + Vector3(side * reach, -0.09, 0.0), mat_dark)
+	drop.rotation.z = 0.0
+	var hc := root + Vector3(side * (reach + 0.02), -0.24, 0.02)
+	_add_box(sec, Vector3(0.20, 0.40, 0.11), hc, mat_shell)
+	var glass := _add_box(sec, Vector3(0.17, 0.36, 0.012), hc + Vector3(0.0, 0.0, 0.058), _mirror_glass_mat())
+	glass.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+
+static var _mirror_glass_cache: StandardMaterial3D = null
+static func _mirror_glass_mat() -> StandardMaterial3D:
+	if _mirror_glass_cache == null:
+		_mirror_glass_cache = StandardMaterial3D.new()
+		_mirror_glass_cache.albedo_color = Color(0.62, 0.68, 0.74)
+		_mirror_glass_cache.metallic = 1.0
+		_mirror_glass_cache.roughness = 0.06
+	return _mirror_glass_cache
+
+
+const RAIN_GLASS_SHADER := """
+shader_type spatial;
+render_mode unshaded, cull_disabled, depth_draw_never, blend_mix, shadows_disabled;
+uniform float wet : hint_range(0.0, 1.0) = 0.0;
+uniform float speed = 0.0;
+varying vec2 v_uv;
+void vertex() { v_uv = UV; }
+float h21(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+void fragment() {
+	float a = 0.0;
+	float hl = 0.0;
+	for (int layer = 0; layer < 3; layer++) {
+		float sc = layer == 0 ? 1.0 : (layer == 1 ? 1.8 : 3.1);
+		vec2 g = v_uv * vec2(18.0, 9.0) * sc + float(layer) * 7.13;
+		vec2 id = floor(g);
+		vec2 f = fract(g) - 0.5;
+		float r = h21(id);
+		if (r < wet * (0.55 + 0.15 * float(layer))) {
+			vec2 c = vec2(h21(id + 3.1) - 0.5, h21(id + 7.7) - 0.5) * 0.55;
+			// some drops run down the glass (and are blown sideways and up at speed)
+			if (h21(id + 2.2) > 0.72) {
+				float slide = fract(TIME * (0.06 + 0.10 * h21(id + 1.3)) + r);
+				c.y += (slide - 0.5) * 0.8 - min(speed, 15.0) * 0.012;
+			}
+			float rad = mix(0.12, 0.28, h21(id + 5.5));
+			vec2 d = (f - c) * vec2(1.0, 0.8);
+			float dist = length(d);
+			float drop = smoothstep(rad, rad * 0.55, dist);
+			a = max(a, drop);
+			hl = max(hl, drop * smoothstep(0.0, rad, -d.y * 0.8 - d.x * 0.4));
+		}
+	}
+	// thin running rivulets
+	float col = floor(v_uv.x * 46.0);
+	float riv = step(1.0 - wet * 0.30, h21(vec2(col, 3.7)))
+		* smoothstep(0.42, 0.0, abs(fract(v_uv.x * 46.0) - 0.5))
+		* (0.5 + 0.5 * sin(v_uv.y * 26.0 - TIME * 3.0 + col));
+	ALBEDO = mix(vec3(0.46, 0.52, 0.58), vec3(0.96, 0.98, 1.0), hl);
+	ALPHA = clamp(wet * 0.16 + a * 0.62 + riv * 0.16 * wet, 0.0, 0.86) * step(0.002, wet);
+}
+"""
+static var _rain_shader: Shader = null
+static func rain_glass_material() -> ShaderMaterial:
+	if _rain_shader == null:
+		_rain_shader = Shader.new()
+		_rain_shader.code = RAIN_GLASS_SHADER
+	var m := ShaderMaterial.new()
+	m.shader = _rain_shader
+	m.set_shader_parameter("wet", 0.0)
+	return m
+
+
 static func _mirror_eye(sec: Node3D, pos: Vector3, side: float) -> Node3D:
 	var eye := Node3D.new()
 	eye.name = "MirrorEye"
@@ -979,27 +1054,24 @@ static func _build_front_cab_and_nose(
 	var mirror_screens: Array = []
 	for side: float in [-1.0, 1.0]:
 		if is_nanhu:
-			# Compact white camera-mirror pod on a short arm at the cab corner (its camera feeds the cab monitors)
-			_add_box(sec, Vector3(0.16, 0.035, 0.035), Vector3(side * (hw + 0.07), 2.52, fz + 0.86), mat_dark)
-			_add_box(sec, Vector3(0.10, 0.20, 0.14), Vector3(side * (hw + 0.15), 2.46, fz + 0.86), mat_body)
-			mirror_eyes.append(_mirror_eye(sec, Vector3(side * (hw + 0.17), 2.42, fz + 0.94), side))
+			# Rear-view mirror on a swept arm at the cab corner: white housing, mirror glass facing back along the
+			# car (its camera also feeds the cab monitors)
+			_build_rear_mirror(sec, side, Vector3(side * hw, 2.50, fz + 0.86), 0.44, mat_body, mat_dark)
+			mirror_eyes.append(_mirror_eye(sec, Vector3(side * (hw + 0.44), 2.28, fz + 0.94), side))
 			continue
 		var pil := _add_box(sec, Vector3(0.13, 1.66, 0.20), Vector3(side * (hw - 0.08), 2.04, fz + 0.34), mat_dark)
 		pil.rotation.x = deg_to_rad(slope_deg)
 		_add_box(sec, Vector3(0.04, 1.38, 1.02), Vector3(side * (hw - 0.04), 1.97, fz + 0.92), mat_cab_glass)
 		_add_box(sec, Vector3(0.08, 0.74, 1.04), Vector3(side * (hw - 0.04), 0.92, fz + 0.92), mat_body)
-		# Exterior mirror arm & housing
-		_add_box(sec, Vector3(0.18, 0.04, 0.04), Vector3(side * (hw + 0.08), 2.34, fz + 0.44), mat_dark)
-		_add_box(sec, Vector3(0.14, 0.34, 0.08), Vector3(side * (hw + 0.16), 2.22, fz + 0.44), mat_dark)
-		mirror_eyes.append(_mirror_eye(sec, Vector3(side * (hw + 0.17), 2.22, fz + 0.50), side))
+		# Exterior rear-view mirror on its arm
+		_build_rear_mirror(sec, side, Vector3(side * hw, 2.40, fz + 0.44), 0.40, mat_dark if vintage else mat_body, mat_dark)
+		mirror_eyes.append(_mirror_eye(sec, Vector3(side * (hw + 0.40), 2.18, fz + 0.52), side))
 
 	if not is_nanhu:
 		# Sloped panoramic front windshield + sun visor + wiper
 		var ws := _add_box(sec, Vector3(width - 0.24, 1.52, 0.035), Vector3(0.0, 2.02, fz + 0.32), mat_cab_glass)
 		ws.rotation.x = deg_to_rad(slope_deg)
 		_add_box(sec, Vector3(width - 0.36, 0.14, 0.05), Vector3(0.0, 2.62, fz + 0.42), mat_dark)
-		var wiper := _add_box(sec, Vector3(0.56, 0.024, 0.024), Vector3(0.16, 1.38, fz + 0.21), mat_dark)
-		wiper.rotation.z = deg_to_rad(13.0)
 		# Front destination matrix board
 		_add_box(sec, Vector3(width * 0.64, 0.24, 0.08), Vector3(0.0, 2.82, fz + 0.16), mat_led_sign)
 
@@ -1087,14 +1159,24 @@ static func _build_front_cab_and_nose(
 			mirror_screens.append(scr)
 			_add_box(sec, Vector3(0.04, 0.10, 0.04), mpos + Vector3(0.0, -0.13, 0.02), mat_dark)
 	else:
-		wiper_l_piv.position = Vector3(-0.32, 1.30, fz + 0.21)
-		sec.add_child(wiper_l_piv)
-		var wiper2 := _add_box(wiper_l_piv, Vector3(0.56, 0.022, 0.022), Vector3(0.18, 0.08, 0.0), mat_dark)
-		wiper2.rotation.z = deg_to_rad(-11.0)
-		wiper_r_piv.position = Vector3(0.18, 1.30, fz + 0.21)
-		sec.add_child(wiper_r_piv)
-		var wiper1 := _add_box(wiper_r_piv, Vector3(0.56, 0.022, 0.022), Vector3(0.18, 0.08, 0.0), mat_dark)
-		wiper1.rotation.z = deg_to_rad(11.0)
+		# Pivots on the outside of the raked windscreen just above its lower edge, tilted into the glass so the
+		# rotation.z sweep stays on it; arm + blade parked along the bottom of the screen
+		var th := deg_to_rad(slope_deg)
+		var g_c := Vector3(0.0, 2.02, fz + 0.32)
+		var g_up := Vector3(0.0, cos(th), sin(th))
+		var g_out := Vector3(0.0, sin(th), -cos(th))
+		var arm_l := clampf(width * 0.24, 0.48, 0.70)
+		for wi in range(2):
+			var piv := wiper_l_piv if wi == 0 else wiper_r_piv
+			var px := -width * 0.30 if wi == 0 else width * 0.06
+			piv.position = g_c + Vector3(px, 0.0, 0.0) - g_up * 0.66 + g_out * 0.045
+			piv.rotation.x = th
+			sec.add_child(piv)
+			_add_box(piv, Vector3(0.05, 0.05, 0.04), Vector3.ZERO, mat_dark)
+			var arm := _add_box(piv, Vector3(arm_l, 0.022, 0.022), Vector3(arm_l * 0.5, 0.02, 0.0), mat_dark)
+			arm.rotation.z = deg_to_rad(6.0)
+			var blade := _add_box(piv, Vector3(arm_l * 0.92, 0.016, 0.03), Vector3(arm_l * 0.54, 0.06, -0.012), _make_mat(Color(0.05, 0.05, 0.06), 0.6, 0.0))
+			blade.rotation.z = deg_to_rad(6.0)
 
 	# Crisp UNSHADED OLED-style instrument materials (zero sun washout, deep dark-navy contrast!)
 	var mat_mfd := StandardMaterial3D.new()
@@ -1293,11 +1375,46 @@ static func _build_front_cab_and_nose(
 	cab_anchor.position = Vector3(0.0, 1.88, fz + 1.18)
 	sec.add_child(cab_anchor)
 
+	# Rain on the windscreen: a thin film of drops and runs on the outside of the glass (driven by TransitSim:
+	# it builds up in the rain and the wipers clear it)
+	var rain_glass := MeshInstance3D.new()
+	rain_glass.name = "RainOnGlass"
+	if is_nanhu:
+		var rst := SurfaceTool.new()
+		rst.begin(Mesh.PRIMITIVE_TRIANGLES)
+		var nu := 14
+		var ny := 6
+		for iu in range(nu):
+			for iy in range(ny):
+				var quad_pts: Array[Vector3] = []
+				var quad_uv: Array[Vector2] = []
+				for c: Vector2i in [Vector2i(0, 0), Vector2i(1, 0), Vector2i(1, 1), Vector2i(0, 1)]:
+					var uu := lerpf(-0.90, 0.90, float(iu + c.x) / float(nu))
+					var yy := lerpf(2.40, 1.34, float(iy + c.y) / float(ny))
+					quad_pts.append(_jx_point(hw, fz, uu, yy) + Vector3(0.0, 0.0, -0.012))
+					quad_uv.append(Vector2(float(iu + c.x) / float(nu), float(iy + c.y) / float(ny)))
+				for k: int in [0, 1, 2, 0, 2, 3]:
+					rst.set_uv(quad_uv[k])
+					rst.add_vertex(quad_pts[k])
+		rain_glass.mesh = rst.commit()
+	else:
+		var rq := QuadMesh.new()
+		rq.size = Vector2(width - 0.30, 1.44)
+		rain_glass.mesh = rq
+		var th_r := deg_to_rad(slope_deg)
+		var up_r := Vector3(0.0, cos(th_r), sin(th_r))
+		var out_r := Vector3(0.0, sin(th_r), -cos(th_r))
+		rain_glass.transform = Transform3D(Basis(Vector3.RIGHT, up_r, -out_r), Vector3(0.0, 2.02, fz + 0.32) + out_r * 0.022)
+	rain_glass.material_override = rain_glass_material()
+	rain_glass.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	sec.add_child(rain_glass)
+
 	return {
 		"head_spot": head_spot,
 		"cab_anchor": cab_anchor,
 		"throttle_lever": throttle_lever,
 		"cab_controls": {
+			"rain_glass": rain_glass,
 			"throttle": throttle_lever,
 			"btn_doors": btn_doors,
 			"btn_bell": btn_bell,

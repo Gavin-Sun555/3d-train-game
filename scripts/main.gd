@@ -614,6 +614,8 @@ static func _release_static_caches() -> void:
 	TramBuilder._flat_cache.clear()
 	TramBuilder._jx_mat_cache.clear()
 	TramBuilder._shape_cache.clear()
+	TramBuilder._mirror_glass_cache = null
+	TramBuilder._rain_shader = null
 	SchoolBuilder._tree_kit.clear()
 	StationBuilder._jx_mat_cache.clear()
 	StationBuilder._mat_cache.clear()

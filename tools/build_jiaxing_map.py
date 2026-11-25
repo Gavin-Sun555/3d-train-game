@@ -2831,7 +2831,6 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
 
     print(f"Street furniture: {len(d_cws)} crosswalks, {len(d_lamps)} lamps, {len(d_trees)} trees, {len(storefronts)} storefronts "
           f"({sum(1 for s in storefronts if s.get('tier') == 'chain')} chain + {sum(1 for s in storefronts if s.get('tier') == 'local')} local)")
-    roads.extend(dict(r) for r in SIDE_ROADS)
     return roads, d_cws, d_lamps, d_trees, storefronts
 
 
@@ -2855,7 +2854,7 @@ CLASS_SECTION = {
 
 
 FANGGONG_X = 1440.0   # 纺工路 crosses 中环南路 here (game x)
-SIDE_ROADS = []        # synthetic 辅路 strips (drawn and kept clear of buildings; not part of the traffic graph)
+SIDE_ROADS = []        # (kept empty: the 辅路 are real graph edges now)
 
 
 def zhonghuan_side_roads(graph_edges):
@@ -2863,6 +2862,8 @@ def zhonghuan_side_roads(graph_edges):
     (Amap satellite at 嘉兴一中). OSM has no separate ways for them, so they are laid parallel to each main
     half, stopping short of the junction mouths."""
     SIDE_ROADS.clear()
+    new_edges = []
+    next_id = max(e["id"] for e in graph_edges) + 1
     halves = [e for e in graph_edges if e.get("name") == "中环南路" and not e.get("hide_road")
               and not e.get("underground") and not (int(e.get("lanes_f", 1)) and int(e.get("lanes_b", 1)))]
     for e in halves:
@@ -2905,8 +2906,18 @@ def zhonghuan_side_roads(graph_edges):
         if len(pts) < 2:
             continue
         lf = 1 if int(e.get("lanes_f", 0)) else 0
-        SIDE_ROADS.append({"name": "中环南路辅路", "width": 5.5, "lanes_f": lf, "lanes_b": 1 - lf, "layer": 0, "pts": pts})
-    print(f"中环南路: {len(SIDE_ROADS)} one-lane 辅路 strips laid east of 纺工路")
+        # a real street in the traffic graph: it leaves the main road's junction, swings out behind the planted
+        # strip, runs alongside and rejoins at the next junction (same nodes, same direction as its main half)
+        full = [list(p[0])] + pts + [list(p[-1])]
+        new_edges.append({
+            "id": next_id, "a": e["a"], "b": e["b"], "name": "中环南路辅路", "width": 5.5,
+            "lanes_f": lf, "lanes_b": 1 - lf, "divided": False, "cls": "service",
+            "length": round(sum(math.hypot(full[k + 1][0] - full[k][0], full[k + 1][1] - full[k][1]) for k in range(len(full) - 1)), 1),
+            "pts": full, "side_road": True,
+        })
+        next_id += 1
+    graph_edges.extend(new_edges)
+    print(f"中环南路: {len(new_edges)} one-lane 辅路 laid east of 纺工路 as streets of the traffic graph")
 
 
 def unwedge_twin_carriageways(graph_edges, graph_nodes):
