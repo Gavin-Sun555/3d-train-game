@@ -437,12 +437,20 @@ static func _build_roads_and_curbs(
 		var layer: int = int(r.get("layer", 0))
 		var y_base: float = 0.042 + float(maxi(0, layer)) * 5.2
 		var y := y_base
+		# distance along the whole street: dashes keep their 3 m on / 6.2 m off rhythm across the short pieces a
+		# street is cut into on terrain (laid out per piece, any piece under ~10 m had no dashes at all)
+		var along := 0.0
+		var road_len := 0.0
+		for li in range(raw_pts.size() - 1):
+			road_len += Vector2(float(raw_pts[li][0]), float(raw_pts[li][1])).distance_to(Vector2(float(raw_pts[li + 1][0]), float(raw_pts[li + 1][1])))
 
 		for i in range(raw_pts.size() - 1):
 			var a := Vector2(float(raw_pts[i][0]), float(raw_pts[i][1]))
 			var b := Vector2(float(raw_pts[i + 1][0]), float(raw_pts[i + 1][1]))
 			var d := b - a
 			var seg_len := d.length()
+			var seg_s0 := along
+			along += seg_len
 			if seg_len < 0.25:
 				continue
 			var dir := d / seg_len
@@ -543,10 +551,11 @@ static func _build_roads_and_curbs(
 							_add_flat_quad(yellow_st, Vector3(c0.x - cn.x, ym2, c0.y - cn.y), Vector3(c0.x + cn.x, ym2, c0.y + cn.y),
 								Vector3(c1.x + cn.x, ym2, c1.y + cn.y), Vector3(c1.x - cn.x, ym2, c1.y - cn.y), Vector3.UP)
 							has_yellow = true
-						if lf >= 2 and hw >= 10.5:
-							dash_offs.append(6.90)
-						if lb >= 2 and hw >= 10.5:
-							dash_offs.append(-6.90)
+						# dividers between the motor lanes beside the tramway (first lane centred 5.35 m out as TrafficSim drives it, 3.3 m lanes)
+						for k in range(1, lf):
+							dash_offs.append(5.35 + 1.65 + float(k - 1) * 3.3)
+						for k in range(1, lb):
+							dash_offs.append(-(5.35 + 1.65 + float(k - 1) * 3.3))
 					else:
 						var med := 0.8 if lf + lb >= 4 else 0.0
 						for yo: float in ([-med - 0.1, med + 0.1] if med > 0.0 else [-0.12, 0.12]):
@@ -567,22 +576,19 @@ static func _build_roads_and_curbs(
 				for off: float in dash_offs:
 					if absf(off) > hw - 1.0:
 						continue
-					var sd := 3.5
-					while sd + 3.0 < seg_len - 3.0:
-						var d0 := a + dir * sd + nrm1 * off
-						var d1 := a + dir * (sd + 3.0) + nrm1 * off
+					for iv: Vector2 in _dash_spans(seg_s0, seg_len, road_len):
+						var d0 := a + dir * iv.x + nrm1 * off
+						var d1 := a + dir * iv.y + nrm1 * off
 						var dn := nrm1 * 0.07
 						_add_flat_quad(mark_st, Vector3(d0.x - dn.x, ym2, d0.y - dn.y), Vector3(d0.x + dn.x, ym2, d0.y + dn.y),
 							Vector3(d1.x + dn.x, ym2, d1.y + dn.y), Vector3(d1.x - dn.x, ym2, d1.y - dn.y), Vector3.UP)
 						has_mark = true
-						sd += 9.2
 				# Bike-lane strips & divider stripes are built track-aware inside _build_kerbs() -> _build_bike_lane_strips()
 				# so green non-motorized lanes NEVER overlap laid tram tracks!
 				continue
-			var s := 3.5
-			while s + 3.0 < seg_len - 3.0:
-				var m0 := a + dir * s
-				var m1 := a + dir * (s + 3.0)
+			for iv: Vector2 in _dash_spans(seg_s0, seg_len, road_len):
+				var m0 := a + dir * iv.x
+				var m1 := a + dir * iv.y
 				var mn := Vector2(-dir.y, dir.x) * 0.08
 				var ym := y + 0.016
 				_add_flat_quad(
@@ -594,7 +600,6 @@ static func _build_roads_and_curbs(
 					Vector3.UP
 				)
 				has_mark = true
-				s += 9.2
 
 	# Weathered thermoplastic crosswalk zebra stripes
 	for cw in crosswalks:
@@ -2718,6 +2723,24 @@ const KERB_H := 0.15
 const ROAD_Y := 0.042
 
 
+# Dash pieces (local start, end along this segment) of a 3 m-on / 6.2 m-off line measured along the whole street,
+# kept 3.5 m off its ends (junctions)
+static func _dash_spans(seg_s0: float, seg_len: float, road_len: float) -> Array[Vector2]:
+	var out: Array[Vector2] = []
+	var k := maxi(0, int(floor((seg_s0 - 3.5) / 9.2)))
+	while true:
+		var ds := 3.5 + float(k) * 9.2
+		var de := ds + 3.0
+		if ds >= seg_s0 + seg_len or de > road_len - 3.5:
+			break
+		var lo := maxf(ds, seg_s0) - seg_s0
+		var hi := minf(de, seg_s0 + seg_len) - seg_s0
+		if hi - lo > 0.15:
+			out.append(Vector2(lo, hi))
+		k += 1
+	return out
+
+
 static func _build_kerbs(parent: Node3D, roads: Array, bays: Array, road_mat: Material, clear_idx: Dictionary = {}) -> void:
 	parent.set_meta("last_bays_sig", _station_bays_sig(bays) + "#" + _tile_clear_sig(parent, clear_idx))
 	var has_tracks := not clear_idx.is_empty() and not (clear_idx.get("grid", {}) as Dictionary).is_empty()
@@ -3352,11 +3375,12 @@ static func _other_road_clear(seg_grid: Dictionary, p: Vector2, own_road: int) -
 	return best
 
 
-# Gap (m) to a parallel carriageway just beyond this kerb (a divided road's other half), or -1 if none within 14 m
+# Gap (m) to a parallel carriageway just beyond this kerb (a divided road's other half), or -1 if none within 26 m
+# (主辅路 rings like 中环路 keep a 10-25 m planted median between their two directions)
 static func _median_gap(seg_grid: Dictionary, kerb: Vector2, out_n: Vector2, along: Vector2, own_road: int) -> float:
 	var o := out_n.normalized()
 	var d := 0.5
-	while d <= 14.0:
+	while d <= 26.0:
 		var pt := kerb + o * d
 		var gk := Vector2i(int(floor(pt.x / 20.0)), int(floor(pt.y / 20.0)))
 		for sg: Array in seg_grid.get(gk, []):

@@ -360,12 +360,13 @@ static func _hanlin_residence_and_skybridge(parent: Node3D, hanlin_center: Vecto
 		[Vector3(-54.0, 0.0, 106.0), Vector3(56.0, 46.0, 16.0)],
 		[Vector3(42.0, 0.0, 106.0), Vector3(54.0, 40.0, 16.0)],
 	]
+	# The tower bodies themselves are ordinary city buildings (tools/build_jiaxing_map.py HANLIN_TOWERS) so they
+	# get the residential facade with window grids and balconies; only the stone podium band, the slate eaves
+	# cap and the lit lobby stay here
 	for tw: Array in towers:
 		var tp: Vector3 = tw[0]
 		var ts: Vector3 = tw[1]
-		_box(hl, ts, tp + Vector3(0.0, ts.y * 0.5, 0.0), cream)
 		_box(hl, Vector3(ts.x + 0.5, 4.2, ts.z + 0.5), tp + Vector3(0.0, 2.1, 0.0), stone_dk)
-		_box(hl, Vector3(ts.x - 4.0, ts.y - 6.0, ts.z + 0.4), tp + Vector3(0.0, ts.y * 0.5 + 1.5, 0.0), glass)
 		_box(hl, Vector3(ts.x + 2.4, 2.2, ts.z + 2.4), tp + Vector3(0.0, ts.y + 1.1, 0.0), roof_slate)
 		_box(hl, Vector3(ts.x * 0.42, 3.0, ts.z * 0.65), tp + Vector3(0.0, ts.y + 3.2, 0.0), cream)
 		_box(hl, Vector3(8.0, 3.2, 0.4), tp + Vector3(0.0, 1.8, ts.z * 0.5 + 0.35), glow, 0.0, 0.0, 0.0, false)

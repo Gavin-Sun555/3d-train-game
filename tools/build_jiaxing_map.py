@@ -2333,13 +2333,17 @@ def build_road_signs(edges, nodes_list):
                 plate_seen.add((node, nm))
                 side0 = 1.0 if (node % 2 == 0) else -1.0
                 spot = None
-                for dist_p in (11.0, 15.0, 20.0, 26.0, 33.0, 40.0):
+                # stand past the crossing street's kerb and its crosswalk (7.8 m out, kerb ramps cut back there),
+                # on the pavement proper, not in the junction mouth
+                cross_hw = max([float(e2["width"]) * 0.5 for (e2, *_r) in lg if e2 is not e] or [4.0])
+                d0 = max(11.0, cross_hw + 7.5)
+                for dist_p in (d0, d0 + 5.0, d0 + 11.0, d0 + 18.0, d0 + 26.0):
                     if dist_p > L - 4.0:
                         break
                     p, d = along(seq, dist_p)
                     rx, ry = -d[1], d[0]
                     for side in (side0, -side0):
-                        for off in (1.3, 2.4):
+                        for off in (1.8, 2.8):
                             qx = p[0] + rx * side * (w * 0.5 + off)
                             qy = p[1] + ry * side * (w * 0.5 + off)
                             if clear_of_roads(qx, qy, 0.7):
@@ -2508,7 +2512,14 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
                     if point_in_poly(tx, ty, ir) and rng_tr.random() < 0.85:
                         trees.append((tx, ty))
 
-    # Deduplicate lamps, crosswalks, and clearance-check trees
+    # Deduplicate lamps, crosswalks, and clearance-check trees (a lamp set out from one street must not stand on
+    # the asphalt of another: a wide crossing street, a widened boulevard beside a side road)
+    def lamp_clear(lp):
+        for (ax, ay, bx, by, hw) in road_grid.query(lp[0] - 30, lp[1] - 30, lp[0] + 30, lp[1] + 30):
+            if seg_dist(lp[0], lp[1], ax, ay, bx, by)[0] < hw + 0.6:
+                return False
+        return True
+    lamps = [lp for lp in lamps if lamp_clear(lp)]
     seen_l, d_lamps = set(), []
     for lp in lamps:
         c = (int(lp[0] // 22), int(lp[1] // 22))
@@ -2832,12 +2843,83 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
 # 主干道 ~32-45 m (3+3 lanes, bike lanes, 机非隔离带), 次干道 ~24-28 m (2+2), 支路 ~16-18 m (1+1 + bike lanes).
 # OSM rarely tags lanes in Jiaxing, so most of these came through as 8.8 m two-lane streets.
 # (two-way width, lanes per direction, one-way carriageway width, one-way lanes)
+ROAD_RANK = {"trunk": 5, "primary": 4, "secondary": 3, "tertiary": 2, "unclassified": 1, "residential": 1}
+
 CLASS_SECTION = {
     "trunk": (36.0, 3, 14.5, 3),
     "primary": (34.0, 3, 14.5, 3),
     "secondary": (26.0, 2, 11.5, 2),
     "tertiary": (17.0, 1, 8.8, 2),
 }
+
+
+def unwedge_twin_carriageways(graph_edges, graph_nodes):
+    """The two one-way halves of a divided road snapped to one junction node leave it as a long thin wedge (each
+    half heads straight for the other half's far end). Give each half a bend 30-35 m out so it runs parallel at its
+    own side of the road for the rest of the way; the convergence then sits inside the junction."""
+    npos = {n["id"]: n["pos"] for n in graph_nodes}
+    at = defaultdict(list)
+    for e in graph_edges:
+        if e.get("hide_road") or e.get("underground") or len(e["pts"]) < 2:
+            continue
+        if int(e.get("lanes_f", 1)) and int(e.get("lanes_b", 1)):
+            continue
+        at[e["a"]].append(e)
+        at[e["b"]].append(e)
+    n_fix = 0
+    done = set()
+    for nid, es in at.items():
+        for i in range(len(es)):
+            for j in range(i + 1, len(es)):
+                e1, e2 = es[i], es[j]
+                if e1["name"] != e2["name"] or (e1["id"], nid) in done or (e2["id"], nid) in done:
+                    continue
+                seqs = []
+                for e in (e1, e2):
+                    seqs.append(e["pts"] if e["a"] == nid else list(reversed(e["pts"])))
+                o = seqs[0][0]
+                f1, f2 = seqs[0][-1], seqs[1][-1]
+                L1 = math.hypot(f1[0] - o[0], f1[1] - o[1])
+                L2 = math.hypot(f2[0] - o[0], f2[1] - o[1])
+                if L1 < 90.0 or L2 < 90.0:
+                    continue
+                d1 = ((f1[0] - o[0]) / L1, (f1[1] - o[1]) / L1)
+                d2 = ((f2[0] - o[0]) / L2, (f2[1] - o[1]) / L2)
+                if d1[0] * d2[0] + d1[1] * d2[1] < math.cos(math.radians(22.0)):
+                    continue
+                ax_, ay_ = d1[0] + d2[0], d1[1] + d2[1]
+                al = math.hypot(ax_, ay_)
+                ax_, ay_ = ax_ / al, ay_ / al
+                nx_, ny_ = -ay_, ax_
+                # lateral offset of each half, read 60 % of the way out
+                lats = []
+                for sq, Lf in ((seqs[0], L1), (seqs[1], L2)):
+                    tgt = 0.6 * Lf
+                    acc = 0.0
+                    q = sq[-1]
+                    for k in range(len(sq) - 1):
+                        sl = math.hypot(sq[k + 1][0] - sq[k][0], sq[k + 1][1] - sq[k][1])
+                        if acc + sl >= tgt and sl > 1e-6:
+                            t = (tgt - acc) / sl
+                            q = (sq[k][0] + (sq[k + 1][0] - sq[k][0]) * t, sq[k][1] + (sq[k + 1][1] - sq[k][1]) * t)
+                            break
+                        acc += sl
+                    lats.append((q[0] - o[0]) * nx_ + (q[1] - o[1]) * ny_)
+                if abs(lats[0] - lats[1]) < 9.0:
+                    continue
+                for e, sq, lat in ((e1, seqs[0], lats[0]), (e2, seqs[1], lats[1])):
+                    s_b = 32.0
+                    bend = [round(o[0] + ax_ * s_b + nx_ * lat, 2), round(o[1] + ay_ * s_b + ny_ * lat, 2)]
+                    # drop interior points that the bend overtakes (within 40 m of the node)
+                    rest = [q for q in sq[1:] if math.hypot(q[0] - o[0], q[1] - o[1]) > 40.0]
+                    if not rest:
+                        rest = [sq[-1]]
+                    new = [list(o), bend] + [list(q) for q in rest]
+                    e["pts"] = new if e["a"] == nid else list(reversed(new))
+                    e["length"] = round(sum(math.hypot(new[k + 1][0] - new[k][0], new[k + 1][1] - new[k][1]) for k in range(len(new) - 1)), 1)
+                    done.add((e["id"], nid))
+                n_fix += 1
+    print(f"Twin carriageways: {n_fix} junction wedges opened so both halves run side by side")
 
 
 def widen_roads_by_class(graph_edges, nodes, ways):
@@ -2867,6 +2949,7 @@ def widen_roads_by_class(graph_edges, nodes, ways):
 
     def parallel_gap(e):
         p = e["pts"]
+        Ltot = sum(math.hypot(p[k + 1][0] - p[k][0], p[k + 1][1] - p[k][1]) for k in range(len(p) - 1))
         gap = 99.0
         for k in range(len(p) - 1):
             ax, ay = p[k]
@@ -2879,9 +2962,16 @@ def widen_roads_by_class(graph_edges, nodes, ways):
             while t < L - 5.0:
                 qx, qy = ax + ux * t, ay + uy * t
                 dend = min(math.hypot(qx - p[0][0], qy - p[0][1]), math.hypot(qx - p[-1][0], qy - p[-1][1]))
-                if dend > 18.0:
+                # twin carriageways snapped to a shared junction converge into a wedge there: judge their gap on
+                # the middle of the street, the wedge lies inside the junction
+                if dend > max(18.0, 0.28 * Ltot):
                     for (oid, ox0, oy0, ox1, oy1) in sgrid.query(qx - 25, qy - 25, qx + 25, qy + 25):
                         if oid == e["id"]:
+                            continue
+                        oe = by_id.get(oid)
+                        # a lesser street alongside (its own 辅路 / a lane) gives way later, it does not cap this one
+                        if oe is None or oe.get("hide_road") or \
+                                ROAD_RANK.get(oe.get("cls", ""), 0) < ROAD_RANK.get(e.get("cls", ""), 0):
                             continue
                         oL = math.hypot(ox1 - ox0, oy1 - oy0)
                         if oL < 1.0 or abs(ux * (ox1 - ox0) / oL + uy * (oy1 - oy0) / oL) < 0.9:
@@ -2890,9 +2980,66 @@ def widen_roads_by_class(graph_edges, nodes, ways):
                 t += 10.0
         return gap
 
+    # Twin one-way carriageways the junction clustering laid (almost) on top of each other are one street: the
+    # straighter twin becomes the two-way street and takes the class's two-way section; the other stays in the
+    # graph for connectivity (its junction may carry a side street) but is not drawn
+    n_merge = 0
+    by_id = {e["id"]: e for e in graph_edges}
+    one_way0 = {e["id"] for e in graph_edges if not (int(e.get("lanes_f", 1)) and int(e.get("lanes_b", 1)))}
+    ow_lanes = {e["id"]: int(e.get("lanes_f", 0)) + int(e.get("lanes_b", 0)) for e in graph_edges if e["id"] in one_way0}
+    for e in graph_edges:
+        if e.get("hide_road") or e.get("underground") or e.get("cls") not in CLASS_SECTION:
+            continue
+        if e["id"] not in one_way0:
+            continue
+        p = e["pts"]
+        Le = sum(math.hypot(p[k + 1][0] - p[k][0], p[k + 1][1] - p[k][1]) for k in range(len(p) - 1))
+        if Le < 30.0:
+            continue
+        sm = []
+        for k in range(len(p) - 1):
+            ax, ay = p[k]
+            bx, by = p[k + 1]
+            L = math.hypot(bx - ax, by - ay)
+            t = 4.0
+            while t < L:
+                sm.append((ax + (bx - ax) * t / L, ay + (by - ay) * t / L))
+                t += 8.0
+        cnt = defaultdict(int)
+        for (qx, qy) in sm:
+            for (oid, ox0, oy0, ox1, oy1) in sgrid.query(qx - 9, qy - 9, qx + 9, qy + 9):
+                o = by_id.get(oid)
+                if o is None or oid == e["id"] or o.get("hide_road") or o.get("name") != e.get("name"):
+                    continue
+                if oid not in one_way0:
+                    continue
+                if seg_dist(qx, qy, ox0, oy0, ox1, oy1)[0] < 8.0:
+                    cnt[oid] += 1
+        twins = [oid for oid, c in cnt.items() if c >= 0.7 * len(sm)]
+        if not twins:
+            continue
+        # e lies along its twin(s) for most of its length: e is the one drawn only if it is the straighter / longer
+        tw = max(twins, key=lambda oid: by_id[oid]["length"])
+        o = by_id[tw]
+        keep, drop = (e, o) if len(e["pts"]) <= len(o["pts"]) and e["length"] >= 0.8 * o["length"] else (o, e)
+        if keep.get("hide_road") or drop.get("hide_road"):
+            continue
+        n_dir = max(ow_lanes.get(e["id"], 1), ow_lanes.get(o["id"], 1), 2)
+        keep["lanes_f"] = max(int(keep.get("lanes_f", 0)), n_dir)
+        keep["lanes_b"] = max(int(keep.get("lanes_b", 0)), n_dir)
+        keep["divided"] = True
+        drop["hide_road"] = True
+        n_merge += 1
+
     n_w = 0
     for e in graph_edges:
+        if e.get("hide_road"):
+            continue
         sec = CLASS_SECTION.get(e.get("cls", ""))
+        if e.get("name", "").startswith("中环"):
+            # 中环路 is a 主辅路 ring: per direction two main lanes plus two side-road lanes (~17 m), with a planted
+            # median between the two directions (Amap satellite)
+            sec = (44.0, 4, 17.0, 4)
         if sec is None or e.get("underground") or e.get("tunnel"):
             continue
         lf, lb = int(e.get("lanes_f", 1)), int(e.get("lanes_b", 1))
@@ -2920,6 +3067,8 @@ def widen_roads_by_class(graph_edges, nodes, ways):
                     if along_ok:
                         clear = d
         w1 = min(want, max(w0, 2.0 * (clear - 3.0)))
+        if e.get("name", "").startswith("中环"):
+            w1 = want  # the ring road has priority: whatever stands in its real section yields
         if w1 > w0 + 0.5:
             gap = parallel_gap(e)
             if gap < 60.0:
@@ -2938,7 +3087,16 @@ def widen_roads_by_class(graph_edges, nodes, ways):
             e["lanes_f"] = max(lf, n)
             e["lanes_b"] = max(lb, n)
         n_w += 1
-    print(f"Road class cross-sections: widened {n_w} street edges (kerbs kept 3 m off mapped buildings)")
+    for e in graph_edges:
+        lf, lb = int(e.get("lanes_f", 1)), int(e.get("lanes_b", 1))
+        w = float(e["width"])
+        if lf and lb:
+            cap = max(1, int((w * 0.5 - 1.5) / 3.3))
+        else:
+            cap = max(1, int((w - 2.2) / 3.3))
+        e["lanes_f"] = min(lf, cap) if lf else 0
+        e["lanes_b"] = min(lb, cap) if lb else 0
+    print(f"Road class cross-sections: {n_merge} stacked twin carriageways drawn as one street, widened {n_w} street edges (kerbs kept 3 m off mapped buildings)")
 
 
 def resolve_parallel_overlaps(graph_edges, t1_ids):
@@ -2957,6 +3115,7 @@ def resolve_parallel_overlaps(graph_edges, t1_ids):
 
     def samples(e):
         p = e["pts"]
+        Ltot = sum(math.hypot(p[k + 1][0] - p[k][0], p[k + 1][1] - p[k][1]) for k in range(len(p) - 1))
         out = []
         for k in range(len(p) - 1):
             ax, ay = p[k]
@@ -2968,7 +3127,7 @@ def resolve_parallel_overlaps(graph_edges, t1_ids):
             t = 4.0
             while t < L - 4.0:
                 qx, qy = ax + ux * t, ay + uy * t
-                if min(math.hypot(qx - p[0][0], qy - p[0][1]), math.hypot(qx - p[-1][0], qy - p[-1][1])) > 22.0:
+                if min(math.hypot(qx - p[0][0], qy - p[0][1]), math.hypot(qx - p[-1][0], qy - p[-1][1])) > max(22.0, 0.28 * Ltot):
                     out.append((qx, qy, ux, uy))
                 t += 8.0
         return out
@@ -2985,6 +3144,7 @@ def resolve_parallel_overlaps(graph_edges, t1_ids):
             hw = float(e["width"]) * 0.5
             in_t1 = 0
             worst = {}
+            inside_n = defaultdict(int)
             for (qx, qy, ux, uy) in sm:
                 for (oid, ox0, oy0, ox1, oy1) in sgrid.query(qx - 30, qy - 30, qx + 30, qy + 30):
                     o = by_id.get(oid)
@@ -3000,6 +3160,8 @@ def resolve_parallel_overlaps(graph_edges, t1_ids):
                             in_t1 += 1
                             break
                         worst[oid] = min(worst.get(oid, 99.0), d)
+                        if d < ohw:
+                            inside_n[oid] += 1
             if in_t1 >= max(2, int(0.5 * len(sm))):
                 e["hide_road"] = True
                 e["lanes_f"] = 0
@@ -3008,17 +3170,34 @@ def resolve_parallel_overlaps(graph_edges, t1_ids):
                 changed = True
                 continue
             for oid, d in worst.items():
+                if e.get("hide_road"):
+                    break
                 o = by_id[oid]
+                if o.get("hide_road"):
+                    continue
                 ohw = float(o["width"]) * 0.5
                 hw = float(e["width"]) * 0.5
                 excess = hw + ohw - (d - 0.4)
                 if excess <= 0.0:
                     continue
-                # take it out of the wider street (never below a single 5.5 m lane), T1 boulevards stay as they are
-                if oid not in t1_ids and ohw > hw:
+                # the more important street keeps its section (a main road over its own 辅路 / a lane beside
+                # it); between equals the wider one gives way; T1 boulevards stay as they are; never below 5.5 m
+                re_, ro_ = ROAD_RANK.get(e.get("cls", ""), 0), ROAD_RANK.get(o.get("cls", ""), 0)
+                if oid in t1_ids or ro_ > re_:
+                    tgt, other_hw = e, ohw
+                elif re_ > ro_:
+                    tgt, other_hw = o, hw
+                elif ohw > hw:
                     tgt, other_hw = o, hw
                 else:
                     tgt, other_hw = e, ohw
+                # a lesser strip whose centreline mostly runs inside the bigger street is that street's side lane:
+                # stop drawing it (it stays in the graph, so its junctions and traffic keep working)
+                if tgt is e and inside_n[oid] >= max(2, int(0.6 * len(sm))) and (re_ < ro_ or oid in t1_ids):
+                    e["hide_road"] = True
+                    n_hide += 1
+                    changed = True
+                    break
                 new_w = max(5.5, 2.0 * (d - 0.4 - other_hw))
                 if new_w < float(tgt["width"]) - 0.05:
                     tgt["width"] = round(new_w, 1)
@@ -3039,6 +3218,31 @@ def resolve_parallel_overlaps(graph_edges, t1_ids):
     print(f"Parallel carriageways: {n_hide} twin strips inside T1 boulevards hidden, {n_narrow} narrowed to stop sharing asphalt")
 
 
+# 瀚林府邸's eight 新中式 slab towers (local centre, size x/height/z in the landmark's frame, rotated by its angle):
+# kept in step with JiaxingCivicLandmarks._hanlin_residence_and_skybridge, which draws only their podium and cap
+HANLIN_TOWERS = [
+    ((-56.0, -96.0), (52.0, 38.0, 16.0)), ((38.0, -96.0), (54.0, 42.0, 16.0)),
+    ((-56.0, -48.0), (52.0, 34.0, 16.0)), ((46.0, -48.0), (48.0, 36.0, 16.0)),
+    ((-58.0, 56.0), (54.0, 44.0, 16.0)), ((40.0, 58.0), (52.0, 38.0, 16.0)),
+    ((-54.0, 106.0), (56.0, 46.0, 16.0)), ((42.0, 106.0), (54.0, 40.0, 16.0)),
+]
+HANLIN_ANGLE = 0.203
+
+
+def hanlin_tower_buildings():
+    out = []
+    ca, sa = math.cos(HANLIN_ANGLE), math.sin(HANLIN_ANGLE)
+    for (lx, lz), (sx, sh, sz) in HANLIN_TOWERS:
+        corners = []
+        for (cx, cz) in ((-sx / 2, -sz / 2), (sx / 2, -sz / 2), (sx / 2, sz / 2), (-sx / 2, sz / 2)):
+            x, z = lx + cx, lz + cz
+            # Godot rotation.y: x' = x cos + z sin, z' = -x sin + z cos
+            corners.append(rnd((HANLIN_POS[0] + x * ca + z * sa, HANLIN_POS[1] - x * sa + z * ca)))
+        out.append({"pts": corners, "h": sh, "kind": "apartments", "style": 2, "colour": "#e6ddcf", "trim": "#5a4c3c",
+                    "name": "瀚林府邸"})
+    return out
+
+
 def apply_t1_survey(blds, storefronts, road_grid, bld_grid):
     """Street-level corrections along T1 from the map survey (tools/jiaxing_t1_survey.py): campuses that the
     generator filled with towers come back down to office / hospital height, frontages that are really walls get
@@ -3046,6 +3250,16 @@ def apply_t1_survey(blds, storefronts, road_grid, bld_grid):
     small two-storey podium is added on that kerb when the generator left the frontage empty)."""
     def cen(pts):
         return sum(q[0] for q in pts) / len(pts), sum(q[1] for q in pts) / len(pts)
+
+    # Style 3 is the small-house facade (one or two storeys, no window grid): a 5-7 storey walk-up given it renders
+    # as a blank box, so anything taller than a house uses the residential facade (pitched roofs are kept)
+    blds.extend(hanlin_tower_buildings())
+    n_house = 0
+    for b in blds:
+        if int(b.get("style", 2)) == 3 and float(b["h"]) > 11.5:
+            b["style"] = 2
+            n_house += 1
+    print(f"Walk-up facades: {n_house} multi-storey blocks moved off the small-house facade")
 
     n_campus = 0
     for b in blds:
@@ -4068,6 +4282,7 @@ def main():
         park_grid.add(pp, min(xs), min(ys), max(xs), max(ys))
 
     graph_nodes, graph_edges = build_street_graph(nodes, ways, water_grid, park_grid, rail_grid)
+    unwedge_twin_carriageways(graph_edges, graph_nodes)
     widen_roads_by_class(graph_edges, nodes, ways)
     # 由拳路 × 庆丰路: the divided 由拳路 carriageways and the kinked 庆丰路 leg met in a skewed five-way Y where T1
     # turns south; rebuilt as a square crossroads (the parallel one-way carriageway is folded into the main road)

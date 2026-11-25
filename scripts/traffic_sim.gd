@@ -451,7 +451,7 @@ func _ensure_signal_visuals(sig: Dictionary, graph: NetworkGraph, sig_holder: No
 			var ceid := int(nb_c["edge_id"])
 			if ceid != eid:
 				cross_hw = maxf(cross_hw, float(graph.edges[ceid]["width"]) * 0.5)
-		var pull_back := clampf(cross_hw + 4.8, 9.5, minf(16.0, elen_sig * 0.44))
+		var pull_back := clampf(cross_hw + 4.8, 9.5, minf(27.0, elen_sig * 0.44))
 		var mast_lat := maxf(road_hw + 1.15, track_sep + 3.45)
 
 		var pole_pos := j_pos3 - app_fwd * pull_back + app_right * mast_lat
@@ -463,7 +463,7 @@ func _ensure_signal_visuals(sig: Dictionary, graph: NetworkGraph, sig_holder: No
 				heads_b.append(m_head)
 
 		if edge_has_track:
-			var tram_pb := clampf(cross_hw + 5.8, 10.2, minf(16.8, elen_sig * 0.46))
+			var tram_pb := clampf(cross_hw + 5.8, 10.2, minf(27.8, elen_sig * 0.46))
 			var track_lat := track_sep + 1.92
 			var chosen_pos := j_pos3 - app_fwd * tram_pb + app_right * track_lat
 			var hit_t := graph.find_closest_edge(Vector2(chosen_pos.x, chosen_pos.z), 4.0, true)

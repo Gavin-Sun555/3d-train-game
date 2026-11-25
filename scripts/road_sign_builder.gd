@@ -114,8 +114,9 @@ static func _guide_sign(st: SurfaceTool, labels: Node3D, pos: Vector3, travel: V
 	_box(st, Transform3D(Basis.IDENTITY, pos + Vector3(0.0, pole_h * 0.5, 0.0)), Vector3(0.30, pole_h, 0.30), POLE)
 	_box(st, Transform3D(Basis.IDENTITY, pos + Vector3(0.0, 0.25, 0.0)), Vector3(0.62, 0.5, 0.62), POLE.darkened(0.15))
 	var arm_basis := Basis(inward, Vector3.UP, inward.cross(Vector3.UP))
+	# the arms carry the panel from behind (drivers see the blue face, the steel stays on the back)
 	for ay: float in [pcy + ph * 0.5 - 0.25, pcy - ph * 0.5 + 0.35]:
-		_box(st, Transform3D(arm_basis, pos + inward * (arm_l * 0.5) + Vector3(0.0, ay, 0.0) - travel * 0.18), Vector3(arm_l, 0.16, 0.16), POLE)
+		_box(st, Transform3D(arm_basis, pos + inward * (arm_l * 0.5) + Vector3(0.0, ay, 0.0) + travel * 0.14), Vector3(arm_l, 0.16, 0.16), POLE)
 	_box(st, Transform3D(basis, pc), Vector3(pw, ph, 0.06), WHITE)
 	_box(st, Transform3D(basis, pc + face * 0.008), Vector3(pw - 0.12, ph - 0.12, 0.06), BLUE)
 	# lane diagram: stem from the bottom, branches to the named exits, arrowheads at their ends
