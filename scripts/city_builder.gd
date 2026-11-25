@@ -13,6 +13,7 @@ static func build_city(
 	sidewalk_mat: ShaderMaterial,
 	globe_mat: StandardMaterial3D
 ) -> Dictionary:
+	zh_water = str(map_data.get("key", "")) == "jiaxing" or str(map_data.get("name", "")).contains("嘉兴")
 	var bounds: Array = map_data.get("bounds", [-280.0, -320.0, 280.0, 320.0])
 	var cx: float = (float(bounds[0]) + float(bounds[2])) * 0.5
 	var cz: float = (float(bounds[1]) + float(bounds[3])) * 0.5
@@ -161,6 +162,9 @@ static func _clean_poly(raw_pts: Array) -> PackedVector2Array:
 	return pts
 
 
+static var zh_water := false # set for Jiaxing before its areas (core and tiles) are built
+
+
 static func _build_areas(parent: Node3D, areas: Array) -> void:
 	var buckets := {
 		"water": [],
@@ -299,6 +303,11 @@ static func _emit_area_group(
 	if node_name == "WaterAreas":
 		var wm := ShaderMaterial.new()
 		wm.shader = load("res://shaders/water_bay.gdshader") as Shader
+		if zh_water:
+			# Jiangnan canals and lakes: jade green-grey, not sea blue
+			wm.set_shader_parameter("shallow_col", Color(0.22, 0.31, 0.25))
+			wm.set_shader_parameter("deep_col", Color(0.11, 0.18, 0.15))
+			wm.set_shader_parameter("sky_col", Color(0.38, 0.44, 0.42))
 		mi.material_override = wm
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.set_meta("water_mat", wm)

@@ -1531,6 +1531,14 @@ def pitched_roof_dict(cx, cy, ang, hl, hw, shape="gabled"):
             "hl": round(hl, 2), "hw": round(hw, 2)}
 
 
+# 月河 watertown houses / alleys are handed to the dedicated Jiangnan builder (not the generic city buildings)
+YH_HOUSES = []
+YH_ALLEYS = []
+YH_SIGNS = ["五味堂江浙土菜", "小小月河楼", "嘉兴粽子博物馆", "月河茶馆", "南湖茶楼", "禾城老面馆", "江南丝绸老铺",
+            "江南茶叶茶庄", "五芳斋粽子", "文虎酱鸭", "真真老老", "三元路臭豆腐", "江南小酒馆", "清河人家", "米酒坊",
+            "月河客栈", "老街糕团", "嘉禾书局", "梅花糕", "古玩字画", "青团铺", "黄酒馆", "蓝印花布", "手工竹编"]
+
+
 def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_grid, landuse_zones, edges):
     out = []
     taken = Grid(40.0)
@@ -1920,6 +1928,7 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
                 mcx, mcy = (fa[0] + fb[0]) * 0.5, (fa[1] + fb[1]) * 0.5
                 if -905.0 <= mcx <= -375.0 and -2275.0 <= mcy <= -1845.0:
                     yh_foot_segs.append((fa[0], fa[1], fb[0], fb[1]))
+    YH_ALLEYS[:] = [[rnd((a0, a1)), rnd((b0, b1))] for (a0, a1, b0, b1) in yh_foot_segs]
     # Pass 1: Continuous wall-to-wall 1-2 story Jiangnan shop-houses directly lining every Yuehe pedestrian alley!
     for (ax, ay, bx, by) in yh_foot_segs:
         sl = math.hypot(bx - ax, by - ay)
@@ -1942,12 +1951,10 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
                 bb = (min(pxs), min(pys), max(pxs), max(pys))
                 if can_place(poly, bb, allow_in_park=False, water_margin=1.4, tight=True, allow_yuehe=True):
                     h = rng.choice([4.4, 5.2, 6.0, 6.6, 7.2])
-                    out.append({
-                        "pts": [rnd(p) for p in poly], "h": h, "kind": "house", "style": 3,
-                        "colour": rng.choice(PALETTE_JIANGNAN),
-                        "roof": pitched_roof_dict(cx, cy, ang, hl, hw, "gabled"),
-                        "roof_colour": rng.choice(["#22262e", "#262a33", "#1e222a"]),
-                    })
+                    # front faces the alley (the house stands at side * n from it)
+                    shop = rng.choice(YH_SIGNS) if rng.random() < 0.55 else ""
+                    YH_HOUSES.append({"c": rnd((cx, cy)), "a": round(ang, 4), "l": round(hl, 2), "w": round(hw, 2), "h": h,
+                                      "f": [round(-nx * side, 3), round(-ny * side, 3)], "s": shop, "g": 1 if rng.random() < 0.45 else 0})
                     taken.add((bb[0], bb[1], bb[2], bb[3], poly), *bb)
                     yuehe_cnt += 1
             s += hl * 1.92
@@ -1969,12 +1976,12 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
                 bb = (min(pxs), min(pys), max(pxs), max(pys))
                 if can_place(poly, bb, allow_in_park=False, water_margin=1.5, tight=True, allow_yuehe=True):
                     h = rng.choice([4.2, 5.0, 5.8, 6.4, 7.0])
-                    out.append({
-                        "pts": [rnd(p) for p in poly], "h": h, "kind": "house", "style": 3,
-                        "colour": rng.choice(PALETTE_JIANGNAN),
-                        "roof": pitched_roof_dict(yh_x, yh_y, ang, hl, hw, "gabled"),
-                        "roof_colour": rng.choice(["#232730", "#272b34", "#1f232b"]),
-                    })
+                    # infill courtyard houses face south (Jiangnan houses open to the south)
+                    fx, fy = -math.sin(ang), math.cos(ang)
+                    if fy < 0.0:
+                        fx, fy = -fx, -fy
+                    YH_HOUSES.append({"c": rnd((yh_x, yh_y)), "a": round(ang, 4), "l": round(hl, 2), "w": round(hw, 2), "h": h,
+                                      "f": [round(fx, 3), round(fy, 3)], "s": "", "g": 1 if rng.random() < 0.5 else 0})
                     taken.add((bb[0], bb[1], bb[2], bb[3], poly), *bb)
                     yuehe_cnt += 1
             yh_x += 9.8
@@ -3873,6 +3880,40 @@ def main():
         if not pt_in_water_m(op_cand[0], op_cand[1], 7.0):
             yh_opera_pos = op_cand
             break
+    # 月河 canal banks: water-polygon edges inside the quarter, with the direction toward the water, and whether
+    # houses stand right behind them (those stretches get the covered waterside arcade, 廊棚)
+    YH_RECT = (-905.0, -2275.0, -375.0, -1845.0)
+    yh_hgrid = Grid(30.0)
+    for hh in YH_HOUSES:
+        yh_hgrid.add(hh, hh["c"][0] - 8, hh["c"][1] - 8, hh["c"][0] + 8, hh["c"][1] + 8)
+    yh_banks = []
+    for wp in water_polys:
+        for i in range(len(wp)):
+            a = wp[i]
+            b = wp[(i + 1) % len(wp)]
+            mx, my = (a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5
+            if not (YH_RECT[0] <= mx <= YH_RECT[2] and YH_RECT[1] <= my <= YH_RECT[3]):
+                continue
+            L = math.hypot(b[0] - a[0], b[1] - a[1])
+            if L < 2.0:
+                continue
+            nx, ny = -(b[1] - a[1]) / L, (b[0] - a[0]) / L
+            if not point_in_poly(mx + nx * 0.8, my + ny * 0.8, wp):
+                nx, ny = -nx, -ny
+            if not point_in_poly(mx + nx * 0.8, my + ny * 0.8, wp):
+                continue
+            lx, ly = mx - nx * 7.0, my - ny * 7.0
+            arcade = any(math.hypot(hh["c"][0] - lx, hh["c"][1] - ly) < 7.5 for hh in yh_hgrid.query(lx - 8, ly - 8, lx + 8, ly + 8))
+            yh_banks.append({"a": rnd(a), "b": rnd(b), "w": [round(nx, 3), round(ny, 3)], "arc": arcade})
+    yh_paifang = {}
+    if YH_ALLEYS:
+        longest = max(YH_ALLEYS, key=lambda sgm: math.hypot(sgm[1][0] - sgm[0][0], sgm[1][1] - sgm[0][1]))
+        (pa0, pa1), (pb0, pb1) = longest
+        Lp = max(1e-6, math.hypot(pb0 - pa0, pb1 - pa1))
+        yh_paifang = {"pos": rnd((pa0 + (pb0 - pa0) * 4.0 / Lp, pa1 + (pb1 - pa1) * 4.0 / Lp)),
+                      "angle": round(-math.atan2(pb1 - pa1, pb0 - pa0), 4)}
+    print(f"月河: {len(YH_HOUSES)} watertown houses, {len(YH_ALLEYS)} alley segments, {len(yh_banks)} bank segments "
+          f"({sum(1 for b_ in yh_banks if b_['arc'])} with arcades)")
     yh_boats = []
     for bx, by, bang in [
         (-610.0, -2060.0, 0.25),
@@ -3900,6 +3941,10 @@ def main():
         "jiaxing_no1_school": {"pos": rnd(JIAXING_NO1_POS), "angle": 0.02},
         "hanlin_residence": {"pos": rnd(HANLIN_POS), "bridge_pos": rnd(NO1_BRIDGE_POS), "angle": 0.203},
         "yuehe_quarter": {
+            "houses": YH_HOUSES,
+            "alleys": YH_ALLEYS,
+            "banks": yh_banks,
+            "paifang": yh_paifang,
             "pos": rnd(yh_arch_pos),
             "arch_pos": rnd(yh_arch_pos),
             "opera_pos": rnd(yh_opera_pos),

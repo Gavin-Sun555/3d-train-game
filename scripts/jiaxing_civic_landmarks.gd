@@ -636,6 +636,9 @@ static func _yuehe_quarter(parent: Node3D, data: Dictionary, lights: Array) -> v
 		_sign(op, "月 河 古 戏 台", Vector3(0.0, 5.3, 4.8), 0.0, 48, 0.018, Color(0.98, 0.84, 0.34))
 		_add_light(op, Vector3(0.0, 6.5, 4.0), Color(1.0, 0.76, 0.42), 48.0, lights)
 
+	# --- B2. The watertown itself: houses, canal banks, arcades, lanes, lanterns, archway ---
+	WatertownBuilder.build(yh, data, lights)
+
 	# --- C. Classic Jiangnan Wupeng Boats (乌篷船) floating strictly inside verified real OSM canal water! ---
 	var boats: Array = data.get("boats", [])
 	for bd in boats:

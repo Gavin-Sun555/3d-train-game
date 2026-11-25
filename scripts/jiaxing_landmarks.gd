@@ -1161,27 +1161,62 @@ static func _botanical_conservatory(parent: Node3D, center: Vector3, lights: Arr
 
 
 static func _jiangnan_arch_bridge(parent: Node3D, center: Vector3, angle: float, span: float) -> void:
+	# Weathered granite stone arch bridge (月河 photos): humped deck, semicircular arch ring of voussoirs on both
+	# faces, spandrel walls down to the water, balustrade of posts and panels with a top rail
 	var br := Node3D.new()
 	br.position = center
 	br.rotation.y = angle
 	parent.add_child(br)
-
-	var stone := _mat(Color(0.82, 0.81, 0.77), 0.76, 0.0)
-	var rail := _mat(Color(0.88, 0.87, 0.83), 0.70, 0.0)
-	var segs := 10
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var stone := Color(0.64, 0.60, 0.55)
+	var stone_d := Color(0.50, 0.47, 0.43)
+	var wet := Color(0.40, 0.38, 0.35)
+	var hw := 2.5
+	var rise := clampf(span * 0.13, 1.8, 3.4)
+	var R := clampf(span * 0.24, 2.2, 5.2)
+	var segs := 14
+	var deck_y := func(u: float) -> float: return 0.55 + cos(u * PI) * rise
 	for k in range(segs):
 		var u0 := -0.5 + float(k) / float(segs)
 		var u1 := -0.5 + float(k + 1) / float(segs)
 		var um := (u0 + u1) * 0.5
-		var h0 := 0.5 + cos(u0 * PI) * 3.1
-		var h1 := 0.5 + cos(u1 * PI) * 3.1
+		var h0: float = deck_y.call(u0)
+		var h1: float = deck_y.call(u1)
 		var dx := (u1 - u0) * span
-		var dy := h1 - h0
-		var sl := sqrt(dx * dx + dy * dy) + 0.12
-		var tilt := atan2(dy, dx)
-		_add_box(br, Vector3(sl, 0.55, 5.2), Vector3(um * span, (h0 + h1) * 0.5, 0.0), stone, 0.0, tilt)
-		_add_box(br, Vector3(sl, 0.95, 0.28), Vector3(um * span, (h0 + h1) * 0.5 + 0.72, -2.45), rail, 0.0, tilt)
-		_add_box(br, Vector3(sl, 0.95, 0.28), Vector3(um * span, (h0 + h1) * 0.5 + 0.72, 2.45), rail, 0.0, tilt)
+		var tilt := atan2(h1 - h0, dx)
+		var sl := sqrt(dx * dx + (h1 - h0) * (h1 - h0)) + 0.1
+		var xf := Transform3D(Basis(Vector3(0, 0, 1), tilt), Vector3(um * span, (h0 + h1) * 0.5, 0.0))
+		RoadSignBuilder._box(st, xf, Vector3(sl, 0.5, hw * 2.0), stone)
+		# spandrel walls on both faces, open where the arch is
+		var x := um * span
+		var open_top := sqrt(maxf(0.0, R * R - x * x)) - 0.6 if absf(x) < R else -0.6
+		var wall_bot := maxf(open_top, -0.6)
+		var wall_top := (h0 + h1) * 0.5 - 0.25
+		if wall_top - wall_bot > 0.1:
+			for zf: float in [-1.0, 1.0]:
+				RoadSignBuilder._box(st, Transform3D(Basis.IDENTITY, Vector3(x, (wall_top + wall_bot) * 0.5, zf * (hw - 0.2))), Vector3(dx + 0.05, wall_top - wall_bot, 0.4), wet if wall_bot < 0.2 else stone_d)
+		# balustrade: post every segment, panel between, top rail
+		for zf2: float in [-1.0, 1.0]:
+			RoadSignBuilder._box(st, Transform3D(Basis.IDENTITY, Vector3(u0 * span, h0 + 0.65, zf2 * (hw - 0.15))), Vector3(0.24, 1.0, 0.24), stone)
+			RoadSignBuilder._box(st, xf * Transform3D(Basis.IDENTITY, Vector3(0.0, 0.55, zf2 * (hw - 0.15))), Vector3(sl - 0.25, 0.55, 0.12), stone_d)
+			RoadSignBuilder._box(st, xf * Transform3D(Basis.IDENTITY, Vector3(0.0, 0.95, zf2 * (hw - 0.15))), Vector3(sl, 0.1, 0.2), stone)
+	# arch ring (voussoirs) on both faces
+	for i in range(13):
+		var a0 := PI * (float(i) + 0.5) / 13.0
+		var p := Vector3(cos(a0) * (R + 0.25), sin(a0) * (R + 0.25) - 0.6, 0.0)
+		for zf3: float in [-1.0, 1.0]:
+			RoadSignBuilder._box(st, Transform3D(Basis(Vector3(0, 0, 1), a0 + PI * 0.5), p + Vector3(0.0, 0.0, zf3 * (hw - 0.15))), Vector3(R * PI / 13.0 + 0.05, 0.5, 0.46), stone.lightened(0.05))
+	var mi := MeshInstance3D.new()
+	mi.name = "StoneArchBridge"
+	mi.mesh = st.commit()
+	var m := StandardMaterial3D.new()
+	m.vertex_color_use_as_albedo = true
+	m.vertex_color_is_srgb = true
+	m.roughness = 0.85
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mi.material_override = m
+	br.add_child(mi)
 
 
 # =============================================================================================
