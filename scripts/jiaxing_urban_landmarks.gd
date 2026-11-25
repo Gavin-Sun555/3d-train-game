@@ -717,7 +717,7 @@ static func _cifi_plaza(parent: Node3D, center: Vector3, angle: float, lights: A
 	_box(cf, Vector3(96.0, 0.12, 68.0), Vector3(0.0, 0.06, -4.0), plaza, 0.0, 0.0, 0.0, false)
 	# Reflecting fountain basin & illuminated CIFI sculptural totem in forecourt
 	_cyl(cf, 7.5, 8.2, 0.65, Vector3(0.0, 0.35, -31.0), stone_lt, 18)
-	_cyl(cf, 6.6, 6.6, 0.15, Vector3(0.0, 0.70, -31.0), water_fnt, 18)
+	JiaxingLandmarks.add_fountain(cf, Vector3(0.0, 0.0, -31.0), 6.6, 0.71, 4.2, 10, 2.4)
 	_box(cf, Vector3(1.8, 9.5, 1.8), Vector3(24.0, 4.75, -31.0), champagne)
 	_box(cf, Vector3(2.0, 1.6, 2.0), Vector3(24.0, 8.2, -31.0), glow_amber, 0.0, 0.0, 0.0, false)
 

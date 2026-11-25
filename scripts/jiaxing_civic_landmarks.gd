@@ -436,7 +436,7 @@ static func _jiaxing_gov(parent: Node3D, center: Vector3, angle: float, lights: 
 
 	# Citizen Square reflecting fountain basin & ceremonial flagpole
 	_cyl(gv, 14.5, 15.0, 0.65, Vector3(0.0, 0.34, -64.0), stone_base, 24)
-	_cyl(gv, 13.4, 13.4, 0.52, Vector3(0.0, 0.42, -64.0), water, 24)
+	JiaxingLandmarks.add_fountain(gv, Vector3(0.0, 0.0, -64.0), 13.4, 0.70, 8.5, 12, 4.2)
 	_cyl(gv, 0.14, 0.24, 24.0, Vector3(0.0, 12.0, -48.0), _mat(Color(0.86, 0.88, 0.90), 0.25, 0.8), 10)
 	_box(gv, Vector3(4.2, 2.6, 0.1), Vector3(2.1, 22.2, -48.0), emblem)
 	_add_light(gv, Vector3(0.0, 18.0, -40.0), Color(1.0, 0.90, 0.72), 62.0, lights)
@@ -453,174 +453,7 @@ static func _jiaxing_no1_school(parent: Node3D, center: Vector3, angle: float, l
 	sc.position = center
 	sc.rotation.y = angle
 	parent.add_child(sc)
-
-	var brick := _mat(Color(0.60, 0.30, 0.23), 0.78)
-	var cream := _mat(Color(0.90, 0.87, 0.82), 0.74)
-	var warm_stone := _mat(Color(0.79, 0.77, 0.73), 0.80)
-	var roof_dark := _mat(Color(0.24, 0.26, 0.30), 0.58, 0.10)
-	var roof_white := _mat(Color(0.92, 0.94, 0.96), 0.42, 0.12)
-	var glass := _glass(Color(0.28, 0.46, 0.60), 0.64)
-	var lawn := _mat(Color(0.24, 0.46, 0.22), 0.92)
-	var tree_dark := _mat(Color(0.18, 0.38, 0.18), 0.88)
-	var tree_mid := _mat(Color(0.24, 0.46, 0.21), 0.86)
-	var trunk := _mat(Color(0.32, 0.24, 0.17), 0.88)
-	var pond_mat := _mat(Color(0.16, 0.38, 0.44), 0.22, 0.15)
-	var track_red := _mat(Color(0.72, 0.23, 0.18), 0.86)
-	var pitch_green := _mat(Color(0.20, 0.50, 0.20), 0.88)
-	var court_red := _mat(Color(0.68, 0.30, 0.24), 0.86)
-	var court_green := _mat(Color(0.22, 0.48, 0.32), 0.86)
-	var line_white := _mat(Color(0.95, 0.96, 0.95), 0.70)
-	var fence_iron := _mat(Color(0.22, 0.24, 0.27), 0.48, 0.55)
-	var clock_face := _emissive(Color(1.0, 0.96, 0.84), 1.3)
-
-	# --- A. Full Campus Ground Lawn, Ceremonial Plazas, Walkways & Perimeter School Fence ---
-	# Campus bounds: local x in [-210 .. +210] (420m E-W), z in [-196 .. +196] (392m N-S)
-	_box(sc, Vector3(416.0, 0.04, 388.0), Vector3(0.0, 0.02, 0.0), lawn, 0.0, 0.0, 0.0, false)
-	# West-Gate ceremonial entry spine + main north-south academic plaza (matching white paved T-plaza in satellite view)
-	_box(sc, Vector3(112.0, 0.06, 26.0), Vector3(-156.0, 0.04, -34.0), warm_stone, 0.0, 0.0, 0.0, false)
-	_box(sc, Vector3(26.0, 0.06, 140.0), Vector3(-124.0, 0.04, -84.0), warm_stone, 0.0, 0.0, 0.0, false)
-	# Internal paved campus ring roads & east-west avenue
-	_box(sc, Vector3(370.0, 0.055, 10.0), Vector3(0.0, 0.035, -34.0), warm_stone, 0.0, 0.0, 0.0, false)
-	_box(sc, Vector3(10.0, 0.055, 360.0), Vector3(-28.0, 0.035, 0.0), warm_stone, 0.0, 0.0, 0.0, false)
-	_box(sc, Vector3(10.0, 0.055, 290.0), Vector3(60.0, 0.035, -20.0), warm_stone, 0.0, 0.0, 0.0, false)
-
-	# Perimeter masonry plinth + wrought-iron school fence with openings for West, North & South Gates
-	for z_w: float in [-194.0, 194.0]:
-		_box(sc, Vector3(160.0, 1.8, 0.55), Vector3(-128.0, 0.9, z_w), cream, 0.0, 0.0, 0.0, false)
-		_box(sc, Vector3(220.0, 1.8, 0.55), Vector3(96.0, 0.9, z_w), cream, 0.0, 0.0, 0.0, false)
-	# West perimeter wall facing 纺工路 (leaving wide 36m grand entrance opening at z = -34!)
-	_box(sc, Vector3(0.65, 2.0, 140.0), Vector3(-208.0, 1.0, -124.0), cream, 0.0, 0.0, 0.0, false)
-	_box(sc, Vector3(0.65, 2.0, 206.0), Vector3(-208.0, 1.0, 91.0), cream, 0.0, 0.0, 0.0, false)
-	_box(sc, Vector3(0.55, 1.8, 388.0), Vector3(208.0, 0.9, 0.0), cream, 0.0, 0.0, 0.0, false)
-
-	# --- B. Authentic Main West Gate (嘉兴一中 · 西门 facing 纺工路 & Tram T1 嘉兴一中站!), North Gate & South Gate ---
-	# 1) Grand West Gate (西门) at x = -208, z = -34 facing WEST (-X) directly toward 纺工路
-	_box(sc, Vector3(4.8, 1.1, 34.0), Vector3(-207.0, 8.2, -34.0), cream)
-	_box(sc, Vector3(6.2, 0.75, 36.5), Vector3(-207.0, 9.0, -34.0), roof_dark)
-	for gz_p: float in [-49.0, -40.5, -27.5, -19.0]:
-		_box(sc, Vector3(3.2, 8.2, 2.4), Vector3(-207.0, 4.1, gz_p), brick)
-		_box(sc, Vector3(3.6, 0.7, 2.8), Vector3(-207.0, 7.6, gz_p), cream)
-	# Flanking curved stone sign wall & guardrooms at West Gate
-	_box(sc, Vector3(4.6, 3.8, 9.5), Vector3(-204.0, 1.9, -54.5), cream)
-	_box(sc, Vector3(5.2, 0.5, 10.2), Vector3(-204.0, 4.0, -54.5), roof_dark)
-	_box(sc, Vector3(4.6, 3.8, 9.5), Vector3(-204.0, 1.9, -13.5), cream)
-	_box(sc, Vector3(5.2, 0.5, 10.2), Vector3(-204.0, 4.0, -13.5), roof_dark)
-	_box(sc, Vector3(0.4, 2.1, 13.0), Vector3(-207.5, 1.1, -34.0), fence_iron, 0.0, 0.0, 0.0, false)
-	_sign(sc, "浙江省嘉兴市第一中学", Vector3(-209.6, 8.3, -34.0), -PI * 0.5, 86, 0.032, Color(0.95, 0.80, 0.22))
-	_sign(sc, "JIAXING NO.1 HIGH SCHOOL", Vector3(-209.6, 6.9, -34.0), -PI * 0.5, 42, 0.024, Color(0.95, 0.96, 0.98))
-	# 2) North Gate (北门) at x = -30, z = -194 facing NORTH (-Z)
-	_box(sc, Vector3(24.0, 0.85, 3.8), Vector3(-30.0, 6.8, -194.0), cream)
-	_box(sc, Vector3(26.0, 0.6, 4.6), Vector3(-30.0, 7.4, -194.0), roof_dark)
-	for gx_n: float in [-40.0, -20.0]:
-		_box(sc, Vector3(2.4, 6.8, 3.2), Vector3(gx_n, 3.4, -194.0), brick)
-	_sign(sc, "嘉兴一中 · 北门", Vector3(-30.0, 7.0, -196.2), PI, 64, 0.025, Color(0.95, 0.82, 0.28))
-	# 3) South Gate (南门) at x = -28, z = +194 facing SOUTH (+Z) onto 中环南路
-	_box(sc, Vector3(24.0, 0.85, 3.8), Vector3(-28.0, 6.8, 194.0), cream)
-	_box(sc, Vector3(26.0, 0.6, 4.6), Vector3(-28.0, 7.4, 194.0), roof_dark)
-	for gx_s: float in [-38.0, -18.0]:
-		_box(sc, Vector3(2.4, 6.8, 3.2), Vector3(gx_s, 3.4, 194.0), brick)
-	_sign(sc, "嘉兴一中 · 南门", Vector3(-28.0, 7.0, 196.2), 0.0, 64, 0.025, Color(0.95, 0.82, 0.28))
-
-	# --- C. NW & North-Central Academic Teaching Courtyards & Library/Clocktower (matching top-left of satellite) ---
-	# North-West long main teaching block (x = -132, z = -152)
-	_box(sc, Vector3(114.0, 16.0, 20.0), Vector3(-132.0, 8.0, -152.0), cream)
-	_box(sc, Vector3(114.6, 3.6, 20.4), Vector3(-132.0, 1.8, -152.0), brick)
-	_box(sc, Vector3(116.5, 2.2, 22.5), Vector3(-132.0, 17.1, -152.0), roof_dark)
-	# Flanking west & central academic courtyard wings around the West Gate plaza
-	_box(sc, Vector3(58.0, 14.5, 18.0), Vector3(-164.0, 7.25, -88.0), cream)
-	_box(sc, Vector3(60.0, 2.0, 20.0), Vector3(-164.0, 15.5, -88.0), roof_dark)
-	_box(sc, Vector3(56.0, 14.5, 18.0), Vector3(-162.0, 7.25, -2.0), cream)
-	_box(sc, Vector3(58.0, 2.0, 20.0), Vector3(-162.0, 15.5, -2.0), roof_dark)
-	# Central Auditorium & Library Complex (x = -82, z = -108) + Century Clocktower (百年一中钟楼)
-	_box(sc, Vector3(44.0, 15.0, 34.0), Vector3(-82.0, 7.5, -112.0), brick)
-	_box(sc, Vector3(46.5, 2.4, 36.5), Vector3(-82.0, 16.2, -112.0), roof_dark)
-	_box(sc, Vector3(48.0, 14.0, 42.0), Vector3(-8.0, 7.0, -118.0), cream)
-	_box(sc, Vector3(51.0, 2.6, 45.0), Vector3(-8.0, 15.2, -118.0), roof_dark)
-	_box(sc, Vector3(14.0, 28.0, 14.0), Vector3(-8.0, 14.0, -118.0), brick)
-	_box(sc, Vector3(15.2, 1.1, 15.2), Vector3(-8.0, 25.0, -118.0), cream)
-	_cyl(sc, 2.1, 2.1, 0.35, Vector3(-15.1, 22.4, -118.0), clock_face, 16, Vector3(0.0, 0.0, PI * 0.5))
-	_cyl(sc, 2.1, 2.1, 0.35, Vector3(-8.0, 22.4, -110.9), clock_face, 16, Vector3(PI * 0.5, 0.0, 0.0))
-	_cyl(sc, 0.5, 9.6, 5.8, Vector3(-8.0, 30.8, -118.0), roof_dark, 4, Vector3(0.0, PI * 0.25, 0.0))
-
-	# South-West Teaching & Science Courtyard Complex (x = -126, z = +34..+86, matching satellite middle-left!)
-	_box(sc, Vector3(110.0, 15.0, 18.0), Vector3(-130.0, 7.5, 22.0), cream)
-	_box(sc, Vector3(112.0, 2.0, 20.0), Vector3(-130.0, 16.0, 22.0), roof_dark)
-	_box(sc, Vector3(92.0, 14.5, 18.0), Vector3(-124.0, 7.25, 68.0), cream)
-	_box(sc, Vector3(94.0, 2.0, 20.0), Vector3(-124.0, 15.5, 68.0), roof_dark)
-	# Courtyard connector wing & garden rotunda
-	_box(sc, Vector3(24.0, 12.5, 36.0), Vector3(-62.0, 6.25, 48.0), brick)
-	_box(sc, Vector3(26.5, 2.0, 38.5), Vector3(-62.0, 13.5, 48.0), roof_dark)
-	_box(sc, Vector3(44.0, 0.07, 22.0), Vector3(-132.0, 0.04, 45.0), warm_stone, 0.0, 0.0, 0.0, false)
-
-	# --- D. NE Quadrant: 3 Parallel Student Dormitory & Canteen Blocks (matching top-right of satellite!) ---
-	for dz_i in range(3):
-		var dz_pos := -162.0 + float(dz_i) * 44.0
-		var d_len := 134.0 if dz_i < 2 else 112.0
-		var dx_pos := 124.0 if dz_i < 2 else 134.0
-		_box(sc, Vector3(d_len, 16.5, 16.5), Vector3(dx_pos, 8.25, dz_pos), cream)
-		_box(sc, Vector3(d_len + 0.5, 3.2, 16.9), Vector3(dx_pos, 1.6, dz_pos), brick)
-		_box(sc, Vector3(d_len + 2.5, 2.0, 18.8), Vector3(dx_pos, 17.5, dz_pos), roof_dark)
-		_box(sc, Vector3(18.0, 13.5, 17.2), Vector3(dx_pos, 8.5, dz_pos), glass)
-	# Dining Hall & Student Activity Center south of the dorms
-	_box(sc, Vector3(68.0, 11.5, 24.0), Vector3(148.0, 5.75, -36.0), brick)
-	_box(sc, Vector3(70.5, 1.8, 26.5), Vector3(148.0, 12.4, -36.0), roof_dark)
-
-	# --- E. Central Campus Woodland Garden & Pond (x = 8, z = -10..+68, matching lush green heart!) ---
-	_cyl(sc, 22.0, 23.0, 0.08, Vector3(8.0, 0.05, 22.0), pond_mat, 16)
-	for ti in range(28):
-		var tx := -42.0 + float(ti % 7) * 16.5 + (6.0 if (ti / 7) % 2 == 1 else 0.0)
-		var tz := -22.0 + float(ti / 7) * 26.0
-		if Vector2(tx - 8.0, tz - 22.0).length() < 23.5:
-			continue
-		ParkLandscapeBuilder.plant_tree(sc, Vector3(tx, 0.0, tz), 1, 1.05, ParkLandscapeBuilder.CAMPHOR if (ti % 2 == 0) else ParkLandscapeBuilder.CAMPHOR_LT)
-	# Entrance avenue trees along 纺工路 & 中环南路
-	for at_z: float in [-175.0, -145.0, -115.0, -85.0, 12.0, 48.0, 88.0, 128.0, 168.0]:
-		ParkLandscapeBuilder.plant_tree(sc, Vector3(-200.0, 0.0, at_z), 1, 1.05, ParkLandscapeBuilder.CAMPHOR_LT)
-
-	# --- F. South-Central Iconic White-Roofed Indoor Gymnasium + 6 Outdoor Basketball/Tennis Courts ---
-	# Iconic bright white vaulted-roof gymnasium (x = -126, z = +134, unmistakably visible in satellite bottom-left!)
-	_box(sc, Vector3(64.0, 12.5, 52.0), Vector3(-126.0, 6.25, 134.0), cream)
-	_box(sc, Vector3(66.0, 2.4, 54.0), Vector3(-126.0, 13.7, 134.0), roof_white)
-	for rib_x: float in [-150.0, -138.0, -126.0, -114.0, -102.0]:
-		_box(sc, Vector3(1.6, 1.8, 55.0), Vector3(rib_x, 15.2, 134.0), roof_white)
-	# Adjacent Aquatic / Multi-Purpose Sports Hall with rooftop terracotta court (x = -68, z = +134)
-	_box(sc, Vector3(36.0, 9.0, 52.0), Vector3(-68.0, 4.5, 134.0), cream)
-	_box(sc, Vector3(32.0, 0.2, 22.0), Vector3(-68.0, 9.15, 118.0), court_red, 0.0, 0.0, 0.0, false)
-	_box(sc, Vector3(32.0, 0.2, 22.0), Vector3(-68.0, 9.15, 148.0), roof_white, 0.0, 0.0, 0.0, false)
-	# 6 Outdoor Basketball & Tennis Courts (2 rows x 3 columns, x in [-26 .. +46], z in [+102 .. +166])
-	for ci in range(3):
-		for cj in range(2):
-			var cx_c := -14.0 + float(ci) * 26.0
-			var cz_c := 118.0 + float(cj) * 36.0
-			_box(sc, Vector3(22.0, 0.08, 32.0), Vector3(cx_c, 0.05, cz_c), court_green, 0.0, 0.0, 0.0, false)
-			_box(sc, Vector3(17.5, 0.09, 28.0), Vector3(cx_c, 0.06, cz_c), court_red, 0.0, 0.0, 0.0, false)
-			_box(sc, Vector3(17.5, 0.10, 0.28), Vector3(cx_c, 0.07, cz_c), line_white, 0.0, 0.0, 0.0, false)
-
-	# --- G. SE Quadrant: Standard 400m Red Athletics Running Track & Football Stadium (matching satellite bottom-right!) ---
-	var sx := 130.0
-	var sz := 92.0
-	_box(sc, Vector3(76.0, 0.08, 108.0), Vector3(sx, 0.05, sz), track_red, 0.0, 0.0, 0.0, false)
-	_cyl(sc, 38.0, 38.0, 0.08, Vector3(sx, 0.05, sz - 54.0), track_red, 22)
-	_cyl(sc, 38.0, 38.0, 0.08, Vector3(sx, 0.05, sz + 54.0), track_red, 22)
-	# Football pitch + crisp white touchlines & penalty boxes
-	_box(sc, Vector3(56.0, 0.09, 98.0), Vector3(sx, 0.06, sz), pitch_green, 0.0, 0.0, 0.0, false)
-	_box(sc, Vector3(54.0, 0.10, 0.38), Vector3(sx, 0.07, sz), line_white, 0.0, 0.0, 0.0, false)
-	_box(sc, Vector3(0.38, 0.10, 96.0), Vector3(sx - 27.0, 0.07, sz), line_white, 0.0, 0.0, 0.0, false)
-	_box(sc, Vector3(0.38, 0.10, 96.0), Vector3(sx + 27.0, 0.07, sz), line_white, 0.0, 0.0, 0.0, false)
-	_box(sc, Vector3(54.0, 0.10, 0.38), Vector3(sx, 0.07, sz - 48.0), line_white, 0.0, 0.0, 0.0, false)
-	_box(sc, Vector3(54.0, 0.10, 0.38), Vector3(sx, 0.07, sz + 48.0), line_white, 0.0, 0.0, 0.0, false)
-	# Covered West Grandstand Bleachers + 4 Stadium Floodlight Masts
-	_box(sc, Vector3(11.0, 6.2, 74.0), Vector3(sx - 46.5, 3.1, sz), cream)
-	_box(sc, Vector3(16.5, 0.65, 78.0), Vector3(sx - 44.0, 11.4, sz), roof_white, 0.0, -0.14)
-	for fl_x: float in [sx - 42.0, sx + 42.0]:
-		for fl_z: float in [sz - 58.0, sz + 58.0]:
-			_cyl(sc, 0.25, 0.42, 22.0, Vector3(fl_x, 11.0, fl_z), fence_iron, 8)
-			_box(sc, Vector3(3.6, 1.4, 1.0), Vector3(fl_x, 22.2, fl_z), clock_face, 0.0, 0.0, 0.0, false)
-
-	_add_light(sc, Vector3(-206.0, 12.0, -34.0), Color(1.0, 0.90, 0.72), 62.0, lights)
-	_add_light(sc, Vector3(-28.0, 11.0, 192.0), Color(1.0, 0.90, 0.72), 48.0, lights)
-	# Wide paved West Gate forecourt apron extending cleanly westward to 纺工路 east sidewalk (zero visual gap!)
-	_box(sc, Vector3(48.0, 0.055, 220.0), Vector3(-232.0, 0.028, 12.0), warm_stone, 0.0, 0.0, 0.0, false)
+	SchoolBuilder.build(sc, lights)
 
 
 # =============================================================================================
@@ -635,7 +468,7 @@ static func _hanlin_residence_and_skybridge(parent: Node3D, hanlin_center: Vecto
 	var bronze := _mat(Color(0.40, 0.32, 0.22), 0.38, 0.62)
 	var glass := _glass(Color(0.28, 0.50, 0.66), 0.56)
 	var glow := _emissive(Color(1.0, 0.90, 0.64), 1.5)
-	var lawn := _mat(Color(0.22, 0.46, 0.22), 0.90)
+	var lawn := JiaxingLandmarks.lawn_material()
 	var water := _mat(Color(0.16, 0.44, 0.54), 0.16, 0.20)
 	var trunk := _mat(Color(0.30, 0.22, 0.16), 0.88)
 	var foliage := _mat(Color(0.19, 0.44, 0.20), 0.85)

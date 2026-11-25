@@ -86,6 +86,95 @@ static func _glass(col: Color, alpha: float = 0.62) -> StandardMaterial3D:
 	return m
 
 
+# Shared textured lawn for hand-built plaza / campus lawns (park lawn shader, no depth push: these are raised
+# planting beds, not ground sheets)
+static var _lawn_mat_cache: ShaderMaterial = null
+
+
+static func lawn_material() -> ShaderMaterial:
+	if _lawn_mat_cache == null:
+		_lawn_mat_cache = ShaderMaterial.new()
+		_lawn_mat_cache.shader = load("res://shaders/park_lawn.gdshader") as Shader
+		_lawn_mat_cache.set_shader_parameter("depth_push", 0.0)
+		_lawn_mat_cache.set_shader_parameter("depth_slope", 0.0)
+	return _lawn_mat_cache
+
+
+# Fountain / reflecting pool: animated water surface (its mesh sits at the basin centre) and, with jets, a ring of
+# water jets whose landing points foam and ripple; a smaller inner ring of low bubblers; water_y = surface height
+static var _jet_mat_cache: ShaderMaterial = null
+
+
+static func add_fountain(parent: Node3D, center: Vector3, radius: float, water_y: float, jet_ring: float = -1.0, jets: int = 12, jet_h: float = 3.0) -> void:
+	var wm := ShaderMaterial.new()
+	wm.shader = load("res://shaders/fountain_water.gdshader") as Shader
+	wm.set_shader_parameter("radius", radius)
+	wm.set_shader_parameter("jet_ring", jet_ring)
+	wm.set_shader_parameter("jet_count", float(jets))
+	var surf := MeshInstance3D.new()
+	surf.name = "FountainWater"
+	var cm := CylinderMesh.new()
+	cm.top_radius = radius
+	cm.bottom_radius = radius
+	cm.height = 0.04
+	cm.radial_segments = 48
+	cm.rings = 1
+	surf.mesh = cm
+	surf.material_override = wm
+	surf.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	surf.position = Vector3(center.x, water_y - 0.02, center.z)
+	parent.add_child(surf)
+	# raised granite rim (coping) round the water
+	var rim_st := SurfaceTool.new()
+	rim_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var n_rim := maxi(24, int(TAU * radius / 2.0))
+	for k in range(n_rim):
+		var a := TAU * (float(k) + 0.5) / float(n_rim)
+		var seg_w := TAU * (radius + 0.4) / float(n_rim) + 0.08
+		var rc := Vector3(center.x + cos(a) * (radius + 0.4), water_y + 0.12, center.z + sin(a) * (radius + 0.4))
+		RoadSignBuilder._box(rim_st, Transform3D(Basis(Vector3.UP, -a + PI * 0.5), rc), Vector3(seg_w, 0.5, 0.8), Color(0.70, 0.70, 0.69))
+	var rim := MeshInstance3D.new()
+	rim.name = "FountainRim"
+	rim.mesh = rim_st.commit()
+	var rim_mat := StandardMaterial3D.new()
+	rim_mat.vertex_color_use_as_albedo = true
+	rim_mat.roughness = 0.6
+	rim.material_override = rim_mat
+	parent.add_child(rim)
+	if jet_ring <= 0.0:
+		return
+	if _jet_mat_cache == null:
+		_jet_mat_cache = ShaderMaterial.new()
+		_jet_mat_cache.shader = load("res://shaders/fountain_jet.gdshader") as Shader
+	var jm := CylinderMesh.new()
+	jm.top_radius = 0.42 # the column fans out into spray toward the top
+	jm.bottom_radius = 0.07
+	jm.height = 1.0
+	jm.radial_segments = 8
+	jm.rings = 1
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = jm
+	mm.instance_count = jets * 2
+	for i in range(jets):
+		var a := TAU * (float(i) + 0.5) / float(jets)
+		var h := jet_h * (0.85 + 0.3 * float(i % 3) / 2.0)
+		var p := Vector3(center.x + cos(a) * jet_ring, water_y + h * 0.5, center.z + sin(a) * jet_ring)
+		mm.set_instance_transform(i, Transform3D(Basis().scaled(Vector3(1.0, h, 1.0)), p))
+		# low bubbler between the outer jets, nearer the rim
+		var a2 := TAU * float(i) / float(jets)
+		var r2 := minf(radius - 0.8, jet_ring + (radius - jet_ring) * 0.6)
+		var hb := 0.6
+		mm.set_instance_transform(jets + i, Transform3D(Basis().scaled(Vector3(1.3, hb, 1.3)), Vector3(center.x + cos(a2) * r2, water_y + hb * 0.5, center.z + sin(a2) * r2)))
+	var mmi := MultiMeshInstance3D.new()
+	mmi.name = "FountainJets"
+	mmi.multimesh = mm
+	mmi.material_override = _jet_mat_cache
+	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mmi.visibility_range_end = 400.0
+	parent.add_child(mmi)
+
+
 static func _add_box(
 	parent: Node3D,
 	size: Vector3,
@@ -180,7 +269,7 @@ static func _jiaxing_south_station(parent: Node3D, center: Vector3, angle: float
 	var rail_steel := _mat(Color(0.45, 0.47, 0.50), 0.32, 0.75)
 	var ballast := _mat(Color(0.46, 0.45, 0.43), 0.92, 0.0)
 	var yellow_line := _mat(Color(0.94, 0.78, 0.18), 0.55, 0.0)
-	var lawn_mat := _mat(Color(0.22, 0.48, 0.22), 0.86, 0.0)
+	var lawn_mat := lawn_material()
 	var water_pool := _mat(Color(0.18, 0.48, 0.62), 0.18, 0.25)
 	var trunk_mat := _mat(Color(0.34, 0.25, 0.17), 0.88, 0.0)
 	var foliage_mat := _mat(Color(0.20, 0.46, 0.21), 0.82, 0.0)
@@ -359,7 +448,7 @@ static func _jiaxing_south_station(parent: Node3D, center: Vector3, angle: float
 		_add_box(plaza_n, Vector3(308.0, 0.06, 2.6), Vector3(46.0, -0.005, gz_band), granite_dark, 0.0, 0.0, 0.0, false)
 	# Central Civic Welcome Sculpture & Circular Reflection Fountain ("红船起航 · 嘉兴欢迎您", local x=-12, z=-172)
 	_add_cyl(plaza_n, 16.5, 17.2, 0.55, Vector3(-12.0, 0.27, -172.0), granite_dark, 24)
-	_add_cyl(plaza_n, 15.2, 15.2, 0.36, Vector3(-12.0, 0.32, -172.0), water_pool, 24)
+	add_fountain(plaza_n, Vector3(-12.0, 0.0, -172.0), 15.2, 0.58, 10.8, 16, 3.4)
 	_add_box(plaza_n, Vector3(14.0, 1.4, 4.2), Vector3(-12.0, 0.9, -172.0), granite)
 	var red_sail := _mat(Color(0.84, 0.12, 0.14), 0.32, 0.25)
 	_add_box(plaza_n, Vector3(11.5, 6.2, 0.55), Vector3(-12.0, 4.6, -172.0), red_sail, 0.0, 0.14)
@@ -367,7 +456,8 @@ static func _jiaxing_south_station(parent: Node3D, center: Vector3, angle: float
 	_add_sign_label(plaza_n, "嘉 兴 欢 迎 您 · 红 船 起 航", Vector3(-12.0, 8.6, -172.4), PI, 48, 0.024, Color(0.94, 0.22, 0.18))
 	# Landscaped green plaza lawns & lush Jiangnan shade trees framing the civic square
 	for lx_p: float in [-42.0, 18.0]:
-		_add_box(plaza_n, Vector3(22.0, 0.35, 34.0), Vector3(lx_p, 0.18, -172.0), lawn_mat)
+		_add_box(plaza_n, Vector3(22.8, 0.42, 34.8), Vector3(lx_p, 0.21, -172.0), granite_dark)
+		_add_box(plaza_n, Vector3(22.0, 0.35, 34.0), Vector3(lx_p, 0.26, -172.0), lawn_mat)
 		for ti_p in range(3):
 			var tz_p := -184.0 + float(ti_p) * 12.0
 			ParkLandscapeBuilder.plant_tree(plaza_n, Vector3(lx_p, 0.35, tz_p), 1, 0.95, ParkLandscapeBuilder.CAMPHOR if (ti_p % 2 == 0) else ParkLandscapeBuilder.CAMPHOR_LT)
@@ -794,7 +884,7 @@ static func _jiaxing_station(parent: Node3D, center: Vector3, angle: float, ligh
 	_add_cr200j_train(jx, Vector3(-12.0, 0.44, -9.2))
 
 	# --- C. MAD "Train Station in the Forest" Floating Roof + Sunken Skylights (North Plaza, z = -48) ---
-	var lawn_slope := _mat(Color(0.24, 0.44, 0.20), 0.86, 0.0)
+	var lawn_slope := lawn_material()
 	var b1_floor := _mat(Color(0.76, 0.77, 0.78), 0.65, 0.04)
 	var b1_wall := _mat(Color(0.86, 0.85, 0.82), 0.70, 0.02)
 	var stone_warm := _mat(Color(0.83, 0.80, 0.74), 0.72, 0.03)

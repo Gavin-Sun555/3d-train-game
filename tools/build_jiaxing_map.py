@@ -3484,6 +3484,7 @@ def main():
         return False
 
     cut_m = 0.0
+    n_gate_moved, n_gate_dropped = 0, 0
     for comp in gated_compounds:
         new_segs = []
         for (sa, sb) in comp["segs"]:
@@ -3506,7 +3507,63 @@ def main():
                 if not keep:
                     cut_m += L / n
         comp["segs"] = new_segs
-    print(f"底商 outside compounds: {cut_m / 1000.0:.1f} km of compound fence removed in front of shopfronts")
+        # the gatehouse must not stand in front of the shops either: move it to the remaining fence stretch that
+        # best faces a street (or drop it when the compound has none)
+        gp = comp.get("gate_pos", [])
+        if len(gp) == 2:
+            gx0, gy0 = gp
+            near_shop = in_front_of_shop(gx0, gy0) or any(
+                math.hypot(q[0] - gx0, q[1] - gy0) < 9.0 for (bp, _nv) in shop_grid.query(gx0 - 9, gy0 - 9, gx0 + 9, gy0 + 9) for q in bp)
+            if near_shop:
+                n_gate_moved += 1
+                ring = comp.get("_ring") or []
+                cx_c, cy_c = centroid(ring) if len(ring) >= 3 else (gx0, gy0)
+                best = None
+                for si, (sa, sb) in enumerate(new_segs):
+                    L = math.hypot(sb[0] - sa[0], sb[1] - sa[1])
+                    if L < 11.0:
+                        continue
+                    ux, uy = (sb[0] - sa[0]) / L, (sb[1] - sa[1]) / L
+                    mx, my = (sa[0] + sb[0]) * 0.5, (sa[1] + sb[1]) * 0.5
+                    nx, ny = -uy, ux
+                    if (mx - cx_c) * nx + (my - cy_c) * ny < 0.0:
+                        nx, ny = -nx, -ny  # outward
+                    if in_front_of_shop(mx, my):
+                        continue
+                    # gatehouse footprint (13 m canopy, 3.3 m inside .. 2.6 m outside the fence) clear of every building
+                    # footprint (true polygons: the gap between two rotated shop buildings is a fine spot)
+                    clear = True
+                    probes = [(mx + ux * a + nx * b, my + uy * a + ny * b) for a in (-6.6, -4.4, -2.2, 0.0, 2.2, 4.4, 6.6) for b in (-3.3, 0.0, 2.6)]
+                    for ob in bld_grid.query(mx - 10, my - 10, mx + 10, my + 10):
+                        if any(point_in_poly(fx, fy, ob[4]) for (fx, fy) in probes):
+                            clear = False
+                            break
+                    if not clear:
+                        continue
+                    d_road = 1e9
+                    for (rax, ray, rbx, rby, rhw) in road_grid.query(mx - 40, my - 40, mx + 40, my + 40):
+                        d_road = min(d_road, seg_dist(mx + nx * 2.0, my + ny * 2.0, rax, ray, rbx, rby)[0] - rhw)
+                    if d_road < 1.0 or d_road > 45.0:
+                        continue
+                    if best is None or d_road < best[0]:
+                        best = (d_road, si, mx, my, ux, uy, nx, ny, sa, sb)
+                if best is None:
+                    comp["gate_pos"] = []
+                    n_gate_dropped += 1
+                else:
+                    _d, si, mx, my, ux, uy, nx, ny, sa, sb = best
+                    pieces = []
+                    a2 = (mx - ux * 5.6, my - uy * 5.6)
+                    b2 = (mx + ux * 5.6, my + uy * 5.6)
+                    if math.hypot(a2[0] - sa[0], a2[1] - sa[1]) >= 2.2:
+                        pieces.append([rnd(sa), rnd(a2)])
+                    if math.hypot(sb[0] - b2[0], sb[1] - b2[1]) >= 2.2:
+                        pieces.append([rnd(b2), rnd(sb)])
+                    comp["segs"] = new_segs[:si] + pieces + new_segs[si + 1:]
+                    comp["gate_pos"] = rnd((mx, my))
+                    comp["gate_angle"] = round(-math.atan2(ny, nx) + math.pi * 0.5, 4)
+    print(f"底商 outside compounds: {cut_m / 1000.0:.1f} km of compound fence removed in front of shopfronts; "
+          f"{n_gate_moved} gatehouses off shop frontages ({n_gate_dropped} compounds without a clear spot keep a plain opening)")
 
     # 小区绿化: the courtyard of every gated compound is landscaped lawn (buildings stand on it) with trees in the
     # gaps between blocks. A lawn is only laid where its whole outline keeps clear of roads, rail, water and other
