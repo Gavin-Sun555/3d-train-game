@@ -726,6 +726,9 @@ func _pick_edge(graph: NetworkGraph, focus_pos: Vector3, near: bool, outer_ring_
 
 
 func _write_mm_transform(eb: Dictionary, tf: Transform3D) -> void:
+	# never hand the GPU a non-finite instance (a NaN/inf basis renders as screen-filling slivers)
+	if not tf.is_finite():
+		return
 	var v := int(eb["var"])
 	var slot := int(eb["slot"])
 	if v >= 0 and v < _mmis_lod0.size():

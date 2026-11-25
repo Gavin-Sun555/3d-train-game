@@ -31,7 +31,7 @@ void vertex() {
 
 void fragment() {
 	vec2 xz = v_world.xz;
-	for (int pi = 0; pi < portal_count; pi++) {
+	for (int pi = 0; pi < min(portal_count, 16); pi++) {
 		vec2 dp = xz - portal_pos_hl[pi].xy;
 		vec2 fw = portal_dir_hw[pi].xy;
 		vec2 rt = vec2(-fw.y, fw.x);
