@@ -1564,8 +1564,9 @@ static func plant_tree(parent: Node3D, pos: Vector3, species: int = 1, scale: fl
 	recs.append([Transform3D(Basis(Vector3.UP, yaw).scaled(Vector3.ONE * sc), pos), tint])
 	holder.set_meta(key, recs)
 	var meshes := _get_species_meshes(species)
-	var parts := [["Wood", meshes["wood"], 360.0, 0.0, false], ["Leaf", meshes["leaf"], LEAF_HI_RANGE, 0.0, true],
-		["LeafMid", meshes["leaf_mid"], 360.0, LEAF_HI_RANGE, false]]
+	# landmark trees are few: keep their light crowns (and trunks) visible much farther than street trees
+	var parts := [["Wood", meshes["wood"], 700.0, 0.0, false], ["Leaf", meshes["leaf"], LEAF_HI_RANGE, 0.0, true],
+		["LeafMid", meshes["leaf_mid"], 900.0, LEAF_HI_RANGE, false]]
 	for pt: Array in parts:
 		var nm := "%s_%s" % [pt[0], key]
 		var mmi := holder.get_node_or_null(nm) as MultiMeshInstance3D
