@@ -112,6 +112,15 @@ func _build_rain_particles() -> void:
 
 # read by TransitSim for rain on the tram windscreens
 static var raining := false
+# 0 = open sky at the camera, 1 = under cover (in a tunnel / underground station): no rain falls there
+var shelter := 0.0
+
+
+# Below ground by more than a tunnel roof's thickness: the open ramp cuttings near the portals stay in the rain,
+# the covered tunnel and the B1 station do not
+static func is_covered(p: Vector3) -> bool:
+	var g := Terrain.surface(p.x, p.z) if Terrain.active else 0.0
+	return p.y < g - 2.6
 
 
 func set_weather(mode: int) -> void:
@@ -144,6 +153,9 @@ func update_camera_follow(cam: Camera3D, is_interior_view: bool) -> void:
 	if _rain_particles == null or not _rain_particles.visible or cam == null:
 		return
 	var cam_pos := cam.global_position
+	# fade the rain out / in over ~0.5 s at a tunnel portal instead of popping
+	shelter = move_toward(shelter, 1.0 if is_covered(cam_pos) else 0.0, get_process_delta_time() * 2.0)
+	_rain_particles.amount_ratio = 1.0 - shelter
 	var fwd := -cam.global_transform.basis.z
 	var fwd_xz := Vector3(fwd.x, 0.0, fwd.z)
 	if fwd_xz.length_squared() > 0.001:

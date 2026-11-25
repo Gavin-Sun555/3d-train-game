@@ -3728,8 +3728,10 @@ func _process(delta: float) -> void:
 		_weather.set_paused(paused_run)
 		_weather.update_camera_follow(_camera, is_in_cab)
 	if _sound != null:
-		_sound.weather_rain_intensity = 1.0 if (is_raining and _game_mode == GameMode.RUN and not paused_run) else 0.0
-		_sound.weather_rain_muffled = is_in_cab
+		# under cover only the distant hiss from the portals is left
+		var rain_shelter := _weather.shelter if _weather != null else 0.0
+		_sound.weather_rain_intensity = (1.0 - 0.9 * rain_shelter) if (is_raining and _game_mode == GameMode.RUN and not paused_run) else 0.0
+		_sound.weather_rain_muffled = is_in_cab or rain_shelter > 0.5
 	_process_shot_tour()
 
 

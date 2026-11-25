@@ -2447,10 +2447,14 @@ func _step_tram_physics_and_doors(
 	# Rain on the windscreens: water builds up over ~25 s in the rain and stays until the wipers run (an AI
 	# driver switches them on in the rain; driving yourself, it is the WIPER switch in the cab)
 	var raining := WeatherSystem.raining
-	var wipe_eff := bool(tr.get("wipers_on", false)) or (raining and not _is_player_manual)
-	tr["wipers_eff"] = wipe_eff
 	var wet := float(tr.get("glass_wet", 0.0))
-	var wet_target := (0.10 if wipe_eff else 1.0) if raining else 0.0
+	# in a tunnel or the underground station no rain reaches the glass (what is on it slowly runs off); an AI
+	# driver wipes it clear on the way in and parks the wipers until back out in the rain
+	var secs_w: Array = tinfo.get("sections", [])
+	var covered := not secs_w.is_empty() and is_instance_valid(secs_w[0]) and WeatherSystem.is_covered((secs_w[0] as Node3D).global_position + Vector3(0.0, 2.2, 0.0))
+	var wipe_eff := bool(tr.get("wipers_on", false)) or (raining and not _is_player_manual and (not covered or wet > 0.03))
+	tr["wipers_eff"] = wipe_eff
+	var wet_target := (0.10 if wipe_eff else 1.0) if (raining and not covered) else 0.0
 	var wet_rate := (1.0 / 25.0) if wet_target > wet else ((1.0 / 1.2) if wipe_eff else (1.0 / 40.0))
 	wet = move_toward(wet, wet_target, dt * wet_rate)
 	tr["glass_wet"] = wet
