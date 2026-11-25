@@ -134,6 +134,8 @@ var _mirror_cams: Array[Camera3D] = []
 var _mirror_tick := 0
 var _mirror_bound: Array = []
 const MIRROR_RES := Vector2i(208, 120)
+var _cab_mirrors_on := true # Settings: live rear-view camera mirrors in the cab (cost ~10% FPS in cab view)
+var _settings_mirror_btns: Array[Button] = []
 var _sun: DirectionalLight3D
 var _camera: Camera3D
 var _sound: SoundSynth
@@ -3689,11 +3691,48 @@ func _process(delta: float) -> void:
 	_process_shot_tour()
 
 
+func _load_cab_mirror_setting() -> void:
+	if FileAccess.file_exists(L10n.SETTINGS_PATH):
+		var rf := FileAccess.open(L10n.SETTINGS_PATH, FileAccess.READ)
+		if rf != null:
+			var parsed = JSON.parse_string(rf.get_as_text())
+			if typeof(parsed) == TYPE_DICTIONARY and (parsed as Dictionary).has("cab_mirrors"):
+				_cab_mirrors_on = bool(parsed["cab_mirrors"])
+
+
+func _set_cab_mirrors(on: bool) -> void:
+	_cab_mirrors_on = on
+	for i in range(_settings_mirror_btns.size()):
+		_highlight_active_btn(_settings_mirror_btns[i], (i == 0) == on)
+	# merge into the shared settings file (language etc. live there too)
+	var data := {}
+	if FileAccess.file_exists(L10n.SETTINGS_PATH):
+		var rf := FileAccess.open(L10n.SETTINGS_PATH, FileAccess.READ)
+		if rf != null:
+			var parsed = JSON.parse_string(rf.get_as_text())
+			if typeof(parsed) == TYPE_DICTIONARY:
+				data = parsed
+	data["cab_mirrors"] = on
+	var wf := FileAccess.open(L10n.SETTINGS_PATH, FileAccess.WRITE)
+	if wf != null:
+		wf.store_string(JSON.stringify(data, "\t"))
+	_show_toast(L10n.t("驾驶室后视镜：%s", "Cab mirrors: %s") % (L10n.t("开", "On") if on else L10n.t("关（节省性能）", "Off (saves performance)")))
+
+
 func _update_cab_mirrors() -> void:
 	var active := _game_mode == GameMode.RUN and _cam_mode == CamMode.CAB and _transit_sim != null and not _transit_sim.trams.is_empty()
-	if not active:
+	if not active or not _cab_mirrors_on:
 		for vp in _mirror_vps:
 			vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
+		if active and not _mirror_bound.is_empty():
+			# switched off: blank the monitors (rebound when switched back on)
+			for scr in _mirror_bound:
+				if is_instance_valid(scr):
+					var m0 := (scr as MeshInstance3D).material_override as StandardMaterial3D
+					if m0 != null:
+						m0.albedo_texture = null
+						m0.albedo_color = Color(0.10, 0.12, 0.14)
+			_mirror_bound = []
 		return
 	var cc: Dictionary = _transit_sim.get_active_tram()["tram_info"].get("cab_controls", {})
 	var eyes: Array = cc.get("mirror_eyes", [])
@@ -6096,7 +6135,7 @@ func _build_audio_modal_ui(parent: Control) -> void:
 	_audio_modal.add_child(center)
 
 	var card := _make_panel(Color(0.08, 0.11, 0.16, 0.97))
-	card.custom_minimum_size = Vector2(500, 468)
+	card.custom_minimum_size = Vector2(500, 506)
 	center.add_child(card)
 
 	var vbox := VBoxContainer.new()
@@ -6149,6 +6188,25 @@ func _build_audio_modal_ui(parent: Control) -> void:
 		_highlight_active_btn(wb, _weather_mode == wm_v)
 		wx_row.add_child(wb)
 		_settings_weather_btns.append(wb)
+
+	# Cab rear-view mirrors (live camera pictures cost ~10% FPS while driving in cab view)
+	_load_cab_mirror_setting()
+	var mr_row := HBoxContainer.new()
+	mr_row.add_theme_constant_override("separation", 8)
+	vbox.add_child(mr_row)
+	var mr_lbl := Label.new()
+	mr_lbl.text = L10n.t("驾驶室后视镜：", "Cab mirrors:")
+	mr_lbl.custom_minimum_size = Vector2(124, 24)
+	mr_lbl.tooltip_text = L10n.t("驾驶室视角下两侧后视屏的实时画面，约占 10% 帧率", "Live rear-view pictures on the cab monitors, about 10% of the frame rate in cab view")
+	mr_row.add_child(mr_lbl)
+	_settings_mirror_btns.clear()
+	for mv in [[true, L10n.t("开", "On")], [false, L10n.t("关（省性能）", "Off (faster)")]]:
+		var on_v: bool = mv[0]
+		var mb := _make_btn(str(mv[1]), func(): _set_cab_mirrors(on_v))
+		mb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_highlight_active_btn(mb, _cab_mirrors_on == on_v)
+		mr_row.add_child(mb)
+		_settings_mirror_btns.append(mb)
 
 	vbox.add_child(HSeparator.new())
 
