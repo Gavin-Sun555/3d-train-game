@@ -3321,6 +3321,132 @@ def square_junction(graph_nodes, graph_edges, near, centre, drop_names_widths=()
     print(f"square_junction: node {nid} squared at {centre}, {sum(1 for e in keep if nid in (e['a'], e['b']))} legs")
 
 
+def merge_staggered_junctions(graph_nodes, graph_edges, max_gap=28.0, only_nodes=None):
+    """Split OSM crossings (a divided road's two carriageway nodes, or a cross street meeting a road at two offset
+    nodes) joined by a short crosswise stub make anything routed along the road -- T1 or a player's line -- hop
+    sideways inside the junction. Where a named road leaves the two nodes in opposite directions and the stub runs
+    across it, fold the nodes into one crossroads on that road's line, so a road reads straight through."""
+    pos = {n["id"]: n["pos"] for n in graph_nodes}
+    inc = defaultdict(list)
+    for e in graph_edges:
+        if not e.get("underground"):
+            inc[e["a"]].append(e)
+            inc[e["b"]].append(e)
+
+    def far_pt(e, nid):
+        seq = e["pts"] if e["a"] == nid else list(reversed(e["pts"]))
+        o = seq[0]
+        for q in seq[1:]:
+            if math.hypot(q[0] - o[0], q[1] - o[1]) >= 40.0:
+                return q
+        return seq[-1]
+
+    def unit(o, q):
+        dx, dy = q[0] - o[0], q[1] - o[1]
+        L = math.hypot(dx, dy)
+        return (dx / L, dy / L) if L > 1e-6 else (0.0, 0.0)
+
+    parent = {}
+
+    def root(n):
+        while parent.get(n, n) != n:
+            n = parent[n]
+        return n
+
+    lines = defaultdict(list)  # merged group -> through-road far points (to put the node on that road's line)
+    for c in graph_edges:
+        if c.get("underground") or c.get("bridge"):
+            continue
+        a, b = c["a"], c["b"]
+        if a == b or (only_nodes is not None and a not in only_nodes and b not in only_nodes):
+            continue
+        L = math.hypot(pos[b][0] - pos[a][0], pos[b][1] - pos[a][1])
+        if L >= max_gap:
+            continue
+        u = ((pos[b][0] - pos[a][0]) / L, (pos[b][1] - pos[a][1]) / L)
+        hit = None
+        for ea in inc[a]:
+            if ea is c or not ea.get("name"):
+                continue
+            fa = far_pt(ea, a)
+            da = unit(pos[a], fa)
+            if abs(da[0] * u[0] + da[1] * u[1]) > 0.5:
+                continue
+            for eb in inc[b]:
+                if eb is c or eb is ea or eb.get("name") != ea.get("name"):
+                    continue
+                fb = far_pt(eb, b)
+                db = unit(pos[b], fb)
+                if da[0] * db[0] + da[1] * db[1] < -0.92:
+                    hit = (fa, fb)
+                    break
+            if hit:
+                break
+        if not hit:
+            continue
+        ra, rb = root(a), root(b)
+        if ra != rb:
+            parent[rb] = ra
+            lines[ra].extend(lines.pop(rb, []))
+        lines[ra].append(hit)
+    if not parent:
+        return
+    groups = defaultdict(list)
+    for n in list(parent.keys()) + list({root(k) for k in parent}):
+        groups[root(n)].append(n)
+    new_pos = {}
+    for r, mem in groups.items():
+        mem = sorted(set(mem))
+        groups[r] = mem
+        mx = sum(pos[m][0] for m in mem) / len(mem)
+        my = sum(pos[m][1] for m in mem) / len(mem)
+        # snap onto the first through road's line (the straight run between its far points)
+        fa, fb = lines[r][0]
+        dx, dy = fb[0] - fa[0], fb[1] - fa[1]
+        l2 = dx * dx + dy * dy
+        if l2 > 1e-6:
+            t = ((mx - fa[0]) * dx + (my - fa[1]) * dy) / l2
+            mx, my = fa[0] + dx * t, fa[1] + dy * t
+        new_pos[r] = [round(mx, 2), round(my, 2)]
+    for n in graph_nodes:
+        if n["id"] in new_pos:
+            n["pos"] = new_pos[n["id"]]
+    drop_nodes = {m for r, mem in groups.items() for m in mem if m != r}
+    graph_nodes[:] = [n for n in graph_nodes if n["id"] not in drop_nodes]
+
+    keep = []
+    seen_pairs = {}
+    for e in graph_edges:
+        a2, b2 = root(e["a"]), root(e["b"])
+        if a2 == b2 and (e["a"] != e["b"]):
+            continue  # the stub inside the folded junction
+        if a2 != e["a"] or b2 != e["b"] or a2 in new_pos or b2 in new_pos:
+            pts = [list(q) for q in e["pts"]]
+            if a2 in new_pos:
+                c0 = new_pos[a2]
+                while len(pts) > 2 and math.hypot(pts[1][0] - c0[0], pts[1][1] - c0[1]) < 15.0:
+                    pts.pop(1)
+                pts[0] = list(c0)
+            if b2 in new_pos:
+                c1 = new_pos[b2]
+                while len(pts) > 2 and math.hypot(pts[-2][0] - c1[0], pts[-2][1] - c1[1]) < 15.0:
+                    pts.pop(-2)
+                pts[-1] = list(c1)
+            e["pts"] = pts
+            e["a"], e["b"] = a2, b2
+            e["length"] = round(sum(math.hypot(pts[k + 1][0] - pts[k][0], pts[k + 1][1] - pts[k][1]) for k in range(len(pts) - 1)), 2)
+        key = (min(a2, b2), max(a2, b2), e.get("name"))
+        if key in seen_pairs and len(e["pts"]) == 2:
+            prev = seen_pairs[key]
+            if float(e["width"]) > float(prev["width"]):
+                prev["width"] = e["width"]
+            continue
+        seen_pairs[key] = e
+        keep.append(e)
+    graph_edges[:] = keep
+    print(f"staggered junctions: {len(groups)} folded into straight crossroads ({len(drop_nodes)} nodes merged)")
+
+
 def main():
     nodes, ways, rels, poi_nodes = load_osm()
     print("MAIN_RECT (screenshot):", MAIN_RECT)
@@ -3355,6 +3481,18 @@ def main():
     # 由拳路 × 庆丰路: the divided 由拳路 carriageways and the kinked 庆丰路 leg met in a skewed five-way Y where T1
     # turns south; rebuilt as a square crossroads (the parallel one-way carriageway is folded into the main road)
     square_junction(graph_nodes, graph_edges, (4216.26, 2577.23), (4208.5, 2564.0), drop_names_widths=[("由拳路", 8.8)])
+    # Fold the split junctions T1 runs through (elsewhere a divided road keeps its carriageway box; player lines
+    # are kept straight by the game's turn-aware track routing). A dry run of the route finds them.
+    import copy
+    _probe_edges = copy.deepcopy(graph_edges)
+    _probe = build_t1_starter_network(copy.deepcopy(graph_nodes), _probe_edges)
+    _pe = {e["id"]: e for e in _probe_edges}
+    t1_nodes = set()
+    for t in _probe.get("tracks", []):
+        e = _pe.get(t["edge_id"])
+        if e:
+            t1_nodes.update((e["a"], e["b"]))
+    merge_staggered_junctions(graph_nodes, graph_edges, only_nodes=t1_nodes)
     rail_crossings = build_rail_crossings(graph_edges, railways)
 
     road_grid = Grid(45.0)
@@ -3456,6 +3594,22 @@ def main():
     blds = cleaned_blds
     if removed_t1_blds > 0:
         print(f"T1 corridor building clearance: removed {removed_t1_blds} buildings encroaching on widened T1 boulevards")
+        bld_grid = Grid(45.0)
+        for b in blds:
+            bpts = b["pts"]
+            xs = [p[0] for p in bpts]
+            ys = [p[1] for p in bpts]
+            bld_grid.add((min(xs), min(ys), max(xs), max(ys), bpts), min(xs), min(ys), max(xs), max(ys))
+
+    # Placeholder blocks the real streetscape does not have (中山东路 × 禾兴南路: the lot in front of the 钻石广场
+    # tower and the row along the north edge of the 天主堂 park)
+    DROP_BLD_BOXES = [(-830.0, -1000.0, -695.0, -925.0), (-656.0, -1012.0, -478.0, -985.0), (-600.0, -1012.0, -478.0, -962.0)]
+    n_drop = len(blds)
+    blds = [b for b in blds if not any(
+        x0 < sum(p[0] for p in b["pts"]) / len(b["pts"]) < x1 and y0 < sum(p[1] for p in b["pts"]) / len(b["pts"]) < y1
+        for (x0, y0, x1, y1) in DROP_BLD_BOXES)]
+    if len(blds) != n_drop:
+        print(f"dropped {n_drop - len(blds)} placeholder buildings by hand")
         bld_grid = Grid(45.0)
         for b in blds:
             bpts = b["pts"]

@@ -303,6 +303,7 @@ const BIKE_SIDE_MIN_SHARE := 0.6 # a kerb side is painted (continuously) when th
 
 
 func load_from_map_data(map_data: Dictionary, use_starter: bool = true) -> void:
+	_straight_cache_key = Vector3i(-1, -1, -9)
 	nodes.clear()
 	edges.clear()
 	adj.clear()
@@ -1116,52 +1117,137 @@ func shortest_street_path(node_a: int, node_b: int, only_built: bool, sys: int =
 		res3.reverse()
 		return res3
 
-	var dist := {node_a: 0.0}
-	var prev_node := {}
-	var prev_edge := {}
-	var open: Array[int] = [node_a]
+	var ck := Vector3i(node_a, node_b, sys)
+	if ck != _straight_cache_key:
+		_straight_cache_key = ck
+		_straight_cache = _street_path_straight(node_a, node_b, sys)
+	return _straight_cache.duplicate()
 
-	while not open.is_empty():
-		var best_i := 0
-		var best_u := open[0]
-		var best_c: float = float(dist[best_u])
-		for i in range(1, open.size()):
-			var u_cand := open[i]
-			var c_cand: float = float(dist[u_cand])
-			if c_cand < best_c:
-				best_c = c_cand
-				best_u = u_cand
-				best_i = i
-		open.remove_at(best_i)
 
-		if best_u == node_b:
+var _straight_cache_key := Vector3i(-1, -1, -9) # hovering in the path tool re-asks the same route every frame
+var _straight_cache: Array[int] = []
+
+
+# Heading of edge `eid` leaving node `nid` (unit vector, map plane)
+func _edge_heading_from(eid: int, nid: int) -> Vector2:
+	var pts: Array = edges[eid]["pts"]
+	if pts.size() < 2:
+		return Vector2.ZERO
+	if int(edges[eid]["a"]) == nid:
+		return (Vector2(pts[1]) - Vector2(pts[0])).normalized()
+	return (Vector2(pts[pts.size() - 2]) - Vector2(pts[pts.size() - 1])).normalized()
+
+
+# Street routing for laying new track: a tram runs down the middle of a street and goes straight through a
+# junction, so besides length the search charges for every turn (and a little for changing street), searching
+# over (edge, arriving node) states so the turn at each junction is known. Short sideways hops across a split
+# junction then cost two turns and lose to carrying straight on; a player can still click junctions in
+# between to steer the line onto another street.
+func _street_path_straight(node_a: int, node_b: int, sys: int) -> Array[int]:
+	var heap_c: Array[float] = []
+	var heap_s: Array[int] = []
+	var best := {}      # state (eid * 2 + arrives_at_b) -> cost
+	var prev := {}      # state -> previous state (-1 at the start)
+	var start_states: Array[int] = []
+	for nb: Dictionary in adj.get(node_a, []):
+		var eid := int(nb["edge_id"])
+		if bool(edges[eid].get("rail_3d", false)):
+			continue
+		if sys >= 0 and TrackBuilder.edge_system(self, eid) != sys:
+			continue
+		var st := eid * 2 + (1 if int(edges[eid]["b"]) == int(nb["to"]) else 0)
+		var c0 := float(nb["length"])
+		if not best.has(st) or c0 < float(best[st]):
+			best[st] = c0
+			prev[st] = -1
+			_heap_push(heap_c, heap_s, c0, st)
+	var goal := -1
+	while not heap_s.is_empty():
+		var cu := heap_c[0]
+		var su := heap_s[0]
+		_heap_pop(heap_c, heap_s)
+		if cu > float(best.get(su, INF)) + 1e-4:
+			continue
+		var e_in := su >> 1
+		var at := int(edges[e_in]["b"]) if (su & 1) == 1 else int(edges[e_in]["a"])
+		if at == node_b:
+			goal = su
 			break
-
-		for nb: Dictionary in adj[best_u]:
+		var came := int(edges[e_in]["a"]) if (su & 1) == 1 else int(edges[e_in]["b"])
+		var h_in := -_edge_heading_from(e_in, at)  # direction of travel arriving at `at`
+		var nm_in := str(edges[e_in]["name"])
+		for nb: Dictionary in adj.get(at, []):
 			var eid := int(nb["edge_id"])
+			var to := int(nb["to"])
+			if eid == e_in and to == came:
+				continue # no U-turn back along the same street
 			if bool(edges[eid].get("rail_3d", false)):
-				continue # street pathfinding stays on real city streets
+				continue
 			if sys >= 0 and TrackBuilder.edge_system(self, eid) != sys:
 				continue
-			var v := int(nb["to"])
-			var nc := best_c + float(nb["length"])
-			if not dist.has(v) or nc < float(dist[v]):
-				dist[v] = nc
-				prev_node[v] = best_u
-				prev_edge[v] = eid
-				if not open.has(v):
-					open.append(v)
-
-	if not prev_edge.has(node_b):
-		return []
-
+			var h_out := _edge_heading_from(eid, at)
+			var turn := rad_to_deg(acos(clampf(h_in.dot(h_out), -1.0, 1.0)))
+			var pen := 0.0
+			if turn > 22.0:
+				pen += 45.0 + turn * 1.4 # a turn at a junction costs like ~100-170 m of extra street
+			if str(edges[eid]["name"]) != nm_in:
+				pen += 15.0
+			var sv := eid * 2 + (1 if int(edges[eid]["b"]) == to else 0)
+			var nc := cu + float(nb["length"]) + pen
+			if nc < float(best.get(sv, INF)):
+				best[sv] = nc
+				prev[sv] = su
+				_heap_push(heap_c, heap_s, nc, sv)
 	var res: Array[int] = []
-	var cur := node_b
-	while cur != node_a:
-		res.append(int(prev_edge[cur]))
-		cur = int(prev_node[cur])
+	var cur := goal
+	while cur >= 0:
+		res.append(cur >> 1)
+		cur = int(prev[cur])
 	res.reverse()
 	return res
+
+
+static func _heap_push(hc: Array[float], hs: Array[int], c: float, s: int) -> void:
+	hc.append(c)
+	hs.append(s)
+	var i := hc.size() - 1
+	while i > 0:
+		var p := (i - 1) >> 1
+		if hc[p] <= hc[i]:
+			break
+		var tc := hc[p]
+		hc[p] = hc[i]
+		hc[i] = tc
+		var ts := hs[p]
+		hs[p] = hs[i]
+		hs[i] = ts
+		i = p
+
+
+static func _heap_pop(hc: Array[float], hs: Array[int]) -> void:
+	var last := hc.size() - 1
+	hc[0] = hc[last]
+	hs[0] = hs[last]
+	hc.resize(last)
+	hs.resize(last)
+	var i := 0
+	while true:
+		var l := i * 2 + 1
+		var r := l + 1
+		var m := i
+		if l < last and hc[l] < hc[m]:
+			m = l
+		if r < last and hc[r] < hc[m]:
+			m = r
+		if m == i:
+			break
+		var tc := hc[m]
+		hc[m] = hc[i]
+		hc[i] = tc
+		var ts := hs[m]
+		hs[m] = hs[i]
+		hs[i] = ts
+		i = m
 
 
 func find_track_path_between_stations(sid_a: int, sid_b: int) -> Array[Vector3]:
@@ -2144,6 +2230,7 @@ static func _polyline_length(pts: Array) -> float:
 
 
 func _apply_road_op(op: Dictionary) -> bool:
+	_straight_cache_key = Vector3i(-1, -1, -9) # the street graph is changing
 	match str(op.get("op", "")):
 		"node":
 			var nid := int(op["id"])
