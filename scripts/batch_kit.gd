@@ -212,3 +212,58 @@ static func commit(parent: Node3D, prefix: String) -> void:
 			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(mi)
 	begin()
+
+
+# ------------------------------------------------------------------------------------------------ signage
+const SHOP_NAMES := ["珠宝首饰", "女装", "男装", "童装", "咖啡", "奶茶", "眼镜", "化妆品", "运动户外", "鞋包",
+	"家居生活", "书店", "面包烘焙", "数码", "钟表", "火锅", "小吃", "药房", "超市", "花店", "茶饮", "美甲",
+	"影城", "健身", "黄金"]
+const SIGN_COLS := [Color(0.80, 0.12, 0.12), Color(0.10, 0.24, 0.55), Color(0.12, 0.12, 0.14), Color(0.10, 0.45, 0.30),
+	Color(0.62, 0.42, 0.16), Color(0.55, 0.16, 0.40), Color(0.92, 0.92, 0.90)]
+
+
+# lettering wrapped round a drum: one Label3D per character, each tangent to the wall, reading left to right
+# for a viewer outside; `mid` is the centre direction (radians in the local XZ plane, 0 = +X, PI/2 = +Z)
+static func curved_text(parent: Node3D, xf: Transform3D, chars: String, centre: Vector3, r: float, y: float, mid: float, step: float, fsz: int, px: float, col: Color) -> void:
+	var n := chars.length()
+	for i in n:
+		var a := mid + (float(n - 1) * 0.5 - float(i)) * step
+		var d := Vector3(cos(a), 0.0, sin(a))
+		label(parent, xf, chars[i], centre + d * r + Vector3(0.0, y, 0.0), atan2(d.x, d.z), fsz, px, col)
+
+
+# mall entrance on a facade: stone portal, glass doors with mullions, a canopy with a lit soffit and an
+# optional name over it. `c` is the facade point at ground level, `f` the outward unit vector (local)
+static func entrance(parent: Node3D, xf: Transform3D, c: Vector3, f: Vector3, w: float, name: String = "") -> void:
+	var u := Vector3.UP.cross(f).normalized()
+	var ry := atan2(f.x, f.z)
+	var hw := w * 0.5
+	for s: float in [-1.0, 1.0]:
+		box("op", xf, c + u * s * (hw + 0.35) + f * 0.35 + Vector3(0.0, 2.4, 0.0), Vector3(0.7, 4.8, 0.7), Color(0.78, 0.76, 0.72), ry)
+	box("op", xf, c + f * 0.35 + Vector3(0.0, 4.65, 0.0), Vector3(w + 1.4, 0.5, 0.7), Color(0.78, 0.76, 0.72), ry)
+	box("gl", xf, c + f * 0.18 + Vector3(0.0, 2.0, 0.0), Vector3(w, 3.9, 0.1), Color(0.40, 0.50, 0.56), ry)
+	var k := -hw
+	while k <= hw + 0.01:
+		box("op_d", xf, c + u * k + f * 0.25 + Vector3(0.0, 2.0, 0.0), Vector3(0.1, 3.9, 0.1), Color(0.20, 0.20, 0.22), ry)
+		k += w / 4.0
+	box("op_d", xf, c + f * 0.25 + Vector3(0.0, 2.6, 0.0), Vector3(w, 0.08, 0.1), Color(0.20, 0.20, 0.22), ry)
+	box("em_d", xf, c + f * 0.2 + Vector3(0.0, 1.95, 0.0), Vector3(w * 0.5, 3.6, 0.04), Color(1.0, 0.86, 0.62), ry)
+	box("op", xf, c + f * 2.0 + Vector3(0.0, 5.05, 0.0), Vector3(w + 3.0, 0.35, 4.0), Color(0.86, 0.86, 0.84), ry)
+	box("em", xf, c + f * 2.0 + Vector3(0.0, 4.85, 0.0), Vector3(w + 2.6, 0.05, 3.6), Color(1.0, 0.90, 0.72), ry)
+	if name != "":
+		label(parent, xf, name, c + f * 4.05 + Vector3(0.0, 5.75, 0.0), ry, 80, 0.02, Color(0.98, 0.96, 0.90))
+
+
+# a row of lit shop signboards along a facade from a to b (ground points), each with a shop name
+static func shop_signs(parent: Node3D, xf: Transform3D, a: Vector3, b: Vector3, f: Vector3, y: float, seed: int) -> void:
+	var L := a.distance_to(b)
+	var n := int(L / 6.4)
+	if n < 1:
+		return
+	var ry := atan2(f.x, f.z)
+	for i in n:
+		var p := a.lerp(b, (float(i) + 0.5) / float(n)) + f * 0.3 + Vector3(0.0, y, 0.0)
+		var col: Color = SIGN_COLS[(seed + i * 3) % SIGN_COLS.size()]
+		box("em_d", xf, p, Vector3(minf(L / float(n) - 0.8, 5.4), 1.0, 0.18), col, ry)
+		var txt_col := Color(0.12, 0.12, 0.14) if col.v > 0.85 else Color(1.0, 0.98, 0.92)
+		label(parent, xf, SHOP_NAMES[(seed * 7 + i * 5) % SHOP_NAMES.size()], p + f * 0.12, ry, 64, 0.012, txt_col)

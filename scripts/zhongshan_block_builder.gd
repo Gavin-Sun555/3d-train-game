@@ -212,6 +212,9 @@ static func _cinema(parent: Node3D, lights: Array) -> void:
 	# 中山东路 frontage: shop glazing and the name
 	BatchKit.bx("gl", xf, Vector3(-24.0, 0.4, -19.15), Vector3(10.0, 4.3, -19.05), Color(0.30, 0.38, 0.44))
 	BatchKit.label(parent, xf, "中 山 影 城", Vector3(-7.0, 18.0, -19.3), PI, 110, 0.034, Color(0.96, 0.92, 0.84))
+	BatchKit.entrance(parent, xf, Vector3(-7.0, 0.0, -19.15), Vector3.FORWARD, 6.0)
+	BatchKit.shop_signs(parent, xf, Vector3(-24.0, 0.0, -19.15), Vector3(-11.0, 0.0, -19.15), Vector3.FORWARD, 5.0, 19)
+	BatchKit.shop_signs(parent, xf, Vector3(-3.0, 0.0, -19.15), Vector3(10.0, 0.0, -19.15), Vector3.FORWARD, 5.0, 21)
 	# raised terrace deck under the glass front
 	BatchKit.bx("op", xf, Vector3(14.0, 0.0, -17.0), Vector3(21.0, 4.5, 17.0), Color(0.80, 0.78, 0.71))
 	# curved white frame round the glass front
@@ -311,7 +314,15 @@ static func _diamond(parent: Node3D, lights: Array) -> void:
 		var ar := TAU * float(k) / 16.0
 		var dr := Vector3(cos(ar), 0.0, sin(ar))
 		BatchKit.quad("op_d", xf, rc + dr * 15.05 + Vector3(0.0, 26.5, 0.0), rc + dr * 15.05 + Vector3(0.0, 26.5, 0.0) + Vector3(-dr.z, 0.0, dr.x) * 0.35, rc + dr * 2.45 + Vector3(0.0, 33.5, 0.0), rc + dr * 2.45 + Vector3(0.0, 33.5, 0.0), Color(0.88, 0.90, 0.92), dr + Vector3(0.0, 1.8, 0.0))
-	BatchKit.label(parent, xf, "戴 梦 得", Vector3(19.0, 6.4, -51.4), PI, 120, 0.036, Color(0.98, 0.82, 0.30))
+	BatchKit.curved_text(parent, xf, "戴梦得", rc, 15.2, 6.6, deg_to_rad(-95.0), 0.24, 110, 0.032, Color(0.98, 0.82, 0.30))
+	var rd := Vector3(cos(deg_to_rad(-60.0)), 0.0, sin(deg_to_rad(-60.0)))
+	BatchKit.entrance(parent, xf, rc + rd * 15.0, rd, 6.0)
+	BatchKit.entrance(parent, xf, Vector3(48.15, 0.0, -6.0), Vector3.RIGHT, 8.0, "戴梦得购物中心")
+	BatchKit.entrance(parent, xf, Vector3(-22.0, 0.0, -42.15), Vector3.FORWARD, 6.0, "戴梦得购物中心")
+	BatchKit.shop_signs(parent, xf, Vector3(48.15, 0.0, 2.0), Vector3(48.15, 0.0, 32.0), Vector3.RIGHT, 5.3, 2)
+	BatchKit.shop_signs(parent, xf, Vector3(48.15, 0.0, -38.0), Vector3(48.15, 0.0, -14.0), Vector3.RIGHT, 5.3, 5)
+	BatchKit.shop_signs(parent, xf, Vector3(-46.0, 0.0, -42.15), Vector3(-28.0, 0.0, -42.15), Vector3.FORWARD, 5.3, 8)
+	BatchKit.shop_signs(parent, xf, Vector3(-16.0, 0.0, -42.15), Vector3(2.0, 0.0, -42.15), Vector3.FORWARD, 5.3, 11)
 	# tower: blue glass between stone fins, bands every three floors, setback crown with the name
 	var tc := Vector3(10.0, 0.0, 0.0)
 	BatchKit.bx("gl", xf, tc + Vector3(-17.0, 24.0, -14.0), tc + Vector3(17.0, 100.0, 14.0), Color(0.16, 0.26, 0.40))
@@ -447,6 +458,14 @@ static func _cifi(parent: Node3D, lights: Array) -> void:
 	BatchKit.bx("op", xf, Vector3(-9.5, 4.6, 19.5), Vector3(9.5, 5.3, 24.0), Color(0.86, 0.80, 0.66))
 	BatchKit.bx("em", xf, Vector3(-9.0, 4.45, 19.8), Vector3(9.0, 4.6, 23.8), Color(1.0, 0.86, 0.62))
 	BatchKit.label(parent, xf, "旭 辉 广 场", Vector3(0.0, 25.0, 23.8), PI, 150, 0.04, Color(1.0, 1.0, 1.0))
+	BatchKit.entrance(parent, xf, Vector3(0.0, 0.0, 23.85), Vector3.FORWARD, 9.0)
+	for wx: float in [-38.0, 38.0]:
+		BatchKit.entrance(parent, xf, Vector3(wx, 0.0, -44.15), Vector3.FORWARD, 6.0, "旭辉广场")
+		BatchKit.shop_signs(parent, xf, Vector3(wx - 15.0, 0.0, -44.7), Vector3(wx - 5.0, 0.0, -44.7), Vector3.FORWARD, 5.0, int(wx))
+		BatchKit.shop_signs(parent, xf, Vector3(wx + 5.0, 0.0, -44.7), Vector3(wx + 15.0, 0.0, -44.7), Vector3.FORWARD, 5.0, int(wx) + 3)
+	# shop boards over the ground-floor glazing inside the forecourt, in front of the copper fins
+	BatchKit.shop_signs(parent, xf, Vector3(-21.0, 0.0, -42.0), Vector3(-21.0, 0.0, 16.0), Vector3.RIGHT, 3.9, 13)
+	BatchKit.shop_signs(parent, xf, Vector3(21.0, 0.0, 16.0), Vector3(21.0, 0.0, -42.0), Vector3.LEFT, 3.9, 17)
 	# residential slab behind and the tower over the east wing
 	_slab(xf, Vector3(-22.0, 24.0, 40.0), Vector3(22.0, 110.0, 58.0), Color(0.84, 0.82, 0.77))
 	_slab(xf, Vector3(27.0, 24.0, -32.0), Vector3(49.0, 96.0, -10.0), Color(0.80, 0.80, 0.78))
@@ -518,7 +537,16 @@ static func _jiangnan(parent: Node3D, lights: Array) -> void:
 	BatchKit.prism("op", xf, dc + Vector3(0.0, 23.6, 0.0), 14.6, 14.6, 1.0, 28, Color(0.80, 0.80, 0.80))
 	BatchKit.prism("op", xf, dc + Vector3(0.0, 24.6, 0.0), 10.0, 10.0, 3.0, 20, grey)
 	var dir_sw := Vector3(cos(deg_to_rad(135.0)), 0.0, sin(deg_to_rad(135.0)))
-	BatchKit.label(parent, xf, "江  南  大  厦", dc + dir_sw * 14.3 + Vector3(0.0, 6.0, 0.0), -PI * 0.25, 130, 0.034, Color(0.86, 0.12, 0.10))
+	# the name wraps round the drum on the white band between the shop glazing and the glass band
+	BatchKit.curved_text(parent, xf, "江南大厦", dc, 14.12, 6.4, deg_to_rad(135.0), 0.23, 100, 0.03, Color(0.86, 0.12, 0.10))
+	# entrances: corner door under the name, 中山东路 and 禾兴南路 doors; shop signs along both frontages
+	BatchKit.entrance(parent, xf, dc + Vector3(cos(deg_to_rad(110.0)), 0.0, sin(deg_to_rad(110.0))) * 14.0, Vector3(cos(deg_to_rad(110.0)), 0.0, sin(deg_to_rad(110.0))), 5.0)
+	BatchKit.entrance(parent, xf, Vector3(55.0, 0.0, 0.15), Vector3.BACK, 6.0, "江南大厦")
+	BatchKit.entrance(parent, xf, Vector3(-0.15, 0.0, -52.0), Vector3.LEFT, 5.0, "江南大厦")
+	BatchKit.shop_signs(parent, xf, Vector3(28.0, 0.0, 0.15), Vector3(50.0, 0.0, 0.15), Vector3.BACK, 5.3, 1)
+	BatchKit.shop_signs(parent, xf, Vector3(60.0, 0.0, 0.15), Vector3(83.0, 0.0, 0.15), Vector3.BACK, 5.3, 4)
+	BatchKit.shop_signs(parent, xf, Vector3(-0.15, 0.0, -28.0), Vector3(-0.15, 0.0, -48.0), Vector3.LEFT, 5.3, 7)
+	BatchKit.shop_signs(parent, xf, Vector3(-0.15, 0.0, -56.0), Vector3(-0.15, 0.0, -78.0), Vector3.LEFT, 5.3, 9)
 	# beige tower behind with storey glazing and a stack of balconies, plain sign frame on the roof
 	var beige := Color(0.86, 0.74, 0.60)
 	_slab(xf, Vector3(30.0, 0.0, -64.0), Vector3(62.0, 66.0, -42.0), beige)

@@ -645,6 +645,13 @@ static func _mall(parent: Node3D, lights: Array) -> void:
 		BatchKit.bx("op", xf, Vector3(-30.0, 10.6, gz2 - 3.0), Vector3(30.0, 11.2, gz2 + 3.0), Color(0.30, 0.46, 0.22))
 	for tp: Vector3 in [Vector3(-48.0, 0.0, -100.0), Vector3(-48.0, 0.0, -40.0), Vector3(-48.0, 0.0, 30.0), Vector3(-48.0, 0.0, 100.0)]:
 		_tree(xf * tp, 2 if int(tp.z) % 3 == 0 else 0, 1.0)
+	# entrances and shop boards along the 南湖路 front
+	var ents := [-100.0, -36.0, 34.0, 100.0]
+	for i in ents.size():
+		var ez: float = ents[i]
+		BatchKit.entrance(parent, xf, Vector3(-42.4, 0.0, ez), Vector3.LEFT, 8.0, "南湖天地" if i == 1 else "")
+		if i < ents.size() - 1:
+			BatchKit.shop_signs(parent, xf, Vector3(-42.6, 0.0, ez + 7.0), Vector3(-42.6, 0.0, float(ents[i + 1]) - 7.0), Vector3.LEFT, 5.4, i * 5 + 2)
 	BatchKit.light(parent, xf, Vector3(-50.0, 8.0, 0.0), Color(1.0, 0.88, 0.70), 60.0, lights)
 
 

@@ -3477,6 +3477,69 @@ def merge_staggered_junctions(graph_nodes, graph_edges, max_gap=28.0, only_nodes
     print(f"staggered junctions: {len(groups)} folded into straight crossroads ({len(drop_nodes)} nodes merged)")
 
 
+def straighten_through_nodes(graph_nodes, graph_edges, track_ids, max_dev=12.0, min_angle=165.0):
+    """Where T1 carries straight on through a junction but the OSM node sits a few metres off the road's line
+    (so the track snakes left-right inside the junction), move the node onto the straight line between the
+    track's points ~30 m either side and drop the track edges' kinking shape points in between; the cross
+    streets follow the node."""
+    pos = {n["id"]: n for n in graph_nodes}
+    inc = defaultdict(list)
+    for e in graph_edges:
+        inc[e["a"]].append(e)
+        inc[e["b"]].append(e)
+    moved = 0
+    for nid, es in inc.items():
+        tes = [e for e in es if e["id"] in track_ids and not e.get("underground")]
+        if len(tes) != 2 or nid not in pos:
+            continue
+        P = pos[nid]["pos"]
+
+        def far(e):
+            seq = e["pts"] if e["a"] == nid else list(reversed(e["pts"]))
+            for q in seq[1:]:
+                if math.hypot(q[0] - P[0], q[1] - P[1]) >= 30.0:
+                    return q
+            return seq[-1]
+        A, B = far(tes[0]), far(tes[1])
+        ux, uy = A[0] - P[0], A[1] - P[1]
+        vx, vy = B[0] - P[0], B[1] - P[1]
+        la, lb = math.hypot(ux, uy), math.hypot(vx, vy)
+        if la < 1e-6 or lb < 1e-6:
+            continue
+        ang = math.degrees(math.acos(max(-1.0, min(1.0, (ux * vx + uy * vy) / (la * lb)))))
+        dx, dy = B[0] - A[0], B[1] - A[1]
+        L2 = dx * dx + dy * dy
+        t = ((P[0] - A[0]) * dx + (P[1] - A[1]) * dy) / L2
+        Q = [A[0] + dx * t, A[1] + dy * t]
+        dev = math.hypot(Q[0] - P[0], Q[1] - P[1])
+        if ang < min_angle or dev < 0.8 or dev > max_dev:
+            continue
+        Q = [round(Q[0], 2), round(Q[1], 2)]
+        pos[nid]["pos"] = Q
+        for e in es:
+            pts = [list(q) for q in e["pts"]]
+            at_a = e["a"] == nid
+            if not at_a:
+                pts.reverse()
+            keep_r = 30.0 if e in tes else 12.0
+            stop = far(e) if e in tes else None
+            out = [Q]
+            dropping = True
+            for q in pts[1:]:
+                if dropping and len(pts) > 2 and q is not pts[-1] and (
+                        (stop is not None and q != stop and math.hypot(q[0] - P[0], q[1] - P[1]) < keep_r) or
+                        (stop is None and math.hypot(q[0] - P[0], q[1] - P[1]) < keep_r)):
+                    continue
+                dropping = False
+                out.append(q)
+            if not at_a:
+                out.reverse()
+            e["pts"] = out
+            e["length"] = round(sum(math.hypot(out[k + 1][0] - out[k][0], out[k + 1][1] - out[k][1]) for k in range(len(out) - 1)), 2)
+        moved += 1
+    print(f"T1 through-junction kinks straightened: {moved}")
+
+
 def main():
     nodes, ways, rels, poi_nodes = load_osm()
     print("MAIN_RECT (screenshot):", MAIN_RECT)
@@ -3523,6 +3586,7 @@ def main():
         if e:
             t1_nodes.update((e["a"], e["b"]))
     merge_staggered_junctions(graph_nodes, graph_edges, only_nodes=t1_nodes)
+    straighten_through_nodes(graph_nodes, graph_edges, {t["edge_id"] for t in _probe.get("tracks", [])})
     rail_crossings = build_rail_crossings(graph_edges, railways)
 
     road_grid = Grid(45.0)
