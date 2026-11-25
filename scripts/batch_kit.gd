@@ -267,3 +267,35 @@ static func shop_signs(parent: Node3D, xf: Transform3D, a: Vector3, b: Vector3, 
 		box("em_d", xf, p, Vector3(minf(L / float(n) - 0.8, 5.4), 1.0, 0.18), col, ry)
 		var txt_col := Color(0.12, 0.12, 0.14) if col.v > 0.85 else Color(1.0, 0.98, 0.92)
 		label(parent, xf, SHOP_NAMES[(seed * 7 + i * 5) % SHOP_NAMES.size()], p + f * 0.12, ry, 64, 0.012, txt_col)
+
+
+const BOUTIQUE_NAMES := ["MAISON 南湖", "ATELIER 嘉", "LUMIÈRE", "SILK · 嘉绢", "CAFÉ 1921", "茶 · 和", "GALERIE",
+	"MONO", "AURA", "TERRA", "南湖书房", "OAK & STONE", "SOLÈNE", "KURO", "VERDE", "北欧家居"]
+
+
+# double-height boutique shopfronts from a to b (ground points on a facade, outward `f`): grey metal portal per
+# bay, full glass with a lit interior, gold louvres on alternate bays, a small dark sign panel with white
+# lettering over the door (no garish boards)
+static func boutique_fronts(parent: Node3D, xf: Transform3D, a: Vector3, b: Vector3, f: Vector3, h: float, seed: int) -> void:
+	var L := a.distance_to(b)
+	var n := maxi(1, int(L / 10.0))
+	var bw := L / float(n)
+	var u := (b - a).normalized()
+	var ry := atan2(f.x, f.z)
+	var metal := Color(0.40, 0.42, 0.45)
+	for i in n:
+		var c := a + u * (bw * (float(i) + 0.5))
+		for s: float in [-0.5, 0.5]:
+			box("op", xf, c + u * (s * bw) + f * 0.45 + Vector3(0.0, h * 0.5, 0.0), Vector3(0.7, h, 0.9), metal, ry)
+		box("op", xf, c + f * 0.45 + Vector3(0.0, h - 0.4, 0.0), Vector3(bw, 0.8, 0.9), metal.darkened(0.25), ry)
+		box("gl", xf, c + f * 0.2 + Vector3(0.0, (h - 0.8) * 0.5, 0.0), Vector3(bw - 0.7, h - 0.8, 0.08), Color(0.55, 0.66, 0.78), ry)
+		box("em_d", xf, c + f * 0.12 + Vector3(0.0, 1.9, 0.0), Vector3(bw - 1.6, 3.4, 0.04), Color(1.0, 0.90, 0.74), ry)
+		if (seed + i) % 2 == 0:
+			var g := -bw * 0.5 + 1.0
+			while g < bw * 0.5 - 0.8:
+				box("op_d", xf, c + u * g + f * 0.42 + Vector3(0.0, h * 0.62, 0.0), Vector3(0.16, h * 0.62, 0.36), Color(0.74, 0.62, 0.42), ry)
+				g += 0.7
+		box("op_d", xf, c + f * 0.3 + Vector3(0.0, 1.8, 0.0), Vector3(2.6, 3.6, 0.12), Color(0.14, 0.14, 0.15), ry)
+		box("em_d", xf, c + f * 0.37 + Vector3(0.0, 1.7, 0.0), Vector3(2.1, 3.2, 0.04), Color(1.0, 0.88, 0.70), ry)
+		box("op_d", xf, c + f * 0.5 + Vector3(0.0, 4.6, 0.0), Vector3(3.8, 0.75, 0.16), Color(0.12, 0.12, 0.13), ry)
+		label(parent, xf, BOUTIQUE_NAMES[(seed * 5 + i * 3) % BOUTIQUE_NAMES.size()], c + f * 0.6 + Vector3(0.0, 4.6, 0.0), ry, 56, 0.011, Color(0.96, 0.95, 0.92))

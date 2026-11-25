@@ -122,7 +122,7 @@ CATHOLIC_CHURCH_POS = (-522.0, -894.0)    # 嘉兴天主教堂 (圣母显灵堂)
 ZS_RECTS = [
     (-806.0, -998.0, -694.0, -936.0),    # 中山影城 and its round corner plaza
     (-796.0, -938.0, -688.0, -800.0),    # 戴梦得 podium, rotunda, tower, triangular wing
-    (-944.0, -990.0, -800.0, -832.0),    # 旭辉广场 forecourt, U podium and towers
+    (-964.0, -995.0, -800.0, -832.0),    # 旭辉广场 forecourt, U podium and towers
     (-680.0, -1140.0, -585.0, -1047.0),  # 江南大厦
     (-668.0, -1034.0, -452.0, -792.0),   # 天主堂 and its open lawn
 ]
@@ -1617,7 +1617,12 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
         for lpos, lrad, _ in lm_zones:
             if math.hypot(cen[0] - lpos[0], cen[1] - lpos[1]) < lrad:
                 return False
-        if in_zs_rect(cen[0], cen[1]) or in_nh_rect(cen[0], cen[1]):
+        # landmark sites: no generated block may even touch one (centroid tests let wide blocks clip in)
+        bx0 = min(q[0] for q in pts)
+        bx1 = max(q[0] for q in pts)
+        by0 = min(q[1] for q in pts)
+        by1 = max(q[1] for q in pts)
+        if any(bx1 > x0 and bx0 < x1 and by1 > y0 and by0 < y1 for (x0, y0, x1, y1) in ZS_RECTS + NH_RECTS):
             return False
         # Keep the full Jiaxing South HSR Station + North Forecourt Plaza + Bus Transit Hub precinct clear of random blocks!
         dx_s = cen[0] - SOUTH_STA_POS[0]
@@ -3623,6 +3628,56 @@ def main():
     # Build T1 starter network & widen its center-of-road boulevards BEFORE street furniture & storefronts!
     starter = build_t1_starter_network(graph_nodes, graph_edges)
     t1_surf_segs = starter.pop("_surface_segs", [])
+
+    # A divided road's bridge that starts inside the T1 corridor (中山东路 over the canal at 环城东路) ramps up
+    # across the tracks; when its twin carriageway bridge runs alongside, fold the road onto the twin (wider,
+    # both directions) and drop the one that crosses the corridor
+    def _in_t1(px, py, pad):
+        return any(seg_dist(px, py, ax, ay, bx, by)[0] < thw + pad for (ax, ay, bx, by, _dx, _dy, thw) in t1_surf_segs)
+    n_fold = 0
+    _vis_deg = defaultdict(int)
+    for e in graph_edges:
+        if not e.get("hide_road") and not e.get("underground"):
+            _vis_deg[e["a"]] += 1
+            _vis_deg[e["b"]] += 1
+    for e in graph_edges:
+        if not e.get("bridge") or e.get("hide_road") or e.get("underground"):
+            continue
+        a0, b0 = e["pts"][0], e["pts"][-1]
+        # only the stray twin: its corridor end leads nowhere but hidden links (the kept bridge stays reachable)
+        stray = (_in_t1(a0[0], a0[1], 4.0) and _vis_deg[e["a"]] <= 1) or (_in_t1(b0[0], b0[1], 4.0) and _vis_deg[e["b"]] <= 1)
+        if not stray:
+            continue
+        L0 = math.hypot(b0[0] - a0[0], b0[1] - a0[1]) or 1.0
+        for t in graph_edges:
+            if t is e or not t.get("bridge") or t.get("hide_road") or t.get("name") != e.get("name"):
+                continue
+            a1, b1 = t["pts"][0], t["pts"][-1]
+            L1 = math.hypot(b1[0] - a1[0], b1[1] - a1[1]) or 1.0
+            cosang = abs(((b0[0] - a0[0]) * (b1[0] - a1[0]) + (b0[1] - a0[1]) * (b1[1] - a1[1])) / (L0 * L1))
+            mx, my = (a0[0] + b0[0]) * 0.5, (a0[1] + b0[1]) * 0.5
+            if cosang > 0.95 and seg_dist(mx, my, a1[0], a1[1], b1[0], b1[1])[0] < 32.0:
+                e["hide_road"] = True
+                e["lanes_f"] = 0
+                e["lanes_b"] = 0
+                t["width"] = max(float(t["width"]), 17.0)
+                t["lanes_f"] = max(int(t.get("lanes_f", 1)), 2)
+                t["lanes_b"] = max(int(t.get("lanes_b", 1)), 2)
+                n_fold += 1
+                break
+    print(f"bridges folded off the T1 corridor: {n_fold}")
+    # bridge ends in the T1 corridor get no extended approach ramp (the terrain would otherwise hump the road
+    # back across the tram's junction)
+    n_flat = 0
+    t1_edge_ids = {t["edge_id"] for t in starter.get("tracks", [])}
+    for e in graph_edges:
+        if not e.get("bridge") or e.get("hide_road") or e.get("underground") or e["id"] in t1_edge_ids:
+            continue
+        for key, q in (("ramp_a", e["pts"][0]), ("ramp_b", e["pts"][-1])):
+            if _in_t1(q[0], q[1], 8.0):
+                e[key] = False
+                n_flat += 1
+    print(f"bridge ends kept flat at the T1 corridor: {n_flat}")
 
     # 机非隔离带: major non-tram roads get a 1.5 m planted buffer between the motor lanes and each non-motorised
     # lane. The OSM-derived 24 m section has no room for it (3 lanes + 2.05 m bike lane per side), so those roads

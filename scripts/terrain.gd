@@ -127,7 +127,7 @@ static func _build_decks(edges: Array) -> void:
 	_dk.resize(_w * _h)
 	_dk.fill(-1e6)
 	for e: Dictionary in edges:
-		if not bool(e.get("bridge", false)):
+		if not bool(e.get("bridge", false)) or bool(e.get("hide_road", false)):
 			continue
 		var pts: Array = e.get("pts", [])
 		if pts.size() < 2:
@@ -534,8 +534,8 @@ static func _load_bridge_arches(edges: Array) -> void:
 		if not (e_raw is Dictionary):
 			continue
 		var e: Dictionary = e_raw
-		if not bool(e.get("bridge", false)) or bool(e.get("underground", false)):
-			continue
+		if not bool(e.get("bridge", false)) or bool(e.get("underground", false)) or bool(e.get("hide_road", false)):
+			continue # hidden (folded) carriageways draw no deck, so they raise no arch either
 		var raw_pts: Array = e.get("pts", [])
 		if raw_pts.size() < 2:
 			continue
@@ -559,12 +559,17 @@ static func _load_bridge_arches(edges: Array) -> void:
 		if raw_len < 110.0:
 			# Extend smooth approach ramps along start/end tangents (<= 34m keeps nearby stations 100% flat)
 			var ramp_ext := clampf(25.0 + (raw_len - 28.0) * 0.12, 24.0, 34.0)
+			# an end flagged ramp_a / ramp_b = false (it sits in a tram corridor junction) gets no extension
+			var ext_a := ramp_ext if bool(e.get("ramp_a", true)) else 0.0
+			var ext_b := ramp_ext if bool(e.get("ramp_b", true)) else 0.0
 			var t0 := (poly[1] - poly[0]).normalized()
 			var t1 := (poly[poly.size() - 1] - poly[poly.size() - 2]).normalized()
-			arch_pts.append(poly[0] - t0 * ramp_ext)
+			if ext_a > 0.0:
+				arch_pts.append(poly[0] - t0 * ext_a)
 			arch_pts.append_array(poly)
-			arch_pts.append(poly[poly.size() - 1] + t1 * ramp_ext)
-			var tot := raw_len + ramp_ext * 2.0
+			if ext_b > 0.0:
+				arch_pts.append(poly[poly.size() - 1] + t1 * ext_b)
+			var tot := raw_len + ext_a + ext_b
 			h_peak = clampf(minf(2.35 + (raw_len - 28.0) * 0.016, tot * 0.0185), 2.15, 3.25)
 		else:
 			# Long bridge-tagged avenues arch cleanly within their interior so junction ends remain at y = 0.0m

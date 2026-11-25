@@ -797,7 +797,7 @@ static func _jiaxing_station(parent: Node3D, center: Vector3, angle: float, ligh
 	var b1_roof := Node3D.new()
 	b1_roof.name = "UndergroundStationRoof"
 	b1.add_child(b1_roof)
-	_add_box(b1_roof, Vector3(176.0, 0.45, 192.0), Vector3(0.0, -2.75, 6.0), ceiling_wood, 0.0, 0.0, 0.0, false)
+	_add_box(b1_roof, Vector3(176.0, 0.45, 192.0), Vector3(0.0, -2.75, 6.0), ceiling_wood, 0.0, 0.0, 0.0, true) # casts: keeps sunlight out of B1
 	for b1_lx: float in [-42.0, 0.0, 42.0]:
 		_add_box(b1_roof, Vector3(18.0, 0.25, 146.0), Vector3(b1_lx, -3.05, 4.0), warm_glow, 0.0, 0.0, 0.0, false)
 	_add_sign_label(b1, "嘉兴站 · B1 地下候车大厅", Vector3(0.0, -4.4, -36.0), 0.0, 96, 0.034, Color(0.55, 0.94, 1.0))

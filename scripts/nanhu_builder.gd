@@ -47,10 +47,8 @@ static func build(root: Node3D, lm: Dictionary, lights: Array) -> void:
 		BatchKit.commit(node, "Nanhu_Haogu")
 	var nd: Dictionary = lm.get("nanhu_district", {})
 	_district(node, nd, lights)
-	_hyatt_regency(node, lights)
-	BatchKit.commit(node, "Nanhu_HyattRegency")
-	_hyatt_place(node, lights)
-	BatchKit.commit(node, "Nanhu_HyattPlace")
+	_hyatt_complex(node, lights)
+	BatchKit.commit(node, "Nanhu_Hyatt")
 	_trees = null
 
 
@@ -406,10 +404,10 @@ static func _district(parent: Node3D, nd: Dictionary, lights: Array) -> void:
 	var k := 0
 	for py: float in [-450.0, -388.0]:
 		for px: float in [819.0, 851.0, 883.0]:
-			_shop_pavilion(BatchKit.xf(px, py, 0.0), 24.0, 30.0, 12.0 + float((k * 5) % 4), k, PI * 0.5 if k % 2 == 0 else -PI * 0.5)
+			_shop_pavilion(parent, BatchKit.xf(px, py, 0.0), 24.0, 30.0, 12.0 + float((k * 5) % 4), k, PI * 0.5 if k % 2 == 0 else -PI * 0.5)
 			k += 1
 	for px2: float in [733.0, 765.0, 797.0, 829.0]:
-		_shop_pavilion(BatchKit.xf(px2, -283.0, 0.0), 26.0, 26.0, 11.0 + float((k * 3) % 4), k, PI)
+		_shop_pavilion(parent, BatchKit.xf(px2, -283.0, 0.0), 26.0, 26.0, 11.0 + float((k * 3) % 4), k, PI)
 		k += 1
 	_axis_plaza(parent, lights)
 	BatchKit.commit(parent, "Nanhu_Tiandi")
@@ -473,7 +471,7 @@ static func _jiajuan_hall(parent: Node3D) -> void:
 
 # glass shop pavilion (two-to-three storeys) with butterfly fascia on the front and back, gold louvres on the
 # sides; `face` turns the front
-static func _shop_pavilion(xf0: Transform3D, w: float, d: float, h: float, k: int, face: float) -> void:
+static func _shop_pavilion(parent: Node3D, xf0: Transform3D, w: float, d: float, h: float, k: int, face: float) -> void:
 	var xf := xf0 * Transform3D(Basis(Vector3.UP, face), Vector3.ZERO)
 	var hw := w * 0.5
 	var hd := d * 0.5
@@ -489,6 +487,11 @@ static func _shop_pavilion(xf0: Transform3D, w: float, d: float, h: float, k: in
 			BatchKit.bx("op_d", xf, Vector3(m - 0.08, 0.3, zf + s * 0.12), Vector3(m + 0.08, h - 0.6, zf + s * 0.22), metal.darkened(0.2))
 			m += 2.4
 		BatchKit.bx("op_d", xf, Vector3(-hw + 1.2, 4.2, zf + s * 0.12), Vector3(hw - 1.2, 4.5, zf + s * 0.24), metal.darkened(0.2))
+		# lit door and a small dark name panel over it
+		BatchKit.bx("op_d", xf, Vector3(-1.5, 0.3, zf + s * 0.14), Vector3(1.5, 3.8, zf + s * 0.26), Color(0.14, 0.14, 0.15))
+		BatchKit.bx("em_d", xf, Vector3(-1.2, 0.4, zf + s * 0.26), Vector3(1.2, 3.6, zf + s * 0.3), Color(1.0, 0.88, 0.70))
+		BatchKit.bx("op_d", xf, Vector3(-2.2, 4.6, zf + s * 0.24), Vector3(2.2, 5.4, zf + s * 0.42), Color(0.12, 0.12, 0.13))
+		BatchKit.label(parent, xf, BatchKit.BOUTIQUE_NAMES[(k * 3 + int(s + 1.0)) % BatchKit.BOUTIQUE_NAMES.size()], Vector3(0.0, 5.0, zf + s * 0.46), 0.0 if s > 0.0 else PI, 56, 0.011, Color(0.96, 0.95, 0.92))
 		# butterfly fascia: rising toward both corners
 		for side: float in [-1.0, 1.0]:
 			var a := Vector3(0.0, h - 0.2, zf + s * 0.3)
@@ -651,7 +654,7 @@ static func _mall(parent: Node3D, lights: Array) -> void:
 		var ez: float = ents[i]
 		BatchKit.entrance(parent, xf, Vector3(-42.4, 0.0, ez), Vector3.LEFT, 8.0, "南湖天地" if i == 1 else "")
 		if i < ents.size() - 1:
-			BatchKit.shop_signs(parent, xf, Vector3(-42.6, 0.0, ez + 7.0), Vector3(-42.6, 0.0, float(ents[i + 1]) - 7.0), Vector3.LEFT, 5.4, i * 5 + 2)
+			BatchKit.boutique_fronts(parent, xf, Vector3(-42.6, 0.0, ez + 7.0), Vector3(-42.6, 0.0, float(ents[i + 1]) - 7.0), Vector3.LEFT, 9.4, i * 5 + 2)
 	BatchKit.light(parent, xf, Vector3(-50.0, 8.0, 0.0), Color(1.0, 0.88, 0.70), 60.0, lights)
 
 
@@ -714,48 +717,54 @@ static func _swept_roof(xf: Transform3D, x0: float, x1: float, z0: float, z1: fl
 	BatchKit.bx("em", xf, Vector3(x0 - 1.45, y - 0.12, z0 - 1.45), Vector3(x1 + 1.45, y, z0 - 1.35), Color(1.0, 0.80, 0.50))
 
 
-static func _hyatt_regency(parent: Node3D, lights: Array) -> void:
-	var xf := BatchKit.xf(930.0, -560.0, 0.5)
-	var hx := 35.0
-	var hz := 30.0
+# 凯悦 complex filling the band between 南湖路, the canal, 景湖路 and 纺工路 (T1): 南湖凯悦酒店 by the canal, 凯悦嘉轩酒店
+# along the tram line, joined by a glazed link, a conference wing and a garden court with a pond
+static func _hyatt_complex(parent: Node3D, lights: Array) -> void:
+	var xf := BatchKit.xf(985.0, -500.0, 0.45)
 	var fh := 4.0
-	var floors := 6
-	# courtyard block: four wings round a garden court
-	_hotel_floors(xf, -hx, hx, -hz, -hz + 14.0, floors, fh, 3)
-	_hotel_floors(xf, -hx, hx, hz - 14.0, hz, floors, fh, 3)
-	_hotel_floors(xf, -hx, -hx + 14.0, -hz + 14.0, hz - 14.0, floors, fh, 3)
-	_hotel_floors(xf, hx - 14.0, hx, -hz + 14.0, hz - 14.0, floors, fh, 3)
-	BatchKit.bx("op", xf, Vector3(-hx + 14.0, 0.0, -hz + 14.0), Vector3(hx - 14.0, 0.3, hz - 14.0), Color(0.30, 0.46, 0.22))
-	_swept_roof(xf, -hx, hx, -hz, hz, floors * fh)
-	# porte-cochere on the west (南湖路) side, reflecting pool with the boat sculpture and a pine
-	BatchKit.bx("op", xf, Vector3(-hx - 16.0, 6.0, -14.0), Vector3(-hx, 7.4, 14.0), Color(0.74, 0.66, 0.58))
-	BatchKit.bx("em", xf, Vector3(-hx - 16.1, 5.9, -14.1), Vector3(-hx, 6.0, 14.1), Color(1.0, 0.84, 0.60))
-	for cz: float in [-12.0, -4.0, 4.0, 12.0]:
-		BatchKit.bx("op", xf, Vector3(-hx - 14.6, 0.0, cz - 0.45), Vector3(-hx - 13.7, 6.0, cz + 0.45), Color(0.70, 0.62, 0.55))
-	BatchKit.bx("gl", xf, Vector3(-hx - 30.0, 0.0, -12.0), Vector3(-hx - 18.0, 0.35, 12.0), Color(0.06, 0.08, 0.10))
-	var bow := [Vector3(-hx - 28.0, 0.35, -10.0), Vector3(-hx - 20.0, 0.35, 9.0), Vector3(-hx - 24.0, 3.2, 10.5)]
-	BatchKit.fan("op", xf, bow, Color(0.16, 0.17, 0.19), Vector3(1.0, 0.2, -0.5))
-	_tree(xf * Vector3(-hx - 22.0, 0.0, 0.0), 0, 0.7)
-	BatchKit.label(parent, xf, "HYATT REGENCY", Vector3(-hx - 0.8, floors * fh - 2.6, 0.0), -PI * 0.5, 150, 0.03, Color(0.92, 0.92, 0.96))
-	BatchKit.label(parent, xf, "嘉兴南湖凯悦酒店", Vector3(-hx - 16.2, 6.7, 0.0), -PI * 0.5, 90, 0.022, Color(0.95, 0.88, 0.70))
-	BatchKit.light(parent, xf, Vector3(-hx - 8.0, 5.0, 0.0), Color(1.0, 0.84, 0.62), 36.0, lights)
-
-
-static func _hyatt_place(parent: Node3D, lights: Array) -> void:
-	var xf := BatchKit.xf(1040.0, -430.0, 0.43)
-	var hx := 25.0
-	var hz := 55.0
-	var fh := 4.0
-	var floors := 6
-	_hotel_floors(xf, -hx, hx, -hz, hz, floors, fh, 1)
-	# lobby glazing glowing at the base, two horizontal glass bands on the tram side
-	BatchKit.bx("em", xf, Vector3(hx + 0.8, 0.6, -hz + 4.0), Vector3(hx + 0.9, 3.4, hz - 4.0), Color(0.95, 0.78, 0.50))
+	# 南湖凯悦酒店: courtyard block of six floors, fins on the top three
+	_hotel_floors(xf, -50.0, 20.0, -110.0, -96.0, 6, fh, 3)
+	_hotel_floors(xf, -50.0, 20.0, -54.0, -40.0, 6, fh, 3)
+	_hotel_floors(xf, -50.0, -36.0, -96.0, -54.0, 6, fh, 3)
+	_hotel_floors(xf, 6.0, 20.0, -96.0, -54.0, 6, fh, 3)
+	BatchKit.bx("op", xf, Vector3(-36.0, 0.0, -96.0), Vector3(6.0, 0.3, -54.0), Color(0.30, 0.46, 0.22))
+	_swept_roof(xf, -50.0, 20.0, -110.0, -40.0, 6.0 * fh)
+	# porte-cochere and reflecting pool with the boat sculpture on the 南湖路 side
+	BatchKit.bx("op", xf, Vector3(-64.0, 6.0, -90.0), Vector3(-50.0, 7.4, -60.0), Color(0.74, 0.66, 0.58))
+	BatchKit.bx("em", xf, Vector3(-64.1, 5.9, -90.1), Vector3(-50.0, 6.0, -59.9), Color(1.0, 0.84, 0.60))
+	for cz: float in [-88.0, -80.0, -70.0, -62.0]:
+		BatchKit.bx("op", xf, Vector3(-62.6, 0.0, cz - 0.45), Vector3(-61.7, 6.0, cz + 0.45), Color(0.70, 0.62, 0.55))
+	BatchKit.entrance(parent, xf, Vector3(-50.1, 0.0, -75.0), Vector3.LEFT, 8.0)
+	BatchKit.bx("gl", xf, Vector3(-76.0, 0.0, -88.0), Vector3(-66.0, 0.35, -62.0), Color(0.06, 0.08, 0.10))
+	BatchKit.fan("op", xf, [Vector3(-74.0, 0.35, -86.0), Vector3(-68.0, 0.35, -66.0), Vector3(-71.0, 3.0, -64.5)], Color(0.16, 0.17, 0.19), Vector3(1.0, 0.2, -0.5))
+	_tree(xf * Vector3(-71.0, 0.0, -75.0), 0, 0.7)
+	BatchKit.label(parent, xf, "HYATT REGENCY", Vector3(-50.8, 6.0 * fh - 2.6, -75.0), -PI * 0.5, 150, 0.03, Color(0.92, 0.92, 0.96))
+	BatchKit.label(parent, xf, "嘉兴南湖凯悦酒店", Vector3(-64.2, 6.7, -75.0), -PI * 0.5, 90, 0.022, Color(0.95, 0.88, 0.70))
+	# 凯悦嘉轩酒店: long six-floor block of copper fins along 纺工路, lobby glow and glass bands on the tram side
+	_hotel_floors(xf, 0.0, 45.0, -38.0, 125.0, 6, fh, 1)
+	BatchKit.bx("em", xf, Vector3(45.8, 0.6, 90.0), Vector3(45.9, 3.4, 121.0), Color(0.95, 0.78, 0.50))
 	for y: float in [9.0, 13.0]:
-		BatchKit.bx("gl", xf, Vector3(hx + 0.8, y, -hz + 18.0), Vector3(hx + 1.0, y + 2.4, hz - 2.0), Color(0.28, 0.34, 0.40))
-	# roof edge rising to a shallow gable on the long sides, swept corners
-	_swept_roof(xf, -hx, hx, -hz, hz, floors * fh)
-	for xs: float in [-hx - 1.4, hx + 1.4]:
-		BatchKit.fan("op", xf, [Vector3(xs, floors * fh + 0.5, -hz - 1.4), Vector3(xs, floors * fh + 0.5, hz + 1.4), Vector3(xs, floors * fh + 2.6, 0.0)], Color(0.30, 0.27, 0.24), Vector3(signf(xs), 0.0, 0.0))
-	BatchKit.label(parent, xf, "凯悦嘉轩酒店", Vector3(hx + 1.1, floors * fh - 2.2, 22.0), PI * 0.5, 150, 0.03, Color(0.98, 0.96, 0.92))
-	BatchKit.label(parent, xf, "HYATT PLACE", Vector3(hx + 1.1, floors * fh - 2.2, -24.0), PI * 0.5, 140, 0.03, Color(0.98, 0.96, 0.92))
-	BatchKit.light(parent, xf, Vector3(hx + 6.0, 4.0, 0.0), Color(1.0, 0.84, 0.62), 40.0, lights)
+		BatchKit.bx("gl", xf, Vector3(45.8, y, -20.0), Vector3(46.0, y + 2.4, 121.0), Color(0.28, 0.34, 0.40))
+	_swept_roof(xf, 0.0, 45.0, -38.0, 125.0, 6.0 * fh)
+	for xs: float in [-1.4, 46.4]:
+		BatchKit.fan("op", xf, [Vector3(xs, 6.0 * fh + 0.5, -39.4), Vector3(xs, 6.0 * fh + 0.5, 126.4), Vector3(xs, 6.0 * fh + 2.8, 43.5)], Color(0.30, 0.27, 0.24), Vector3(signf(xs - 20.0), 0.0, 0.0))
+	BatchKit.entrance(parent, xf, Vector3(45.9, 0.0, 106.0), Vector3.RIGHT, 7.0)
+	BatchKit.label(parent, xf, "凯悦嘉轩酒店", Vector3(46.1, 6.0 * fh - 2.2, 70.0), PI * 0.5, 150, 0.03, Color(0.98, 0.96, 0.92))
+	BatchKit.label(parent, xf, "HYATT PLACE", Vector3(46.1, 6.0 * fh - 2.2, 22.0), PI * 0.5, 140, 0.03, Color(0.98, 0.96, 0.92))
+	# glazed two-storey link between the two hotels
+	BatchKit.bx("gl", xf, Vector3(-12.0, 0.0, -40.0), Vector3(0.0, 9.0, 0.0), Color(0.34, 0.42, 0.48))
+	BatchKit.bx("op", xf, Vector3(-12.6, 9.0, -40.6), Vector3(0.6, 9.6, 0.6), Color(0.80, 0.68, 0.54))
+	# three-floor conference / ballroom wing with fins, roof swept like the hotels
+	_hotel_floors(xf, -50.0, -14.0, 24.0, 100.0, 3, 4.6, 0)
+	_swept_roof(xf, -50.0, -14.0, 24.0, 100.0, 3.0 * 4.6)
+	BatchKit.entrance(parent, xf, Vector3(-50.1, 0.0, 62.0), Vector3.LEFT, 8.0, "会议中心")
+	# garden court between the wings: lawn, pond, paths and trees
+	BatchKit.bx("op", xf, Vector3(-50.0, 0.0, -38.0), Vector3(-12.5, 0.12, 22.0), Color(0.32, 0.48, 0.22))
+	BatchKit.bx("gl", xf, Vector3(-42.0, 0.12, -28.0), Vector3(-20.0, 0.22, 8.0), Color(0.10, 0.18, 0.20))
+	BatchKit.bx("op", xf, Vector3(-48.0, 0.12, 12.0), Vector3(-13.0, 0.2, 15.0), Color(0.70, 0.68, 0.64))
+	for tp: Vector3 in [Vector3(-46.0, 0.0, -32.0), Vector3(-16.0, 0.0, -32.0), Vector3(-46.0, 0.0, 4.0), Vector3(-16.0, 0.0, 18.0), Vector3(-30.0, 0.0, 18.0), Vector3(-46.0, 0.0, 18.0)]:
+		_tree(xf * tp, 2 if int(tp.z) % 2 == 0 else 0, 0.9)
+	for tp2: Vector3 in [Vector3(52.0, 0.0, 0.0), Vector3(52.0, 0.0, 40.0), Vector3(52.0, 0.0, 80.0), Vector3(-56.0, 0.0, 30.0), Vector3(-56.0, 0.0, 90.0)]:
+		_tree(xf * tp2, 0, 1.0)
+	BatchKit.light(parent, xf, Vector3(-58.0, 5.0, -75.0), Color(1.0, 0.84, 0.62), 36.0, lights)
+	BatchKit.light(parent, xf, Vector3(52.0, 4.0, 100.0), Color(1.0, 0.84, 0.62), 40.0, lights)

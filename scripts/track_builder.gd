@@ -2101,9 +2101,9 @@ static func build_network_tracks_and_stations(
 	if bool(mono_ug.get("led", false)):
 		has_tunnel_led = true
 	if has_tunnel:
-		_commit_mesh(parent, "UndergroundTunnelWalls", tunnel_wall_st, Color(0.36, 0.37, 0.39), 0.88, 0.0, false)
+		_commit_mesh(parent, "UndergroundTunnelWalls", tunnel_wall_st, Color(0.36, 0.37, 0.39), 0.88, 0.0, true) # shadows keep the sun (and the street's shadows) out of the tunnel
 	if has_tunnel_roof:
-		_commit_mesh(parent, "UndergroundTunnelRoofs", tunnel_roof_st, Color(0.28, 0.30, 0.33), 0.90, 0.0, false)
+		_commit_mesh(parent, "UndergroundTunnelRoofs", tunnel_roof_st, Color(0.28, 0.30, 0.33), 0.90, 0.0, true)
 	if has_tunnel_led:
 		tunnel_led_st.generate_normals()
 		var led_mi := MeshInstance3D.new()
