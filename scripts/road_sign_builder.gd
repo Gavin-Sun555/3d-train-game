@@ -14,6 +14,7 @@ const POLE := Color(0.52, 0.54, 0.56)
 const PLATE_RANGE := 170.0
 const GUIDE_RANGE := 420.0
 const GUIDE_TEXT_RANGE := 300.0
+const CELL := 200.0
 
 static var _mat: StandardMaterial3D = null
 
@@ -21,12 +22,12 @@ static var _mat: StandardMaterial3D = null
 static func build(parent: Node3D, signs: Array) -> void:
 	if signs.is_empty():
 		return
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	# boards are batched per 200 m cell: a visibility range is measured to a mesh's centre, so one batch over
+	# a whole district hid every board while the (individually ranged) names still showed, floating in the air
+	var cells := {}
 	var labels := Node3D.new()
 	labels.name = "RoadSignTexts"
 	parent.add_child(labels)
-	var any := false
 	for sg: Dictionary in signs:
 		var p: Array = sg.get("p", [])
 		var d: Array = sg.get("d", [])
@@ -39,30 +40,36 @@ static func build(parent: Node3D, signs: Array) -> void:
 		if dir.length_squared() < 0.01:
 			continue
 		dir = dir.normalized()
+		var ck := Vector2i(floori(pos.x / CELL), floori(pos.z / CELL))
+		if not cells.has(ck):
+			var stc := SurfaceTool.new()
+			stc.begin(Mesh.PRIMITIVE_TRIANGLES)
+			cells[ck] = stc
+		var st: SurfaceTool = cells[ck]
 		if str(sg.get("k", "")) == "name":
 			_name_plate(st, labels, pos, dir, str(sg.get("t", "")), str(sg.get("py", "")))
-			any = true
 		elif str(sg.get("k", "")) == "guide":
 			_guide_sign(st, labels, pos, dir, float(sg.get("w", 16.0)), bool(sg.get("tram", false)),
 				str(sg.get("L", "")), str(sg.get("S", "")), str(sg.get("R", "")))
-			any = true
-	if not any:
+	if cells.is_empty():
 		return
 	if _mat == null:
 		_mat = StandardMaterial3D.new()
 		_mat.vertex_color_use_as_albedo = true
 		_mat.roughness = 0.45
 		_mat.metallic = 0.15
-	var mi := MeshInstance3D.new()
-	mi.name = "RoadSignBoards"
-	mi.mesh = st.commit()
-	mi.material_override = _mat
-	mi.visibility_range_end = GUIDE_RANGE
-	mi.visibility_range_end_margin = 30.0
 	if Terrain.active:
-		mi.set_meta("on_terrain", true)
 		labels.set_meta("on_terrain", true)
-	parent.add_child(mi)
+	for ck: Vector2i in cells.keys():
+		var mi := MeshInstance3D.new()
+		mi.name = "RoadSignBoards_%d_%d" % [ck.x, ck.y]
+		mi.mesh = (cells[ck] as SurfaceTool).commit()
+		mi.material_override = _mat
+		mi.visibility_range_end = GUIDE_RANGE
+		mi.visibility_range_end_margin = 30.0
+		if Terrain.active:
+			mi.set_meta("on_terrain", true)
+		parent.add_child(mi)
 
 
 # --- 路名牌 ------------------------------------------------------------------------------------------------

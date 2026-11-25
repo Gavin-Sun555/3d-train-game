@@ -215,11 +215,13 @@ static func commit(parent: Node3D, prefix: String) -> void:
 
 
 # ------------------------------------------------------------------------------------------------ signage
-const SHOP_NAMES := ["珠宝首饰", "女装", "男装", "童装", "咖啡", "奶茶", "眼镜", "化妆品", "运动户外", "鞋包",
-	"家居生活", "书店", "面包烘焙", "数码", "钟表", "火锅", "小吃", "药房", "超市", "花店", "茶饮", "美甲",
-	"影城", "健身", "黄金"]
-const SIGN_COLS := [Color(0.80, 0.12, 0.12), Color(0.10, 0.24, 0.55), Color(0.12, 0.12, 0.14), Color(0.10, 0.45, 0.30),
-	Color(0.62, 0.42, 0.16), Color(0.55, 0.16, 0.40), Color(0.92, 0.92, 0.90)]
+const SHOP_BRANDS := ["金悦珠宝", "CAFÉ 南湖", "茶 · 小满", "LUMI 眼镜", "MOMO 童装", "ORIGIN 运动", "衣品 MODE",
+	"鲜果时间", "BAKE & CO.", "臻品腕表", "书 · 遇", "锦绣丝绸", "味 · 江南", "URBAN HOME", "BEAUTY 美妆", "悦动健身",
+	"小龙虾 · 夜", "粽 · 嘉禾", "ATELIER 女装", "数码港"]
+const LETTER_COLS := [Color(1.0, 0.97, 0.90), Color(1.0, 0.97, 0.90), Color(0.96, 0.82, 0.48), Color(1.0, 0.97, 0.90),
+	Color(0.92, 0.22, 0.16), Color(0.55, 0.85, 0.95)]
+const LOGO_COLS := [Color(0.85, 0.15, 0.12), Color(0.12, 0.35, 0.75), Color(0.10, 0.55, 0.40), Color(0.92, 0.66, 0.18),
+	Color(0.62, 0.20, 0.52), Color(0.95, 0.95, 0.93)]
 
 
 # lettering wrapped round a drum: one Label3D per character, each tangent to the wall, reading left to right
@@ -254,19 +256,25 @@ static func entrance(parent: Node3D, xf: Transform3D, c: Vector3, f: Vector3, w:
 		label(parent, xf, name, c + f * 4.05 + Vector3(0.0, 5.75, 0.0), ry, 80, 0.02, Color(0.98, 0.96, 0.90))
 
 
-# a row of lit shop signboards along a facade from a to b (ground points), each with a shop name
+# shop signage along a facade from a to b (ground points, outward `f`), the way malls actually sign their
+# tenants: individual lit letters fixed straight onto the facade over each shop's glazing, a small lit logo
+# block beside them and a warm downlight strip; no coloured boards
 static func shop_signs(parent: Node3D, xf: Transform3D, a: Vector3, b: Vector3, f: Vector3, y: float, seed: int) -> void:
 	var L := a.distance_to(b)
-	var n := int(L / 6.4)
+	var n := int(L / 8.0)
 	if n < 1:
 		return
 	var ry := atan2(f.x, f.z)
+	var u := (b - a).normalized()
 	for i in n:
-		var p := a.lerp(b, (float(i) + 0.5) / float(n)) + f * 0.3 + Vector3(0.0, y, 0.0)
-		var col: Color = SIGN_COLS[(seed + i * 3) % SIGN_COLS.size()]
-		box("em_d", xf, p, Vector3(minf(L / float(n) - 0.8, 5.4), 1.0, 0.18), col, ry)
-		var txt_col := Color(0.12, 0.12, 0.14) if col.v > 0.85 else Color(1.0, 0.98, 0.92)
-		label(parent, xf, SHOP_NAMES[(seed * 7 + i * 5) % SHOP_NAMES.size()], p + f * 0.12, ry, 64, 0.012, txt_col)
+		var k := seed * 7 + i * 5
+		var name: String = SHOP_BRANDS[k % SHOP_BRANDS.size()]
+		var col: Color = LETTER_COLS[(seed + i * 3) % LETTER_COLS.size()]
+		var c := a.lerp(b, (float(i) + 0.5) / float(n)) + f * 0.12 + Vector3(0.0, y, 0.0)
+		var tw := minf(float(name.length()) * 0.72, L / float(n) - 2.2)
+		box("em_d", xf, c - u * (tw * 0.5 + 0.75), Vector3(0.85, 0.85, 0.12), (LOGO_COLS[k % LOGO_COLS.size()] as Color), ry)
+		label(parent, xf, name, c + f * 0.08 + u * 0.35, ry, 84, 0.011, col)
+		box("em_d", xf, c + f * 0.05 - Vector3(0.0, 0.85, 0.0), Vector3(L / float(n) - 1.4, 0.06, 0.08), Color(1.0, 0.88, 0.66), ry)
 
 
 const BOUTIQUE_NAMES := ["MAISON 南湖", "ATELIER 嘉", "LUMIÈRE", "SILK · 嘉绢", "CAFÉ 1921", "茶 · 和", "GALERIE",

@@ -35,15 +35,21 @@ static func build(root: Node3D, data: Dictionary, lights: Array) -> void:
 	var node := Node3D.new()
 	node.name = "ZhongshanBlock"
 	root.add_child(node)
+	# one set of meshes per building: visibility ranges are measured to a mesh's centre
 	_church(node, lights)
-	_cinema(node, lights)
-	_diamond(node, lights)
-	_cifi(node, lights)
-	_jiangnan(node, lights)
 	for pv in data.get("parking", []):
 		if pv is Array:
 			_parked_cars(pv)
-	BatchKit.commit(node, "Zhongshan")
+	BatchKit.commit(node, "Zhongshan_Church")
+	_cinema(node, lights)
+	_street_shops(node)
+	BatchKit.commit(node, "Zhongshan_Cinema")
+	_diamond(node, lights)
+	BatchKit.commit(node, "Zhongshan_Diamond")
+	_cifi(node, lights)
+	BatchKit.commit(node, "Zhongshan_CIFI")
+	_jiangnan(node, lights)
+	BatchKit.commit(node, "Zhongshan_Jiangnan")
 
 
 # ------------------------------------------------------------------------------------------------ helpers
@@ -210,11 +216,13 @@ static func _cinema(parent: Node3D, lights: Array) -> void:
 	for k in 4:
 		BatchKit.bx("gl", xf, Vector3(-20.0 + k * 8.0, 21.0, -12.0), Vector3(-16.5 + k * 8.0, 21.6, 12.0), Color(0.40, 0.50, 0.58))
 	# 中山东路 frontage: shop glazing and the name
-	BatchKit.bx("gl", xf, Vector3(-24.0, 0.4, -19.15), Vector3(10.0, 4.3, -19.05), Color(0.30, 0.38, 0.44))
 	BatchKit.label(parent, xf, "中 山 影 城", Vector3(-7.0, 18.0, -19.3), PI, 110, 0.034, Color(0.96, 0.92, 0.84))
-	BatchKit.entrance(parent, xf, Vector3(-7.0, 0.0, -19.15), Vector3.FORWARD, 6.0)
-	BatchKit.shop_signs(parent, xf, Vector3(-24.0, 0.0, -19.15), Vector3(-11.0, 0.0, -19.15), Vector3.FORWARD, 5.0, 19)
-	BatchKit.shop_signs(parent, xf, Vector3(-3.0, 0.0, -19.15), Vector3(10.0, 0.0, -19.15), Vector3.FORWARD, 5.0, 21)
+	# a cinema: no shops on 中山东路, only film-poster lightboxes along the wall
+	var poster_cols := [Color(0.20, 0.30, 0.62), Color(0.78, 0.30, 0.20), Color(0.18, 0.18, 0.22), Color(0.62, 0.52, 0.30)]
+	for k in 5:
+		var px := -22.0 + k * 6.4
+		BatchKit.bx("op_d", xf, Vector3(px - 1.6, 1.0, -19.25), Vector3(px + 1.6, 5.6, -19.1), Color(0.22, 0.22, 0.24))
+		BatchKit.bx("em_d", xf, Vector3(px - 1.4, 1.2, -19.3), Vector3(px + 1.4, 5.4, -19.25), (poster_cols[k % poster_cols.size()] as Color))
 	# raised terrace deck under the glass front
 	BatchKit.bx("op", xf, Vector3(14.0, 0.0, -17.0), Vector3(21.0, 4.5, 17.0), Color(0.80, 0.78, 0.71))
 	# curved white frame round the glass front
@@ -277,6 +285,26 @@ static func _cinema(parent: Node3D, lights: Array) -> void:
 				BatchKit.box("op_d", xf, mid + Vector3(0.0, 0.55 + 0.1 * li, 0.0), Vector3(ln, 0.025, 0.03), Color(0.12, 0.12, 0.13), yaw)
 			BatchKit.box("op_d", xf, mid + Vector3(0.0, 0.68, 0.0), Vector3(0.14, 0.12, 0.05), Color(0.10, 0.10, 0.11), yaw)
 	BatchKit.light(parent, xf, Vector3(24.0, 8.0, 0.0), Color(1.0, 0.90, 0.72), 36.0, lights)
+
+
+# street-front shop row on 中山东路 between 旭辉广场 and 中山影城: two storeys, shopfront glazing, lit letters
+static func _street_shops(parent: Node3D) -> void:
+	var xf := BatchKit.xf(-822.5, -980.0, 0.14)
+	var wall := Color(0.82, 0.80, 0.76)
+	BatchKit.bx("op", xf, Vector3(-19.0, 0.0, -6.5), Vector3(19.0, 8.6, 7.0), wall)
+	BatchKit.bx("op", xf, Vector3(-19.3, 8.4, -6.8), Vector3(19.3, 9.0, 7.3), wall.darkened(0.2))
+	var x := -19.0
+	var k := 0
+	while x < 18.0:
+		var w := 6.2 if k % 3 != 1 else 8.4
+		var x1 := minf(x + w, 19.0)
+		BatchKit.bx("op_d", xf, Vector3(x, 0.0, -6.62), Vector3(x + 0.35, 5.0, -6.45), Color(0.36, 0.36, 0.38))
+		BatchKit.bx("gl", xf, Vector3(x + 0.35, 0.3, -6.6), Vector3(x1, 3.9, -6.52), Color(0.36, 0.44, 0.50))
+		BatchKit.bx("em_d", xf, Vector3(x + 0.6, 0.4, -6.5), Vector3(x1 - 0.3, 3.6, -6.46), Color(1.0, 0.90, 0.72))
+		BatchKit.bx("gl", xf, Vector3(x + 0.8, 5.6, -6.58), Vector3(x1 - 0.5, 7.8, -6.52), Color(0.30, 0.36, 0.42))
+		x = x1
+		k += 1
+	BatchKit.shop_signs(parent, xf, Vector3(-19.0, 0.0, -6.6), Vector3(19.0, 0.0, -6.6), Vector3.FORWARD, 4.6, 23)
 
 
 # ------------------------------------------------------------------------------------------------ 戴梦得
