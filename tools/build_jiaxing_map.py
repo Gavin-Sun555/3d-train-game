@@ -169,6 +169,14 @@ AIRPORT_TERM_POS = (-9442.0, 5316.0)      # 嘉兴南湖机场航站楼 (IATA: J
 OLD_CITY_CENTER = proj(30.7655, 120.7460)
 
 
+def in_zhonghuan(x, y):
+    """Inside the 中环 ring (中环西/北/东/南路): Jiaxing's 1980s-2000s city, built mostly as 5-7 storey walk-up
+    小区 (烟雨社区, 南溪花园, 湖滨花园 ... as on the Amap satellite layer), not the 18-33 storey towers of the
+    new districts outside it."""
+    return -2900.0 < x < 2250.0 and -3250.0 < y < 1450.0
+
+
+
 def in_rect(p, r, pad=0.0):
     return r[0] - pad <= p[0] <= r[2] + pad and r[1] - pad <= p[1] <= r[3] + pad
 
@@ -826,6 +834,8 @@ def build_street_graph(nodes, ways, water_grid, park_grid=None, rail_grid=None):
             "length": round(ed["length"], 1),
             "pts": [rnd(p) for p in pts],
         }
+        if ed.get("cls"):
+            rec["cls"] = ed["cls"]
         if is_br:
             rec["bridge"] = True
         if ed.get("tunnel"):
@@ -1792,7 +1802,10 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
         hsh = (cx_i * 73856093) ^ (cy_i * 19349663) ^ 0x5bd1e995
         hsh &= 0x7FFFFFFF
         r_t = (hsh % 1000) / 1000.0
-        ctype = "tower" if r_t < 0.62 else ("yangfang" if r_t < 0.84 else "mixed")
+        if in_zhonghuan(px, py):
+            ctype = "walkup" if r_t < 0.66 else ("yangfang" if r_t < 0.82 else "tower")
+        else:
+            ctype = "tower" if r_t < 0.62 else ("yangfang" if r_t < 0.84 else "mixed")
         tfl = [18, 22, 24, 26, 28, 30, 32, 33][(hsh // 1000) % 8]
         yfl = [6, 7, 8, 9, 11][(hsh // 8000) % 5]
         sch = PALETTE_ZH2026[(hsh // 40000) % len(PALETTE_ZH2026)]
@@ -1802,6 +1815,14 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
         ctype, tfl, yfl, sch, cid = zone_profile(px, py)
         # mixed compounds: towers on the north half of the cell (+y is south), 洋房 on the south half
         tower = ctype == "tower" or (ctype == "mixed" and (py / 220.0 - math.floor(py / 220.0)) < 0.5)
+        if ctype == "walkup":
+            fl = [5, 6, 6, 6, 7][cid % 5]
+            b = {"pts": [rnd(p) for p in poly], "h": fl * 3.0 + 1.0, "kind": "apartments", "style": 3,
+                 "colour": PALETTE_RES[cid % len(PALETTE_RES)], "cpd": cid}
+            if cid % 2 == 0:  # 平改坡: about half the old compounds got pitched roofs
+                b["roof"] = pitched_roof_dict(px, py, b_ang, hl, hw, "gabled")
+                b["roof_colour"] = ["#40464e", "#6e4236", "#3a4048"][cid % 3]
+            return b
         if tower:
             fl = max(11, tfl + rng.choice([0, 0, 0, -1, 1, -2, 2]))
             b = {"pts": [rnd(p) for p in poly], "h": fl * 3.0 + 1.5, "kind": "apartments", "style": 2,
@@ -1824,7 +1845,7 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
         dist_old = math.hypot(cx0 - OLD_CITY_CENTER[0], cy0 - OLD_CITY_CENTER[1])
         if lu == "residential":
             # Chinese 小区: neat east-west oriented parallel south-facing slab apartment buildings (板楼)!
-            is_old = dist_old < 1450.0
+            is_old = dist_old < 1450.0 or (in_zhonghuan(cx0, cy0) and zone_profile(cx0, cy0)[0] == "walkup")
             if is_old:
                 # 1990s-2000s 老小区: 5-7 storey walk-up slabs with pitched tile roofs
                 step_x, step_y = 34.0, 28.0
@@ -2094,8 +2115,8 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
                             }
                         else:
                             # Standard Chinese urban mid/high-rise apartment or mixed-use block
-                            if dist_old < 1800.0:
-                                h = rng.choice([14.0, 18.0, 22.0, 28.0])
+                            if dist_old < 1800.0 or (in_zhonghuan(cx, cy) and zone_profile(cx, cy)[0] == "walkup"):
+                                h = rng.choice([14.0, 18.0, 22.0, 28.0]) if dist_old < 1800.0 else rng.choice([16.0, 19.0, 19.0, 22.0])
                                 use_pitch = h <= 18.0 and rng.random() < 0.55
                                 b = {
                                     "pts": [rnd(p) for p in poly], "h": h, "kind": "apartments",
@@ -2681,10 +2702,45 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
         dist_hsr = math.hypot(cen[0] - SOUTH_STA_POS[0], cen[1] - SOUTH_STA_POS[1])
         dist_yuehe = math.hypot(cen[0] - YUEHE_POS[0], cen[1] - YUEHE_POS[1])
         in_core_comm = min(dist_center, dist_nanhu) < 3200.0 or dist_hsr < 1400.0 or best_hw >= 4.8
-        prob = 0.99 if (best_hw >= 4.8 or in_core_comm) else 0.94
+        # Where Jiaxing actually has street shops (Amap survey of the T1 corridor): ground floors of the old walk-up
+        # blocks and of commercial buildings, and the 底商 podium of new compounds only along the main roads.
+        # 洋房 compounds, schools, hospitals and offices present a wall or a fence; nothing is set back more than
+        # ~14 m behind the kerb.
+        bk = blds[bi]
+        kind_b = bk.get("kind", "yes")
+        if best_d > 14.0 or kind_b in ("school", "university", "college", "hospital", "civic", "public", "office",
+                                       "government", "church", "train_station", "warehouse"):
+            continue
+        if bk.get("yangfang"):
+            continue
+        if kind_b in ("apartments", "residential") and bk["h"] >= 26.0:
+            # new high-rise compound: podium shops only on a main road, and not on every block
+            prob = 0.55 if best_hw >= 8.0 else 0.0
+        elif kind_b in ("commercial", "retail", "mall"):
+            prob = 0.9
+        elif kind_b == "apartments" or bk.get("style") == 3:
+            # old walk-up block: shops on the street side, fewer on narrow lanes
+            prob = 0.75 if best_hw >= 5.0 else 0.35
+        else:
+            prob = 0.6 if best_hw >= 5.0 else 0.25
+        if dist_yuehe < 400.0:
+            prob = 0.99
         if rng.random() > prob:
             continue
         nx, ny = ((c[1] - a[1]) / el, -(c[0] - a[0]) / el) if ccw else (-(c[1] - a[1]) / el, (c[0] - a[0]) / el)
+        # the shop face must actually look at the street
+        mx_f, my_f = (a[0] + c[0]) * 0.5, (a[1] + c[1]) * 0.5
+        look_ok = False
+        for (rax, ray, rbx, rby, hw) in road_grid.query(mx_f - 32, my_f - 32, mx_f + 32, my_f + 32):
+            dd, tt = seg_dist(mx_f, my_f, rax, ray, rbx, rby)
+            if dd - hw <= best_d + 0.5:
+                qx, qy = rax + (rbx - rax) * tt, ray + (rby - ray) * tt
+                ql = math.hypot(qx - mx_f, qy - my_f)
+                if ql > 1e-6 and ((qx - mx_f) * nx + (qy - my_f) * ny) / ql > 0.5:
+                    look_ok = True
+                    break
+        if not look_ok:
+            continue
         ux, uy = (c[0] - a[0]) / el, (c[1] - a[1]) / el
         # Flush wall-to-wall continuous Chinese ground-floor shop rows (连排底商 — 1 to 6 seamless bays filling the entire facade!)
         pad_end = 0.18 if el >= 8.0 else 0.10
@@ -2731,6 +2787,217 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
 #    嘉兴南站 -> 庆丰路 -> 由拳路 -> 纺工路 -> 嘉兴火车站 -> 中山东路 -> 安乐路（旭辉广场）
 #    Rolling Stock: 中车长客 · 嘉兴“南湖号” 5-Module Supercapacitor 100% Low-Floor Tram
 # ---------------------------------------------------------------------------------------------
+# Real Jiaxing cross-sections by road class, kerb to kerb (Amap satellite survey of the T1 corridor, Nov 2026):
+# 主干道 ~32-45 m (3+3 lanes, bike lanes, 机非隔离带), 次干道 ~24-28 m (2+2), 支路 ~16-18 m (1+1 + bike lanes).
+# OSM rarely tags lanes in Jiaxing, so most of these came through as 8.8 m two-lane streets.
+# (two-way width, lanes per direction, one-way carriageway width, one-way lanes)
+CLASS_SECTION = {
+    "trunk": (36.0, 3, 14.5, 3),
+    "primary": (34.0, 3, 14.5, 3),
+    "secondary": (26.0, 2, 11.5, 2),
+    "tertiary": (17.0, 1, 8.8, 2),
+}
+
+
+def widen_roads_by_class(graph_edges, nodes, ways):
+    """Widen streets to their class's real cross-section, but never so far that the kerb comes within 3 m of a
+    mapped (OSM) building: real buildings stay, the street takes what room there is."""
+    bgrid = Grid(40.0)
+    for wid, (refs, t) in ways.items():
+        if "building" not in t or t.get("building") == "no" or len(refs) < 4:
+            continue
+        pts = [nodes[r] for r in refs if r in nodes]
+        if len(pts) < 3:
+            continue
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        bgrid.add(pts, min(xs), min(ys), max(xs), max(ys))
+    # parallel neighbours (the other carriageway of a divided road, a frontage road): both may widen, so each keeps
+    # to its half of the gap
+    sgrid = Grid(40.0)
+    for e in graph_edges:
+        if e.get("underground"):
+            continue
+        p = e["pts"]
+        for k in range(len(p) - 1):
+            ax, ay = p[k]
+            bx, by = p[k + 1]
+            sgrid.add((e["id"], ax, ay, bx, by), min(ax, bx), min(ay, by), max(ax, bx), max(ay, by))
+
+    def parallel_gap(e):
+        p = e["pts"]
+        gap = 99.0
+        for k in range(len(p) - 1):
+            ax, ay = p[k]
+            bx, by = p[k + 1]
+            L = math.hypot(bx - ax, by - ay)
+            if L < 1.0:
+                continue
+            ux, uy = (bx - ax) / L, (by - ay) / L
+            t = 5.0
+            while t < L - 5.0:
+                qx, qy = ax + ux * t, ay + uy * t
+                dend = min(math.hypot(qx - p[0][0], qy - p[0][1]), math.hypot(qx - p[-1][0], qy - p[-1][1]))
+                if dend > 18.0:
+                    for (oid, ox0, oy0, ox1, oy1) in sgrid.query(qx - 25, qy - 25, qx + 25, qy + 25):
+                        if oid == e["id"]:
+                            continue
+                        oL = math.hypot(ox1 - ox0, oy1 - oy0)
+                        if oL < 1.0 or abs(ux * (ox1 - ox0) / oL + uy * (oy1 - oy0) / oL) < 0.9:
+                            continue
+                        gap = min(gap, seg_dist(qx, qy, ox0, oy0, ox1, oy1)[0])
+                t += 10.0
+        return gap
+
+    n_w = 0
+    for e in graph_edges:
+        sec = CLASS_SECTION.get(e.get("cls", ""))
+        if sec is None or e.get("underground") or e.get("tunnel"):
+            continue
+        lf, lb = int(e.get("lanes_f", 1)), int(e.get("lanes_b", 1))
+        one_way = lf == 0 or lb == 0
+        want = sec[2] if one_way else sec[0]
+        w0 = float(e["width"])
+        if want <= w0 + 0.5:
+            continue
+        pts = e["pts"]
+        L = sum(math.hypot(pts[k + 1][0] - pts[k][0], pts[k + 1][1] - pts[k][1]) for k in range(len(pts) - 1))
+        clear = 99.0
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        for bp in bgrid.query(min(xs) - 30, min(ys) - 30, max(xs) + 30, max(ys) + 30):
+            for q in bp:
+                # corners beyond the street's ends stand across the junction, not beside it
+                d, tt = min((seg_dist(q[0], q[1], pts[k][0], pts[k][1], pts[k + 1][0], pts[k + 1][1]) for k in range(len(pts) - 1)),
+                            key=lambda r: r[0])
+                if d < clear:
+                    along_ok = True
+                    if L > 30.0:
+                        da = math.hypot(q[0] - pts[0][0], q[1] - pts[0][1])
+                        db = math.hypot(q[0] - pts[-1][0], q[1] - pts[-1][1])
+                        along_ok = min(da, db) > 14.0
+                    if along_ok:
+                        clear = d
+        w1 = min(want, max(w0, 2.0 * (clear - 3.0)))
+        if w1 > w0 + 0.5:
+            gap = parallel_gap(e)
+            if gap < 60.0:
+                w1 = min(w1, max(w0, gap - 1.2))
+        if w1 <= w0 + 0.5:
+            continue
+        e["width"] = round(w1, 1)
+        if one_way:
+            n = sec[3] if w1 >= sec[2] - 0.5 else max(1, int((w1 - 4.2) / 3.3))
+            if lf:
+                e["lanes_f"] = max(lf, n)
+            else:
+                e["lanes_b"] = max(lb, n)
+        else:
+            n = sec[1] if w1 >= sec[0] - 1.0 else max(1, min(sec[1], int((w1 - 6.5) / 6.6)))
+            e["lanes_f"] = max(lf, n)
+            e["lanes_b"] = max(lb, n)
+        n_w += 1
+    print(f"Road class cross-sections: widened {n_w} street edges (kerbs kept 3 m off mapped buildings)")
+
+
+def resolve_parallel_overlaps(graph_edges, t1_ids):
+    """Last pass before the street meshes: two parallel carriageways may not share asphalt (coplanar surfaces
+    flicker). A strip lying mostly inside a T1 boulevard is the old twin carriageway and is hidden; any other pair
+    is narrowed (the wider one first) until their kerbs no longer cross."""
+    vis = [e for e in graph_edges if not e.get("hide_road") and not e.get("underground") and not e.get("bridge")]
+    sgrid = Grid(40.0)
+    for e in vis:
+        p = e["pts"]
+        for k in range(len(p) - 1):
+            ax, ay = p[k]
+            bx, by = p[k + 1]
+            sgrid.add((e["id"], ax, ay, bx, by), min(ax, bx), min(ay, by), max(ax, bx), max(ay, by))
+    by_id = {e["id"]: e for e in vis}
+
+    def samples(e):
+        p = e["pts"]
+        out = []
+        for k in range(len(p) - 1):
+            ax, ay = p[k]
+            bx, by = p[k + 1]
+            L = math.hypot(bx - ax, by - ay)
+            if L < 1.0:
+                continue
+            ux, uy = (bx - ax) / L, (by - ay) / L
+            t = 4.0
+            while t < L - 4.0:
+                qx, qy = ax + ux * t, ay + uy * t
+                if min(math.hypot(qx - p[0][0], qy - p[0][1]), math.hypot(qx - p[-1][0], qy - p[-1][1])) > 22.0:
+                    out.append((qx, qy, ux, uy))
+                t += 8.0
+        return out
+
+    n_hide = n_narrow = 0
+    for _it in range(3):
+        changed = False
+        for e in vis:
+            if e.get("hide_road") or e["id"] in t1_ids:
+                continue
+            sm = samples(e)
+            if not sm:
+                continue
+            hw = float(e["width"]) * 0.5
+            in_t1 = 0
+            worst = {}
+            for (qx, qy, ux, uy) in sm:
+                for (oid, ox0, oy0, ox1, oy1) in sgrid.query(qx - 30, qy - 30, qx + 30, qy + 30):
+                    o = by_id.get(oid)
+                    if o is None or oid == e["id"] or o.get("hide_road"):
+                        continue
+                    oL = math.hypot(ox1 - ox0, oy1 - oy0)
+                    if oL < 1.0 or abs(ux * (ox1 - ox0) / oL + uy * (oy1 - oy0) / oL) < 0.9:
+                        continue
+                    d = seg_dist(qx, qy, ox0, oy0, ox1, oy1)[0]
+                    ohw = float(o["width"]) * 0.5
+                    if d < hw + ohw - 0.3:
+                        if oid in t1_ids and d < ohw + hw * 0.5:
+                            in_t1 += 1
+                            break
+                        worst[oid] = min(worst.get(oid, 99.0), d)
+            if in_t1 >= max(2, int(0.5 * len(sm))):
+                e["hide_road"] = True
+                e["lanes_f"] = 0
+                e["lanes_b"] = 0
+                n_hide += 1
+                changed = True
+                continue
+            for oid, d in worst.items():
+                o = by_id[oid]
+                ohw = float(o["width"]) * 0.5
+                hw = float(e["width"]) * 0.5
+                excess = hw + ohw - (d - 0.4)
+                if excess <= 0.0:
+                    continue
+                # take it out of the wider street (never below a single 5.5 m lane), T1 boulevards stay as they are
+                if oid not in t1_ids and ohw > hw:
+                    tgt, other_hw = o, hw
+                else:
+                    tgt, other_hw = e, ohw
+                new_w = max(5.5, 2.0 * (d - 0.4 - other_hw))
+                if new_w < float(tgt["width"]) - 0.05:
+                    tgt["width"] = round(new_w, 1)
+                    lanes_room = max(1, int((new_w - 2.2) / 3.3))
+                    if int(tgt.get("lanes_f", 0)) and int(tgt.get("lanes_b", 0)):
+                        per = max(1, lanes_room // 2)
+                        tgt["lanes_f"] = min(int(tgt["lanes_f"]), per)
+                        tgt["lanes_b"] = min(int(tgt["lanes_b"]), per)
+                    elif int(tgt.get("lanes_f", 0)):
+                        tgt["lanes_f"] = min(int(tgt["lanes_f"]), lanes_room)
+                    elif int(tgt.get("lanes_b", 0)):
+                        tgt["lanes_b"] = min(int(tgt["lanes_b"]), lanes_room)
+                    tgt.pop("bike_buffer", None)
+                    n_narrow += 1
+                    changed = True
+        if not changed:
+            break
+    print(f"Parallel carriageways: {n_hide} twin strips inside T1 boulevards hidden, {n_narrow} narrowed to stop sharing asphalt")
+
+
 def apply_t1_survey(blds, storefronts, road_grid, bld_grid):
     """Street-level corrections along T1 from the map survey (tools/jiaxing_t1_survey.py): campuses that the
     generator filled with towers come back down to office / hospital height, frontages that are really walls get
@@ -3760,6 +4027,7 @@ def main():
         park_grid.add(pp, min(xs), min(ys), max(xs), max(ys))
 
     graph_nodes, graph_edges = build_street_graph(nodes, ways, water_grid, park_grid, rail_grid)
+    widen_roads_by_class(graph_edges, nodes, ways)
     # 由拳路 × 庆丰路: the divided 由拳路 carriageways and the kinked 庆丰路 leg met in a skewed five-way Y where T1
     # turns south; rebuilt as a square crossroads (the parallel one-way carriageway is folded into the main road)
     square_junction(graph_nodes, graph_edges, (4216.26, 2577.23), (4208.5, 2564.0), drop_names_widths=[("由拳路", 8.8)])
@@ -4048,6 +4316,7 @@ def main():
             ys = [p[1] for p in bpts]
             bld_grid.add((min(xs), min(ys), max(xs), max(ys), bpts), min(xs), min(ys), max(xs), max(ys))
 
+    resolve_parallel_overlaps(graph_edges, t1_edge_ids)
     roads, cws, lamps, trees, storefronts = build_street_furniture(
         graph_edges, graph_nodes, blds, poi_nodes, nodes, road_grid, water_grid, rail_grid, bld_grid, freeway_grid, raw_islands
     )
