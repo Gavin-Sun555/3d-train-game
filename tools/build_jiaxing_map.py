@@ -37,6 +37,8 @@ sys.path.insert(0, HERE)
 from extract_demo_data import road_width_for  # noqa: E402
 from osm_storefronts import KIND_WIDTH, SKIP_KINDS  # noqa: E402
 
+from jiaxing_t1_survey import T1_ROAD_WIDTHS, REAL_SHOPS, NO_SHOP_BOXES, CAMPUS_BOXES  # noqa: E402
+
 # Projection centered at Nanhu Lake (南湖)
 LAT0, LON0 = 30.7550, 120.7520
 KX = 111320.0 * math.cos(LAT0 * math.pi / 180.0)
@@ -106,7 +108,7 @@ NANHU_GATE_POS = (786.0, 486.0)           # 南湖景区主大门广场 (cleanly
 NANHU_TIANDI_POS = (798.0, -347.0)        # 南湖天地 (Nanhu NE lakeside commercial heritage)
 MEMORIAL_POS = proj(30.74986, 120.75693)  # 南湖革命纪念馆
 GOV_POS = (-95.0, 610.0)                  # 嘉兴市人民政府
-JIAXING_NO1_POS = (1670.0, 1385.0)        # 嘉兴市第一中学 (full authentic campus east of 纺工路, north of 中环南路)
+JIAXING_NO1_POS = (1680.0, 1385.0)        # 嘉兴市第一中学 (full authentic campus east of 纺工路, north of 中环南路)
 HANLIN_POS = (1268.0, 1412.0)             # 瀚林府邸 (嘉兴一中纺工路西侧高端封闭小区)
 NO1_BRIDGE_POS = (1432.1, 1531.9)         # 嘉兴一中站人行过街天桥 (直达中央有轨电车站台)
 YUEHE_POS = (-620.0, -1930.0)             # 月河历史街区南入口牌坊 (verified dry land!)
@@ -2729,6 +2731,127 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
 #    嘉兴南站 -> 庆丰路 -> 由拳路 -> 纺工路 -> 嘉兴火车站 -> 中山东路 -> 安乐路（旭辉广场）
 #    Rolling Stock: 中车长客 · 嘉兴“南湖号” 5-Module Supercapacitor 100% Low-Floor Tram
 # ---------------------------------------------------------------------------------------------
+def apply_t1_survey(blds, storefronts, road_grid, bld_grid):
+    """Street-level corrections along T1 from the map survey (tools/jiaxing_t1_survey.py): campuses that the
+    generator filled with towers come back down to office / hospital height, frontages that are really walls get
+    no shops, and the merchants actually trading at each stop take over the nearest matching shop slot (or a
+    small two-storey podium is added on that kerb when the generator left the frontage empty)."""
+    def cen(pts):
+        return sum(q[0] for q in pts) / len(pts), sum(q[1] for q in pts) / len(pts)
+
+    n_campus = 0
+    for b in blds:
+        cx, cy = cen(b["pts"])
+        for (x0, y0, x1, y1, hmax, kind, col) in CAMPUS_BOXES:
+            if x0 < cx < x1 and y0 < cy < y1 and b.get("kind") in ("apartments", "residential", "yes", "commercial", "office"):
+                if float(b["h"]) > hmax:
+                    b["h"] = round(hmax * (0.55 + 0.45 * ((int(cx * 7 + cy * 13) % 100) / 100.0)), 1)
+                b["kind"] = kind
+                b["style"] = 1
+                b["colour"] = col
+                for k in ("cpd", "yangfang", "roof", "roof_colour", "trim"):
+                    b.pop(k, None)
+                n_campus += 1
+                break
+
+    def mid(sf):
+        return (sf["p0"][0] + sf["p1"][0]) * 0.5, (sf["p0"][1] + sf["p1"][1]) * 0.5
+
+    n0 = len(storefronts)
+    storefronts[:] = [sf for sf in storefronts
+                      if not any(x0 < mid(sf)[0] < x1 and y0 < mid(sf)[1] < y1 for (x0, y0, x1, y1) in NO_SHOP_BOXES)]
+    n_cut = n0 - len(storefronts)
+
+    sf_grid = Grid(40.0)
+    for i, sf in enumerate(storefronts):
+        mx, my = mid(sf)
+        sf_grid.add(i, mx, my, mx, my)
+
+    def nearest_road(px, py):
+        best = None
+        for (ax, ay, bx, by, hw) in road_grid.query(px - 70, py - 70, px + 70, py + 70):
+            d, _t = seg_dist(px, py, ax, ay, bx, by)
+            if best is None or d - hw < best[0]:
+                best = (d - hw, ax, ay, bx, by, hw)
+        return best
+
+    def side_of(r, px, py):
+        _d, ax, ay, bx, by, _hw = r
+        return 1.0 if (bx - ax) * (py - ay) - (by - ay) * (px - ax) >= 0.0 else -1.0
+
+    taken = set()
+    n_named = n_podium = n_miss = 0
+    for (nm, kind, brand, (tx, ty)) in REAL_SHOPS:
+        r = nearest_road(tx, ty)
+        if r is None:
+            n_miss += 1
+            continue
+        s_t = side_of(r, tx, ty)
+        best = None
+        for i in sf_grid.query(tx - 45, ty - 45, tx + 45, ty + 45):
+            if i in taken:
+                continue
+            sf = storefronts[i]
+            mx, my = mid(sf)
+            d = math.hypot(mx - tx, my - ty)
+            if d > 45.0 or side_of(r, mx, my) != s_t:
+                continue
+            if best is None or d < best[0]:
+                best = (d, i)
+        rec = {"name": nm, "kind": kind, "brand": brand or nm, "tier": "local"}
+        if best is not None:
+            taken.add(best[1])
+            storefronts[best[1]].update(rec)
+            n_named += 1
+            continue
+        # no shop slot on that kerb: a 16 x 10 m two-storey podium set back behind the pavement
+        _d, ax, ay, bx, by, hw = r
+        L = max(1e-6, math.hypot(bx - ax, by - ay))
+        ux, uy = (bx - ax) / L, (by - ay) / L
+        nx, ny = -uy * s_t, ux * s_t  # from the road toward the target's side
+        _dd, t = seg_dist(tx, ty, ax, ay, bx, by)
+        placed = False
+        for shift in (0.0, 9.0, -9.0, 18.0, -18.0):
+            px = ax + (bx - ax) * t + ux * shift + nx * (hw + 10.0)
+            py = ay + (by - ay) * t + uy * shift + ny * (hw + 10.0)
+            ang = math.atan2(uy, ux)
+            poly = make_rect_poly(px, py, ang, 8.0, 5.0)
+            xs = [q[0] for q in poly]
+            ys = [q[1] for q in poly]
+            clash = False
+            for ob in bld_grid.query(min(xs) - 1, min(ys) - 1, max(xs) + 1, max(ys) + 1):
+                if any(point_in_poly(q[0], q[1], ob[4]) for q in poly + [(px, py)]) or \
+                        any(point_in_poly(q[0], q[1], poly) for q in ob[4]):
+                    clash = True
+                    break
+            if not clash:
+                for (rax, ray, rbx, rby, rhw) in road_grid.query(min(xs) - 30, min(ys) - 30, max(xs) + 30, max(ys) + 30):
+                    if any(seg_dist(q[0], q[1], rax, ray, rbx, rby)[0] < rhw + 3.0 for q in poly):
+                        clash = True
+                        break
+            if clash:
+                continue
+            b = {"pts": [rnd(q) for q in poly], "h": 7.5, "kind": "commercial", "style": 1, "colour": "#e4ded3"}
+            blds.append(b)
+            bi = len(blds) - 1
+            bld_grid.add((min(xs), min(ys), max(xs), max(ys), b["pts"]), min(xs), min(ys), max(xs), max(ys))
+            # shop face on the road side; storefront normal points out to the street, p0 -> p1 turns clockwise to it
+            fx, fy = px - nx * 5.0, py - ny * 5.0
+            onx, ony = -nx, -ny
+            dux, duy = -ony, onx  # so that (du.y, -du.x) == outward normal
+            sf = {"b": bi, "p0": rnd((fx - dux * 3.4, fy - duy * 3.4)), "p1": rnd((fx + dux * 3.4, fy + duy * 3.4)),
+                  "n": [round(onx, 4), round(ony, 4)]}
+            sf.update(rec)
+            storefronts.append(sf)
+            n_podium += 1
+            placed = True
+            break
+        if not placed:
+            n_miss += 1
+    print(f"T1 survey: {n_campus} campus buildings re-kinded, {n_cut} made-up shops off campus/compound walls, "
+          f"{n_named} real merchants on existing shop slots, {n_podium} on new podiums, {n_miss} not placed")
+
+
 def build_t1_starter_network(nodes_list, edges_list):
     adj = defaultdict(list)
     for e in edges_list:
@@ -3093,6 +3216,15 @@ def build_t1_starter_network(nodes_list, edges_list):
             ed["width"] = max(float(ed.get("width", 8.8)), 24.0)
             ed["lanes_f"] = max(int(ed.get("lanes_f", 2)), 2)
             ed["lanes_b"] = max(int(ed.get("lanes_b", 2)), 2)
+            # real cross-sections measured along the line (tools/jiaxing_t1_survey.py)
+            for rn, (rw, rl, rbuf) in T1_ROAD_WIDTHS.items():
+                if rn in ename:
+                    ed["width"] = rw
+                    ed["lanes_f"] = rl
+                    ed["lanes_b"] = rl
+                    if rbuf > 0.0:
+                        ed["bike_buffer"] = rbuf
+                    break
         ed["tram_median"] = True
         pts_t = ed["pts"]
         hw_t = float(ed["width"]) * 0.5
@@ -3919,6 +4051,7 @@ def main():
     roads, cws, lamps, trees, storefronts = build_street_furniture(
         graph_edges, graph_nodes, blds, poi_nodes, nodes, road_grid, water_grid, rail_grid, bld_grid, freeway_grid, raw_islands
     )
+    apply_t1_survey(blds, storefronts, road_grid, bld_grid)
     gated_compounds = build_gated_compounds(landuse_zones, ways, nodes, road_grid, water_grid, rail_grid, bld_grid)
 
     # 底商 face the street from OUTSIDE the compound: wherever a compound fence would pass in front of a building

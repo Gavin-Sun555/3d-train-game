@@ -70,7 +70,7 @@ func rebuild(graph: NetworkGraph, focus_pos: Vector3) -> void:
 		var ed0: Dictionary = graph.edges[eid0]
 		if bool(ed0.get("underground", false)):
 			continue
-		var hw0 := clampf(float(ed0.get("width", 10.0)) * 0.5, 4.0, 13.5)
+		var hw0 := clampf(float(ed0.get("width", 10.0)) * 0.5, 4.0, 22.0)
 		var na := int(ed0["a"])
 		var nb := int(ed0["b"])
 		_node_max_hw[na] = maxf(float(_node_max_hw.get(na, 4.5)), hw0)
@@ -354,7 +354,7 @@ func _edge_allows_ebike(graph: NetworkGraph, eid: int) -> bool:
 	var w := float(ed.get("width", 10.0))
 	if w < 8.0 or elen < 22.0:
 		return false
-	var hw := clampf(w * 0.5, 4.0, 13.5)
+	var hw := clampf(w * 0.5, 4.0, 22.0)
 	if graph.built_tracks.has(eid):
 		# Only permit bike lanes on wide tram boulevards with full clearance outside the tram dynamic envelope!
 		var tram_half := graph.get_edge_track_half_sep(eid)
@@ -392,7 +392,7 @@ static func _bike_dir_ok(graph: NetworkGraph, eid: int, dir: float) -> bool:
 func _edge_lane_pose(graph: NetworkGraph, eid: int, s: float, dir: float, jitter: float) -> Array:
 	var ed: Dictionary = graph.edges[eid]
 	var elen := maxf(1.0, float(ed["length"]))
-	var hw := clampf(float(ed.get("width", 10.0)) * 0.5, 4.0, 13.5)
+	var hw := clampf(float(ed.get("width", 10.0)) * 0.5, 4.0, 22.0)
 	var bl_w := 2.05 if hw >= 5.75 else (1.55 if hw >= 4.8 else 1.25)
 	var lat_off := maxf(2.2, hw - bl_w * 0.52) + jitter * (1.0 if hw >= 5.75 else 0.55)
 	if graph.built_tracks.has(eid):
@@ -586,7 +586,7 @@ func _begin_two_stage_left(eb: Dictionary, graph: NetworkGraph, at_nid: int) -> 
 	var right := fwd.cross(Vector3.UP).normalized()
 	var p0: Vector3 = eb["pos"]
 	var lat := (p0 - node_pos).dot(right)
-	var hw_x := clampf(float(graph.edges[int(pl["eid"])]["width"]) * 0.5, 3.0, 13.5)
+	var hw_x := clampf(float(graph.edges[int(pl["eid"])]["width"]) * 0.5, 3.0, 22.0)
 	var w := node_pos + fwd * (hw_x + 1.6) + right * lat
 	w.y = p0.y
 	eb["turning"] = true

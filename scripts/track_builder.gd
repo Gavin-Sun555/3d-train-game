@@ -1727,7 +1727,7 @@ static func build_network_tracks_and_stations(
 		# Catenary poles every 28m along each built edge (surface & viaduct; underground uses ceiling conductor rail).
 		# Place double-track surface masts on the center median (between tracks) or strictly on the sidewalk behind
 		# the curb (road_hw + 0.52m) so NO mast EVER stands inside a motor lane or non-motorized bike lane!
-		var road_hw := clampf(float(graph.edges[eid].get("width", 12.0)) * 0.5, 3.2, 13.5)
+		var road_hw := clampf(float(graph.edges[eid].get("width", 12.0)) * 0.5, 3.2, 22.0)
 		var has_xover_e := graph.crossovers.has(eid)
 		var pole_s := s_start + 6.0
 		while pole_s < s_end - 4.0:

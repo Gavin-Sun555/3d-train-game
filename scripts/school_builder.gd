@@ -194,7 +194,8 @@ static func _grounds(sc: Node3D, kit: Dictionary) -> void:
 	sc.add_child(lawn)
 	var I := Transform3D.IDENTITY
 	# gate forecourt (tan tiles), the avenue to the round plaza, paths north / south from it, campus roads
-	_b(kit, "op", I, Vector3(-232.0, 0.03, 12.0), Vector3(48.0, 0.06, 220.0), STONE_LT)
+	# pavement strip along the 40 m 纺工路 (its kerb runs ~6 m west of the campus edge)
+	_b(kit, "op", I, Vector3(-217.0, 0.03, 12.0), Vector3(18.0, 0.06, 220.0), STONE_LT)
 	_b(kit, "op", I, Vector3(-200.0, 0.05, GATE_Z), Vector3(18.0, 0.06, 40.0), TAN)
 	_b(kit, "op", I, Vector3(-150.0, 0.05, GATE_Z), Vector3(100.0, 0.06, 16.0), TAN)
 	_b(kit, "op", I, Vector3(-108.0, 0.05, -92.0), Vector3(12.0, 0.06, 112.0), STONE_LT)

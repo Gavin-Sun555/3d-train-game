@@ -433,7 +433,7 @@ static func _build_roads_and_curbs(
 		var raw_pts: Array = r.get("pts", [])
 		if raw_pts.size() < 2:
 			continue
-		var hw: float = clampf(float(r.get("width", 12.0)) * 0.5, 3.2, 13.5)
+		var hw: float = clampf(float(r.get("width", 12.0)) * 0.5, 3.2, 22.0)
 		var layer: int = int(r.get("layer", 0))
 		var y_base: float = 0.042 + float(maxi(0, layer)) * 5.2
 		var y := y_base
@@ -2742,7 +2742,7 @@ static func _build_kerbs(parent: Node3D, roads: Array, bays: Array, road_mat: Ma
 		var rp2: Array = rr.get("pts", [])
 		if rp2.size() < 2 or int(rr.get("layer", 0)) != 0 or bool(rr.get("underground", false)):
 			continue
-		var rhw: float = clampf(float(rr.get("width", 12.0)) * 0.5, 3.2, 13.5)
+		var rhw: float = clampf(float(rr.get("width", 12.0)) * 0.5, 3.2, 22.0)
 		for si in range(rp2.size() - 1):
 			var sa := Vector2(float(rp2[si][0]), float(rp2[si][1]))
 			var sb := Vector2(float(rp2[si + 1][0]), float(rp2[si + 1][1]))
@@ -2769,7 +2769,7 @@ static func _build_kerbs(parent: Node3D, roads: Array, bays: Array, road_mat: Ma
 		var raw_pts: Array = r.get("pts", [])
 		if raw_pts.size() < 2 or int(r.get("layer", 0)) != 0 or bool(r.get("underground", false)):
 			continue
-		var hw: float = clampf(float(r.get("width", 12.0)) * 0.5, 3.2, 13.5)
+		var hw: float = clampf(float(r.get("width", 12.0)) * 0.5, 3.2, 22.0)
 		var n_seg := raw_pts.size() - 1
 		var u_acc := 0.0
 		for i in range(n_seg):
@@ -2963,7 +2963,7 @@ static func _build_bike_lane_strips(
 		var r: Dictionary = roads[ri]
 		if not bool(r.get("bike_lane", false)) or bool(r.get("underground", false)) or int(r.get("layer", 0)) != 0:
 			continue
-		var hw := clampf(float(r.get("width", 12.0)) * 0.5, 3.2, 13.5)
+		var hw := clampf(float(r.get("width", 12.0)) * 0.5, 3.2, 22.0)
 		if hw < 4.0:
 			continue
 		var pts: Array = r.get("pts", [])
@@ -3235,7 +3235,7 @@ static func _build_bike_guardrails(
 			continue
 		if float(r.get("bike_buffer", 0.0)) > 0.0:
 			continue # the planted 机非隔离带 separates the lanes there
-		var hw := clampf(float(r.get("width", 12.0)) * 0.5, 3.2, 13.5)
+		var hw := clampf(float(r.get("width", 12.0)) * 0.5, 3.2, 22.0)
 		if hw < 5.75:
 			continue
 		var pts: Array = r.get("pts", [])

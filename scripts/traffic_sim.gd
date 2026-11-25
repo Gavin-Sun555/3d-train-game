@@ -444,7 +444,7 @@ func _ensure_signal_visuals(sig: Dictionary, graph: NetworkGraph, sig_holder: No
 		var app_right := app_fwd.cross(Vector3.UP).normalized()
 		var j_p2: Vector2 = graph.nodes[nid]["pos"]
 		var j_pos3 := Vector3(j_p2.x, 0.0, j_p2.y)
-		var road_hw := clampf(float(ed["width"]) * 0.5, 4.5, 13.5)
+		var road_hw := clampf(float(ed["width"]) * 0.5, 4.5, 22.0)
 		var track_sep := graph.get_edge_track_half_sep(eid) if edge_has_track else 0.0
 		var cross_hw := 5.5
 		for nb_c: Dictionary in nbs:
@@ -2215,7 +2215,7 @@ static func _bike_lane_car_cap(graph: NetworkGraph, eid: int) -> float:
 	var ed: Dictionary = graph.edges[eid]
 	if not bool(ed.get("bike_lane", false)):
 		return 1e9
-	var hw := clampf(float(ed["width"]) * 0.5, 3.2, 13.5)
+	var hw := clampf(float(ed["width"]) * 0.5, 3.2, 22.0)
 	return maxf(1.4, hw - NetworkGraph.bike_lane_width(hw) - float(ed.get("bike_buffer", 0.0)) - BIKE_CAR_CLEAR)
 
 
