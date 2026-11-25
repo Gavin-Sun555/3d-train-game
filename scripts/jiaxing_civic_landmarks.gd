@@ -284,8 +284,7 @@ static func _nanhu_tiandi(parent: Node3D, center: Vector3, lights: Array) -> voi
 	for wz in range(-96, 114, 18):
 		if absf(float(wz) - 18.0) < 16.0:
 			continue
-		_cyl(td, 0.22, 0.34, 3.6, Vector3(-39.0, 1.9, float(wz)), trunk, 6)
-		_cyl(td, 2.2, 4.4, 4.8, Vector3(-39.0, 5.2, float(wz)), willow, 8)
+		ParkLandscapeBuilder.plant_tree(td, Vector3(-39.0, 0.1, float(wz)), 5 if (wz / 18) % 2 == 0 else 1, 1.0, Color(0.24, 0.44, 0.18) if (wz / 18) % 2 == 0 else ParkLandscapeBuilder.CAMPHOR)
 
 	# --- B. Zone 1: 嘉绢印象 — 1920s Red-Brick Silk Mill Heritage Halls (Sawtooth Roofs & 34m Brick Chimney!) ---
 	# Main silk-mill exhibition & flagship retail hall (z = -24, x = +16)
@@ -573,12 +572,10 @@ static func _jiaxing_no1_school(parent: Node3D, center: Vector3, angle: float, l
 		var tz := -22.0 + float(ti / 7) * 26.0
 		if Vector2(tx - 8.0, tz - 22.0).length() < 23.5:
 			continue
-		_cyl(sc, 0.24, 0.34, 3.6, Vector3(tx, 1.8, tz), trunk, 6)
-		_cyl(sc, 2.2, 4.2, 4.6, Vector3(tx, 5.2, tz), tree_dark if (ti % 2 == 0) else tree_mid, 8)
+		ParkLandscapeBuilder.plant_tree(sc, Vector3(tx, 0.0, tz), 1, 1.05, ParkLandscapeBuilder.CAMPHOR if (ti % 2 == 0) else ParkLandscapeBuilder.CAMPHOR_LT)
 	# Entrance avenue trees along 纺工路 & 中环南路
 	for at_z: float in [-175.0, -145.0, -115.0, -85.0, 12.0, 48.0, 88.0, 128.0, 168.0]:
-		_cyl(sc, 0.24, 0.34, 3.8, Vector3(-200.0, 1.9, at_z), trunk, 6)
-		_cyl(sc, 2.4, 4.0, 4.8, Vector3(-200.0, 5.4, at_z), tree_mid, 8)
+		ParkLandscapeBuilder.plant_tree(sc, Vector3(-200.0, 0.0, at_z), 1, 1.05, ParkLandscapeBuilder.CAMPHOR_LT)
 
 	# --- F. South-Central Iconic White-Roofed Indoor Gymnasium + 6 Outdoor Basketball/Tennis Courts ---
 	# Iconic bright white vaulted-roof gymnasium (x = -126, z = +134, unmistakably visible in satellite bottom-left!)
@@ -746,8 +743,7 @@ static func _hanlin_residence_and_skybridge(parent: Node3D, hanlin_center: Vecto
 			continue
 		if absf(tz - 18.0) < 10.0 and tx > 55.0:
 			continue
-		_cyl(hl, 0.22, 0.32, 3.5, Vector3(tx, 1.75, tz), trunk, 6)
-		_cyl(hl, 2.2, 4.0, 4.6, Vector3(tx, 5.0, tz), foliage, 8)
+		ParkLandscapeBuilder.plant_tree(hl, Vector3(tx, 0.0, tz), 1, 1.0, ParkLandscapeBuilder.CAMPHOR)
 	_add_light(hl, Vector3(104.0, 10.0, 18.0), Color(1.0, 0.88, 0.64), 56.0, lights)
 
 
@@ -924,8 +920,7 @@ static func _build_scenic_paths_and_pavilions(parent: Node3D, paths: Array, pavi
 			_cyl(gn, 0.10, 0.24, 0.85, Vector3(0.0, 6.6, 0.0), gold_p, 6)
 			# Pair of ornamental lakeside trees framing the gazebo
 			for side_t: float in [-1.0, 1.0]:
-				_cyl(gn, 0.20, 0.28, 3.2, Vector3(side_t * 7.8, 1.6, -4.5), trunk_p, 6)
-				_cyl(gn, 1.8, 3.2, 3.8, Vector3(side_t * 7.8, 4.4, -4.5), leaf_p, 8)
+				ParkLandscapeBuilder.plant_tree(gn, Vector3(side_t * 7.8, 0.0, -4.5), 5, 0.85, Color(0.24, 0.44, 0.18))
 
 
 # =============================================================================================

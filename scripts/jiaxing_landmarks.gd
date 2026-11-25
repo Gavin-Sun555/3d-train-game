@@ -342,8 +342,7 @@ static func _jiaxing_south_station(parent: Node3D, center: Vector3, angle: float
 		_add_box(st, Vector3(51.5, 0.48, 13.8), Vector3(fx_l, 0.26, -83.0), lawn_mat)
 		for ti_f in range(4):
 			var tx_f := fx_l - 18.0 + float(ti_f) * 12.0
-			_add_cyl(st, 0.18, 0.24, 3.2, Vector3(tx_f, 1.9, -83.0), trunk_mat, 6)
-			_add_cyl(st, 1.5, 2.7, 3.2, Vector3(tx_f, 4.3, -83.0), foliage_mat if (ti_f % 2 == 0) else foliage_lt, 8)
+			ParkLandscapeBuilder.plant_tree(st, Vector3(tx_f, 0.5, -83.0), 1, 0.9, ParkLandscapeBuilder.CAMPHOR if (ti_f % 2 == 0) else ParkLandscapeBuilder.CAMPHOR_LT)
 	# Sheltered pedestrian transfer walkway leading directly to T1 Tram Terminal (嘉兴南站)
 	_add_box(st, Vector3(48.0, 0.32, 8.5), Vector3(0.0, 4.8, -92.5), roof_silver)
 	for tx in [-20.0, -7.0, 7.0, 20.0]:
@@ -371,14 +370,12 @@ static func _jiaxing_south_station(parent: Node3D, center: Vector3, angle: float
 		_add_box(plaza_n, Vector3(22.0, 0.35, 34.0), Vector3(lx_p, 0.18, -172.0), lawn_mat)
 		for ti_p in range(3):
 			var tz_p := -184.0 + float(ti_p) * 12.0
-			_add_cyl(plaza_n, 0.18, 0.24, 3.2, Vector3(lx_p, 1.8, tz_p), trunk_mat, 6)
-			_add_cyl(plaza_n, 1.6, 2.8, 3.4, Vector3(lx_p, 4.4, tz_p), foliage_mat if (ti_p % 2 == 0) else foliage_lt, 8)
+			ParkLandscapeBuilder.plant_tree(plaza_n, Vector3(lx_p, 0.35, tz_p), 1, 0.95, ParkLandscapeBuilder.CAMPHOR if (ti_p % 2 == 0) else ParkLandscapeBuilder.CAMPHOR_LT)
 	# Perimeter avenue tree row along south edge of North Plaza (z = -132, facing T1 tramway!)
 	for tx_row in range(-95, 195, 22):
 		if absf(float(tx_row) + 12.0) < 18.0:
 			continue
-		_add_cyl(plaza_n, 0.18, 0.24, 3.1, Vector3(float(tx_row), 1.55, -132.0), trunk_mat, 6)
-		_add_cyl(plaza_n, 1.5, 2.6, 3.2, Vector3(float(tx_row), 4.1, -132.0), foliage_lt if (tx_row % 44 == 0) else foliage_mat, 8)
+		ParkLandscapeBuilder.plant_tree(plaza_n, Vector3(float(tx_row), 0.0, -132.0), 1, 0.9, ParkLandscapeBuilder.CAMPHOR_LT if (tx_row % 44 == 0) else ParkLandscapeBuilder.CAMPHOR)
 
 	# F3. Jiaxing South Station Bus Transit Hub (嘉兴南站公交枢纽站 — East Plaza, x = +52..+200, z = -234..-136)
 	var bus_hub := Node3D.new()
@@ -562,10 +559,10 @@ static func _yanyu_tower_and_red_boat(parent: Node3D, center: Vector3, island_pt
 				if tp.length() > 19.0 and tp.distance_to(se_shore) > 12.0:
 					var is_willow := (tree_idx % 3 != 0)
 					var th := 5.5 + float(tree_idx % 4) * 1.1
-					_add_cyl(nanhu, 0.24, 0.36, th * 0.55, Vector3(tp.x, th * 0.28, tp.y), trunk_mat, 7)
-					var crown_r := 4.0 if is_willow else 2.8
-					_add_cyl(nanhu, crown_r * 0.55, crown_r, th * 0.62, Vector3(tp.x, th * 0.68, tp.y), willow_mat if is_willow else cypress_mat, 8)
-					_add_cyl(nanhu, crown_r * 0.2, crown_r * 0.72, th * 0.35, Vector3(tp.x, th * 0.98, tp.y), willow_mat if is_willow else cypress_mat, 8)
+					if is_willow:
+						ParkLandscapeBuilder.plant_tree(nanhu, Vector3(tp.x, 0.0, tp.y), 5, th / 6.0, Color(0.24, 0.44, 0.18))
+					else:
+						ParkLandscapeBuilder.plant_tree(nanhu, Vector3(tp.x, 0.0, tp.y), 0, th / 9.5, Color(0.12, 0.27, 0.14))
 					tree_idx += 1
 		var wall_mi := MeshInstance3D.new()
 		wall_mi.name = "LakeHeartIslandSeawall"
@@ -974,13 +971,11 @@ static func _jiaxing_station(parent: Node3D, center: Vector3, angle: float, ligh
 		for ti in range(5):
 			var tz_tr := 64.0 + float(ti) * 11.5
 			var tx_tr := side_s * (24.0 + float(ti % 2) * 8.0)
-			_add_cyl(jx, 0.22, 0.30, 3.4, Vector3(tx_tr, 2.2, tz_tr), tree_trunk, 6)
-			_add_cyl(jx, 1.8, 3.2, 3.8, Vector3(tx_tr, 4.8, tz_tr), tree_green if (ti % 2 == 0) else tree_bright, 8)
+			ParkLandscapeBuilder.plant_tree(jx, Vector3(tx_tr, 0.5, tz_tr), 1, 1.0, ParkLandscapeBuilder.CAMPHOR if (ti % 2 == 0) else ParkLandscapeBuilder.CAMPHOR_LT)
 		for nti in range(5):
 			var nx_tr := side_s * (46.0 + float(nti) * 11.0)
 			var nz_tr := -62.0 - float(nti % 2) * 10.0
-			_add_cyl(jx, 0.22, 0.30, 3.6, Vector3(nx_tr, 1.8, nz_tr), tree_trunk, 6)
-			_add_cyl(jx, 1.9, 3.4, 4.0, Vector3(nx_tr, 4.6, nz_tr), tree_green if (nti % 2 == 0) else tree_bright, 8)
+			ParkLandscapeBuilder.plant_tree(jx, Vector3(nx_tr, 0.0, nz_tr), 1, 1.05, ParkLandscapeBuilder.CAMPHOR if (nti % 2 == 0) else ParkLandscapeBuilder.CAMPHOR_LT)
 
 	# South Plaza Bus & Coach Transit Hub (南广场公交与客运换乘枢纽: 6 sheltered bays + waiting hall)
 	_add_box(jx, Vector3(68.0, 0.42, 18.0), Vector3(0.0, 5.4, 122.0), roof_silver)

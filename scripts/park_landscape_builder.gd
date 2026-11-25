@@ -1532,6 +1532,63 @@ static func _build_multi_species_trees(
 			chunk_node.add_child(fc_mmi)
 
 
+# ---------------------------------------------------------------------------------------------
+# Individually placed landscape trees for hand-built landmarks (station plazas, parks, waterfronts): the same
+# sculpted species meshes as the street / park trees, batched per landmark node into one MultiMesh per species
+# and part (trunk, detailed crown < LEAF_HI_RANGE, light crown beyond). pos is in the parent's local space,
+# at the foot of the trunk.
+# ---------------------------------------------------------------------------------------------
+const CAMPHOR := Color(0.15, 0.31, 0.12) # 香樟: dense dark evergreen
+const CAMPHOR_LT := Color(0.21, 0.39, 0.15)
+static var _plant_mats := {}
+
+
+static func plant_tree(parent: Node3D, pos: Vector3, species: int = 1, scale: float = 1.0, tint: Color = CAMPHOR) -> void:
+	if _plant_mats.is_empty():
+		var bark := StandardMaterial3D.new()
+		bark.vertex_color_use_as_albedo = true
+		bark.roughness = 0.9
+		var fol := ShaderMaterial.new()
+		fol.shader = load("res://shaders/foliage.gdshader") as Shader
+		fol.set_shader_parameter("leaf_cards", true)
+		_plant_mats = {"bark": bark, "leaf": fol}
+	var holder := parent.get_node_or_null("PlantedTrees") as Node3D
+	if holder == null:
+		holder = Node3D.new()
+		holder.name = "PlantedTrees"
+		parent.add_child(holder)
+	var key := "S%d" % species
+	var recs: Array = holder.get_meta(key, [])
+	var yaw := TAU * _hash01(pos.x, pos.z, 5.0)
+	var sc := scale * (0.9 + 0.2 * _hash01(pos.z, pos.x, 9.0))
+	recs.append([Transform3D(Basis(Vector3.UP, yaw).scaled(Vector3.ONE * sc), pos), tint])
+	holder.set_meta(key, recs)
+	var meshes := _get_species_meshes(species)
+	var parts := [["Wood", meshes["wood"], 360.0, 0.0, false], ["Leaf", meshes["leaf"], LEAF_HI_RANGE, 0.0, true],
+		["LeafMid", meshes["leaf_mid"], 360.0, LEAF_HI_RANGE, false]]
+	for pt: Array in parts:
+		var nm := "%s_%s" % [pt[0], key]
+		var mmi := holder.get_node_or_null(nm) as MultiMeshInstance3D
+		if mmi == null:
+			mmi = MultiMeshInstance3D.new()
+			mmi.name = nm
+			var mm := MultiMesh.new()
+			mm.transform_format = MultiMesh.TRANSFORM_3D
+			mm.use_colors = true
+			mm.mesh = pt[1]
+			mmi.multimesh = mm
+			mmi.material_override = _plant_mats["bark"] if pt[0] == "Wood" else _plant_mats["leaf"]
+			mmi.visibility_range_end = float(pt[2])
+			mmi.visibility_range_begin = float(pt[3])
+			mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if bool(pt[4]) else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			holder.add_child(mmi)
+		var mm2 := mmi.multimesh
+		mm2.instance_count = recs.size()
+		for i in range(recs.size()):
+			mm2.set_instance_transform(i, recs[i][0])
+			mm2.set_instance_color(i, recs[i][1] if pt[0] != "Wood" else Color.WHITE)
+
+
 static func _tree_tint(sp: int, rnd: float) -> Color:
 	match sp:
 		0: # Douglas Fir / Western Red Cedar: deep Pacific Northwest pine-emerald

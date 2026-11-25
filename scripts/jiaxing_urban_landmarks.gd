@@ -584,8 +584,7 @@ static func _pingshan_park(parent: Node3D, center: Vector3, angle: float, lights
 		var tz := -6.0 + sin(ang) * rad
 		if absf(tx) < 7.5 and tz > 4.0:
 			continue # keep south stairway clear
-		_cyl(ps, 0.22, 0.32, 3.4, Vector3(tx, ty_h + 1.7, tz), trunk, 6)
-		_cyl(ps, 1.8, 4.0, 5.2, Vector3(tx, ty_h + 5.2, tz), pine, 8)
+		ParkLandscapeBuilder.plant_tree(ps, Vector3(tx, ty_h, tz), 0, 0.75, Color(0.12, 0.27, 0.14))
 
 	_add_light(ps, Vector3(0.0, top_y + 8.0, -8.0), Color(1.0, 0.82, 0.44), 55.0, lights)
 	_add_light(ps, Vector3(0.0, 9.0, 58.0), Color(1.0, 0.84, 0.52), 48.0, lights)
