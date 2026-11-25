@@ -2831,6 +2831,7 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
 
     print(f"Street furniture: {len(d_cws)} crosswalks, {len(d_lamps)} lamps, {len(d_trees)} trees, {len(storefronts)} storefronts "
           f"({sum(1 for s in storefronts if s.get('tier') == 'chain')} chain + {sum(1 for s in storefronts if s.get('tier') == 'local')} local)")
+    roads.extend(dict(r) for r in SIDE_ROADS)
     return roads, d_cws, d_lamps, d_trees, storefronts
 
 
@@ -2851,6 +2852,61 @@ CLASS_SECTION = {
     "secondary": (26.0, 2, 11.5, 2),
     "tertiary": (17.0, 1, 8.8, 2),
 }
+
+
+FANGGONG_X = 1440.0   # 纺工路 crosses 中环南路 here (game x)
+SIDE_ROADS = []        # synthetic 辅路 strips (drawn and kept clear of buildings; not part of the traffic graph)
+
+
+def zhonghuan_side_roads(graph_edges):
+    """East of 纺工路, 中环南路 has a one-lane 辅路 outside each main carriageway, behind a ~3 m planted strip
+    (Amap satellite at 嘉兴一中). OSM has no separate ways for them, so they are laid parallel to each main
+    half, stopping short of the junction mouths."""
+    SIDE_ROADS.clear()
+    halves = [e for e in graph_edges if e.get("name") == "中环南路" and not e.get("hide_road")
+              and not e.get("underground") and not (int(e.get("lanes_f", 1)) and int(e.get("lanes_b", 1)))]
+    for e in halves:
+        p = e["pts"]
+        mx = sum(q[0] for q in p) / len(p)
+        if mx < FANGGONG_X + 20.0:
+            continue
+        L = sum(math.hypot(p[k + 1][0] - p[k][0], p[k + 1][1] - p[k][1]) for k in range(len(p) - 1))
+        if L < 90.0:
+            continue
+        # outward = away from the other direction's carriageway
+        my = sum(q[1] for q in p) / len(p)
+        others = [o for o in halves if o is not e and int(o.get("lanes_f", 0)) != int(e.get("lanes_f", 0))]
+        if not others:
+            continue
+        oy = min(others, key=lambda o: abs(sum(q[0] for q in o["pts"]) / len(o["pts"]) - mx))
+        oy_m = sum(q[1] for q in oy["pts"]) / len(oy["pts"])
+        out_sign = -1.0 if my < oy_m else 1.0   # north half -> further north (-y), south half -> further south
+        off = float(e["width"]) * 0.5 + 3.0 + 2.75
+        # resample, trim 30 m at both ends, offset along the local normal (pointing to out_sign in y)
+        pts = []
+        acc = 0.0
+        for k in range(len(p) - 1):
+            ax, ay = p[k]
+            bx, by = p[k + 1]
+            sl = math.hypot(bx - ax, by - ay)
+            if sl < 1e-6:
+                continue
+            ux, uy = (bx - ax) / sl, (by - ay) / sl
+            nx, ny = -uy, ux
+            if ny * out_sign < 0.0:
+                nx, ny = -nx, -ny
+            t = 0.0
+            while t <= sl:
+                s_ = acc + t
+                if 30.0 <= s_ <= L - 30.0:
+                    pts.append([round(ax + ux * t + nx * off, 2), round(ay + uy * t + ny * off, 2)])
+                t += 20.0
+            acc += sl
+        if len(pts) < 2:
+            continue
+        lf = 1 if int(e.get("lanes_f", 0)) else 0
+        SIDE_ROADS.append({"name": "中环南路辅路", "width": 5.5, "lanes_f": lf, "lanes_b": 1 - lf, "layer": 0, "pts": pts})
+    print(f"中环南路: {len(SIDE_ROADS)} one-lane 辅路 strips laid east of 纺工路")
 
 
 def unwedge_twin_carriageways(graph_edges, graph_nodes):
@@ -3087,13 +3143,27 @@ def widen_roads_by_class(graph_edges, nodes, ways):
             e["lanes_f"] = max(lf, n)
             e["lanes_b"] = max(lb, n)
         n_w += 1
+    # 中环南路 as surveyed (Amap satellite + the user's notes): two-way 6 lanes; west of 纺工路 it is the bridge
+    # (3 + 3), east of it each direction is a 3-lane main road plus a one-lane 辅路 outside a planted strip
+    # (the 辅路 are laid by zhonghuan_side_roads)
+    for e in graph_edges:
+        if e.get("name") != "中环南路" or e.get("underground"):
+            continue
+        lf, lb = int(e.get("lanes_f", 1)), int(e.get("lanes_b", 1))
+        if lf and lb:
+            e["width"], e["lanes_f"], e["lanes_b"] = 24.8, 3, 3
+        else:
+            e["width"] = 12.1
+            e["lanes_f"], e["lanes_b"] = (3, 0) if lf else (0, 3)
+        e.pop("bike_buffer", None)
+
     for e in graph_edges:
         lf, lb = int(e.get("lanes_f", 1)), int(e.get("lanes_b", 1))
         w = float(e["width"])
         if lf and lb:
-            cap = max(1, int((w * 0.5 - 1.5) / 3.3))
+            cap = max(1, int((w * 0.5 - 1.5) / 3.3 + 0.05))
         else:
-            cap = max(1, int((w - 2.2) / 3.3))
+            cap = max(1, int((w - 2.2) / 3.3 + 0.05))
         e["lanes_f"] = min(lf, cap) if lf else 0
         e["lanes_b"] = min(lb, cap) if lb else 0
     print(f"Road class cross-sections: {n_merge} stacked twin carriageways drawn as one street, widened {n_w} street edges (kerbs kept 3 m off mapped buildings)")
@@ -3201,7 +3271,7 @@ def resolve_parallel_overlaps(graph_edges, t1_ids):
                 new_w = max(5.5, 2.0 * (d - 0.4 - other_hw))
                 if new_w < float(tgt["width"]) - 0.05:
                     tgt["width"] = round(new_w, 1)
-                    lanes_room = max(1, int((new_w - 2.2) / 3.3))
+                    lanes_room = max(1, int((new_w - 2.2) / 3.3 + 0.05))
                     if int(tgt.get("lanes_f", 0)) and int(tgt.get("lanes_b", 0)):
                         per = max(1, lanes_room // 2)
                         tgt["lanes_f"] = min(int(tgt["lanes_f"]), per)
@@ -4284,6 +4354,7 @@ def main():
     graph_nodes, graph_edges = build_street_graph(nodes, ways, water_grid, park_grid, rail_grid)
     unwedge_twin_carriageways(graph_edges, graph_nodes)
     widen_roads_by_class(graph_edges, nodes, ways)
+    zhonghuan_side_roads(graph_edges)
     # 由拳路 × 庆丰路: the divided 由拳路 carriageways and the kinked 庆丰路 leg met in a skewed five-way Y where T1
     # turns south; rebuilt as a square crossroads (the parallel one-way carriageway is folded into the main road)
     square_junction(graph_nodes, graph_edges, (4216.26, 2577.23), (4208.5, 2564.0), drop_names_widths=[("由拳路", 8.8)])
@@ -4303,7 +4374,7 @@ def main():
     rail_crossings = build_rail_crossings(graph_edges, railways)
 
     road_grid = Grid(45.0)
-    for e in graph_edges:
+    for e in graph_edges + SIDE_ROADS:
         if e.get("underground"):
             continue
         pts = e["pts"]
