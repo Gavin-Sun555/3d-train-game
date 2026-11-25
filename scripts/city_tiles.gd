@@ -277,7 +277,14 @@ func _cut_tiles(map_data: Dictionary) -> Dictionary:
 		var t4: Dictionary = cuts[key]
 		if (t4["roads"] as Array).is_empty():
 			continue
-		var trect := Rect2(Vector2(key) * TILE, Vector2(TILE, TILE)).grow(CONTEXT_PAD)
+		# Context = every other street near ANY of this tile's own streets: a street belongs to the tile of its
+		# midpoint but may run far past the tile edge, and its kerbs / crosswalk trims at that far junction need
+		# the crossing streets (they used to be missing there, so pavements ran into the junction)
+		var trect := Rect2(Vector2(key) * TILE, Vector2(TILE, TILE))
+		for own_r: Dictionary in t4["roads"]:
+			if own_r.has("_bb"):
+				trect = trect.merge(own_r["_bb"] as Rect2)
+		trect = trect.grow(CONTEXT_PAD)
 		var seen := {}
 		for gx in range(int(floor(trect.position.x / 120.0)), int(floor(trect.end.x / 120.0)) + 1):
 			for gz in range(int(floor(trect.position.y / 120.0)), int(floor(trect.end.y / 120.0)) + 1):

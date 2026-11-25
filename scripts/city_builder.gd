@@ -2712,7 +2712,7 @@ const ROAD_Y := 0.042
 static func _build_kerbs(parent: Node3D, roads: Array, bays: Array, road_mat: Material, clear_idx: Dictionary = {}) -> void:
 	parent.set_meta("last_bays_sig", _station_bays_sig(bays) + "#" + _tile_clear_sig(parent, clear_idx))
 	var has_tracks := not clear_idx.is_empty() and not (clear_idx.get("grid", {}) as Dictionary).is_empty()
-	for nm: String in ["GraniteCurbs", "StationKerbBays", "Sidewalks", "StreetFurniture", "BikeLaneStrips", "BikeLaneLines", "BikeLaneGuardrails", "BikeBufferStrips", "BikeBufferShrubs"]:
+	for nm: String in ["GraniteCurbs", "StationKerbBays", "Sidewalks", "StreetFurniture", "BikeLaneStrips", "BikeLaneLines", "BikeLaneGuardrails", "BikeBufferStrips", "BikeBufferShrubs", "MedianGreens"]:
 		var old := parent.get_node_or_null(nm)
 		if old != null:
 			parent.remove_child(old)
@@ -2749,6 +2749,9 @@ static func _build_kerbs(parent: Node3D, roads: Array, bays: Array, road_mat: Ma
 	curb_st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var walk_st := SurfaceTool.new()
 	walk_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var med_st := SurfaceTool.new()
+	med_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var has_med := false
 	var furn := {"bin": [], "rack": [], "hydrant": [], "pay": [], "news": [], "cover": []}
 	var has_curb := false
 	var emit_n := int(parent.get_meta("kerb_emit_n", roads.size()))
@@ -2775,6 +2778,11 @@ static func _build_kerbs(parent: Node3D, roads: Array, bays: Array, road_mat: Ma
 			if i == n_seg - 1 and int(deg.get(Vector2i(int(round(b.x * 2.0)), int(round(b.y * 2.0))), 0)) >= 2:
 				trim1 = 9.2
 			if seg_len - trim0 - trim1 < 4.0:
+				if n_seg == 1 and trim0 > 0.0 and trim1 > 0.0:
+					# a short link with a junction at BOTH ends lies inside one junction (e.g. between the two
+					# carriageways of a divided cross street): no kerb or pavement in the middle of the crossing
+					u_acc += seg_len
+					continue
 				trim0 = minf(trim0, 3.8)
 				trim1 = minf(trim1, 3.8)
 			var c_start := a + dir * trim0
@@ -2784,6 +2792,9 @@ static func _build_kerbs(parent: Node3D, roads: Array, bays: Array, road_mat: Ma
 				continue
 			for side: float in [-1.0, 1.0]:
 				var nrm := Vector2(-dir.y, dir.x) * side
+				# Divided road: the other carriageway runs parallel just beyond this kerb -> this side is the
+				# central median (planted), not a pavement
+				var med_gap := _median_gap(seg_grid, c_start + dir * (run * 0.5) + nrm * hw, nrm, dir, road_i)
 				var pieces: Array = []
 				var n_s := int(ceil(run / 0.5))
 				var cur0 := -1.0
@@ -2806,6 +2817,11 @@ static func _build_kerbs(parent: Node3D, roads: Array, bays: Array, road_mat: Ma
 					var p0 := c_start + dir * t0
 					var p1 := c_start + dir * t1
 					_kerb_piece(curb_st, p0 + nrm * hw, p1 + nrm * hw, nrm, ROAD_Y)
+					if med_gap > 0.0:
+						_median_green(med_st, p0 + nrm * (hw + 0.30), p1 + nrm * (hw + 0.30), nrm, maxf(0.3, med_gap * 0.5 - 0.30))
+						has_med = true
+						has_curb = true
+						continue
 					# Sidewalk in <=2m chunks, each as wide as it can be before reaching another carriageway or tram track
 					var n_ch := maxi(1, int(ceil((t1 - t0) / 2.0)))
 					var w_prev := _walk_width(seg_grid, c_start + dir * t0 + nrm * (hw + 0.32), nrm, road_i, clear_idx if has_tracks else {})
@@ -2860,6 +2876,17 @@ static func _build_kerbs(parent: Node3D, roads: Array, bays: Array, road_mat: Ma
 			prev_in = pin
 			first = false
 			a += 1.0
+	if has_med:
+		var m_mi := MeshInstance3D.new()
+		m_mi.name = "MedianGreens"
+		m_mi.mesh = Terrain.commit_draped(med_st, m_mi)
+		var m_mat := StandardMaterial3D.new()
+		m_mat.vertex_color_use_as_albedo = true
+		m_mat.roughness = 0.92
+		m_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		m_mi.material_override = m_mat
+		m_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		parent.add_child(m_mi)
 	if has_curb:
 		var curb_mi := MeshInstance3D.new()
 		curb_mi.name = "GraniteCurbs"
@@ -3314,6 +3341,39 @@ static func _other_road_clear(seg_grid: Dictionary, p: Vector2, own_road: int) -
 		var q := Geometry2D.get_closest_point_to_segment(p, sg[0], sg[1])
 		best = minf(best, p.distance_to(q) - float(sg[2]))
 	return best
+
+
+# Gap (m) to a parallel carriageway just beyond this kerb (a divided road's other half), or -1 if none within 14 m
+static func _median_gap(seg_grid: Dictionary, kerb: Vector2, out_n: Vector2, along: Vector2, own_road: int) -> float:
+	var o := out_n.normalized()
+	var d := 0.5
+	while d <= 14.0:
+		var pt := kerb + o * d
+		var gk := Vector2i(int(floor(pt.x / 20.0)), int(floor(pt.y / 20.0)))
+		for sg: Array in seg_grid.get(gk, []):
+			if int(sg[3]) == own_road:
+				continue
+			var q := Geometry2D.get_closest_point_to_segment(pt, sg[0], sg[1])
+			if pt.distance_to(q) < float(sg[2]):
+				var sd: Vector2 = (sg[1] as Vector2) - (sg[0] as Vector2)
+				if sd.length() > 0.1 and absf(sd.normalized().dot(along)) > 0.94:
+					return d
+				return -1.0 # a crossing street, not a parallel carriageway
+		d += 0.5
+	return -1.0
+
+
+# Planted central median of a divided road (grass with a low clipped hedge line), at kerb height
+static func _median_green(st: SurfaceTool, a: Vector2, b: Vector2, out_n: Vector2, width: float) -> void:
+	var o := out_n.normalized()
+	var y := ROAD_Y + KERB_H - 0.01
+	var grass := Color(0.21, 0.34, 0.15)
+	var aw := a + o * width
+	var bw := b + o * width
+	for v: Vector2 in [a, b, bw, a, bw, aw]:
+		st.set_color(grass)
+		st.set_normal(Vector3.UP)
+		st.add_vertex(Vector3(v.x, y, v.y))
 
 
 # How far the sidewalk can extend from the kerb back before it would run onto another street or tram track

@@ -210,8 +210,9 @@ static func build_detailed_station(
 		_box(st_node, Vector3(0.05, 0.46, 3.6), Vector3(bx, roof_y - 0.42, 4.6), _jx_mats()["red"] if jx_stop else mats["sign_blue"])
 		for hz: float in [3.2, 6.0]:
 			_cyl(st_node, 0.012, 0.3, Vector3(bx, roof_y - 0.2, hz), mats["steel_dark"])
-		_label(st_node, name_short, Vector3(bx + toward_track * 0.03, roof_y - 0.42, 4.6), rot_face, 64, 0.0052, Color(1, 1, 1), cjk_font)
-		_label(st_node, name_short, Vector3(bx - toward_track * 0.03, roof_y - 0.42, 4.6), rot_face + 180.0, 64, 0.0052, Color(1, 1, 1), cjk_font)
+		var board_px := minf(0.0052, 3.3 / (maxf(2.0, _text_em(name_short)) * 64.0))
+		_label(st_node, name_short, Vector3(bx + toward_track * 0.03, roof_y - 0.42, 4.6), rot_face, 64, board_px, Color(1, 1, 1), cjk_font)
+		_label(st_node, name_short, Vector3(bx - toward_track * 0.03, roof_y - 0.42, 4.6), rot_face + 180.0, 64, board_px, Color(1, 1, 1), cjk_font)
 		# Next-tram display (double sided)
 		_box(st_node, Vector3(0.12, 0.42, 1.7), Vector3(bx, roof_y - 0.48, -3.8), mats["steel_dark"])
 		for f_s: float in [1.0, -1.0]:
@@ -276,12 +277,28 @@ static func build_detailed_station(
 		# 嘉兴有轨电车 station totem: white pylon, red band with the line number, station name in hanzi
 		_box(st_node, Vector3(0.26, 3.6, 0.62), Vector3(pylon_x, plat_top + 1.8, pylon_z), _jx_mats()["white"])
 		_box(st_node, Vector3(0.28, 0.62, 0.64), Vector3(pylon_x, plat_top + 3.25, pylon_z), _jx_mats()["red"])
+		# Chinese name stacked vertically down the column (as on real 站牌), the English name as ONE line running
+		# down beside it, both sized to the column so nothing ever wraps mid-word
+		var zh_name := str(st_data.get("name", name_short)).split("（")[0].split("(")[0].strip_edges()
+		var en_name := L10n.station_en_name(zh_name) # real 站牌 are bilingual whatever the UI language
+		if en_name == zh_name:
+			en_name = ""
+		var col_top := plat_top + 2.80
+		var col_len := 2.30
+		var n_ch := maxi(1, zh_name.length())
+		var ch_h := minf(0.24, col_len / (float(n_ch) * 1.18))
 		for fs: float in [1.0, -1.0]:
 			_label(st_node, "T1", Vector3(pylon_x + fs * 0.145, plat_top + 3.25, pylon_z), fs * 90.0, 110, 0.004, Color(1, 1, 1), null)
-			var tl := _label(st_node, name_short, Vector3(pylon_x + fs * 0.135, plat_top + 2.1, pylon_z), fs * 90.0, 64, 0.0036, Color(0.20, 0.21, 0.23), cjk_font)
-			tl.autowrap_mode = TextServer.AUTOWRAP_ARBITRARY
-			tl.width = 140.0
-			tl.outline_size = 0
+			var zl := _label(st_node, "\n".join(zh_name.split("")), Vector3(pylon_x + fs * 0.135, col_top - col_len * 0.5, pylon_z + (0.10 * fs if en_name != "" else 0.0)), fs * 90.0, 64, ch_h / 64.0, Color(0.20, 0.21, 0.23), cjk_font)
+			zl.outline_size = 0
+			zl.line_spacing = -2.0
+			if en_name != "":
+				var en_px := minf(0.0026, col_len / (float(en_name.length()) * 0.56 * 48.0))
+				var el := _label(st_node, en_name, Vector3.ZERO, 0.0, 48, en_px, Color(0.30, 0.31, 0.33), null)
+				el.outline_size = 0
+				var zx := Vector3(fs, 0.0, 0.0)
+				var tx := Vector3(0.0, -1.0, 0.0)
+				el.transform = Transform3D(Basis(tx, zx.cross(tx), zx), Vector3(pylon_x + fs * 0.135, col_top - col_len * 0.5, pylon_z - 0.17 * fs))
 	else:
 		_box(st_node, Vector3(0.24, 3.4, 0.6), Vector3(pylon_x, plat_top + 1.7, pylon_z), mats["sign_blue"])
 		_box(st_node, Vector3(0.26, 0.56, 0.5), Vector3(pylon_x, plat_top + 2.95, pylon_z), mats["fascia_white"])
@@ -809,6 +826,14 @@ static func _build_bench(parent: Node3D, base: Vector3, side: float, mats: Dicti
 		# Armrest
 		_box(parent, Vector3(0.38, 0.035, 0.05), Vector3(base.x + side * 0.02, base.y + 0.65, base.z + lz), mats["steel_dark"])
 		_box(parent, Vector3(0.035, 0.2, 0.05), Vector3(base.x - side * 0.15, base.y + 0.55, base.z + lz), mats["steel_dark"])
+
+
+# Approximate rendered width of a string in ems (CJK glyphs ~1 em, Latin ~0.56 em)
+static func _text_em(txt: String) -> float:
+	var em := 0.0
+	for i in range(txt.length()):
+		em += 1.0 if txt.unicode_at(i) >= 0x2E80 else 0.56
+	return em
 
 
 static func _label(parent: Node3D, txt: String, pos: Vector3, rot_y_deg: float, font_size: int, px: float, col: Color, font: Font) -> Label3D:

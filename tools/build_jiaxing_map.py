@@ -3270,6 +3270,50 @@ def build_gated_compounds(landuse_zones, ways, nodes, road_grid, water_grid, rai
     return compounds
 
 
+
+def square_junction(graph_nodes, graph_edges, near, centre, drop_names_widths=()):
+    """Turn a skewed junction into a square crossroads: move the node to `centre`, make every leg leave it along
+    the nearest compass axis for 30 m before rejoining its own line beyond 40 m, and drop redundant parallel
+    carriageways converging into it (given as (name, width))."""
+    node = None
+    for n in graph_nodes:
+        if math.hypot(n["pos"][0] - near[0], n["pos"][1] - near[1]) < 4.0:
+            node = n
+            break
+    if node is None:
+        print("square_junction: no node near", near)
+        return
+    nid = node["id"]
+    node["pos"] = [round(centre[0], 2), round(centre[1], 2)]
+    keep = []
+    for e in graph_edges:
+        if nid not in (e["a"], e["b"]):
+            keep.append(e)
+            continue
+        if any(e["name"] == nm and abs(float(e["width"]) - w) < 0.2 for nm, w in drop_names_widths):
+            continue
+        seq = list(e["pts"]) if e["a"] == nid else list(reversed(e["pts"]))
+        far = None
+        for q in seq[1:]:
+            if math.hypot(q[0] - centre[0], q[1] - centre[1]) >= 40.0:
+                far = q
+                break
+        if far is None:
+            far = seq[-1]
+        ang = math.atan2(far[1] - centre[1], far[0] - centre[0])
+        ax = round(ang / (math.pi * 0.5)) * (math.pi * 0.5)
+        ux, uy = math.cos(ax), math.sin(ax)
+        rest = [q for q in seq[1:] if math.hypot(q[0] - centre[0], q[1] - centre[1]) >= 40.0]
+        if not rest:
+            rest = [seq[-1]]
+        new_seq = [[round(centre[0], 2), round(centre[1], 2)], [round(centre[0] + ux * 30.0, 2), round(centre[1] + uy * 30.0, 2)]] + [list(q) for q in rest]
+        e["pts"] = new_seq if e["a"] == nid else list(reversed(new_seq))
+        e["length"] = round(sum(math.hypot(e["pts"][k + 1][0] - e["pts"][k][0], e["pts"][k + 1][1] - e["pts"][k][1]) for k in range(len(e["pts"]) - 1)), 1)
+        keep.append(e)
+    graph_edges[:] = keep
+    print(f"square_junction: node {nid} squared at {centre}, {sum(1 for e in keep if nid in (e['a'], e['b']))} legs")
+
+
 def main():
     nodes, ways, rels, poi_nodes = load_osm()
     print("MAIN_RECT (screenshot):", MAIN_RECT)
@@ -3301,6 +3345,9 @@ def main():
         park_grid.add(pp, min(xs), min(ys), max(xs), max(ys))
 
     graph_nodes, graph_edges = build_street_graph(nodes, ways, water_grid, park_grid, rail_grid)
+    # 由拳路 × 庆丰路: the divided 由拳路 carriageways and the kinked 庆丰路 leg met in a skewed five-way Y where T1
+    # turns south; rebuilt as a square crossroads (the parallel one-way carriageway is folded into the main road)
+    square_junction(graph_nodes, graph_edges, (4216.26, 2577.23), (4208.5, 2564.0), drop_names_widths=[("由拳路", 8.8)])
     rail_crossings = build_rail_crossings(graph_edges, railways)
 
     road_grid = Grid(45.0)
