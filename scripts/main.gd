@@ -2633,12 +2633,7 @@ func _unhandled_input(event: InputEvent) -> void:
 							_show_toast(L10n.t("💡 远光前照灯：%s", "💡 High-Beam Headlight: %s") % (L10n.t("已开启", "ON") if hi else L10n.t("已切回近光", "Low Beam")))
 						return
 					elif hit_ctrl == "btn_wiper":
-						_sound.play_notch_click()
-						var tr_w := _transit_sim.get_active_tram()
-						if not tr_w.is_empty():
-							var won := not bool(tr_w.get("wipers_on", false))
-							tr_w["wipers_on"] = won
-							_show_toast(L10n.t("🌧 前挡风玻璃雨刮：%s", "🌧 Windshield Wipers: %s") % (L10n.t("已开启", "ON") if won else L10n.t("已关闭", "OFF")))
+						_toggle_wipers()
 						return
 					elif hit_ctrl == "btn_panto":
 						_sound.play_notch_click()
@@ -2791,7 +2786,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		else:
 			# RUN & DRIVE Mode Controls:
 			# W / S = Throttle / Brake; Arrow Keys (Up/Down/Left/Right) = Move/Rotate Camera View!
-			if _run_paused and k in [KEY_Q, KEY_W, KEY_S, KEY_SPACE, KEY_O, KEY_B, KEY_R, KEY_X, KEY_G, KEY_H, KEY_K, KEY_J, KEY_U]:
+			if _run_paused and k in [KEY_Q, KEY_W, KEY_S, KEY_SPACE, KEY_O, KEY_B, KEY_R, KEY_X, KEY_G, KEY_H, KEY_I, KEY_K, KEY_J, KEY_U]:
 				_show_toast(L10n.t("⏸ 已暂停：按 V 继续运营后再操作列车", "⏸ Paused: press V to resume before controlling tram"))
 				return
 			match k:
@@ -2843,6 +2838,19 @@ func _unhandled_input(event: InputEvent) -> void:
 					_do_throw_switch()
 				KEY_H:
 					_ring_tram_bell()
+				KEY_I:
+					_toggle_wipers()
+
+
+# Windscreen wipers of the active tram (cab WIPER switch, I key, action-bar button)
+func _toggle_wipers() -> void:
+	_sound.play_notch_click()
+	var tr_w := _transit_sim.get_active_tram()
+	if tr_w.is_empty():
+		return
+	var won := not bool(tr_w.get("wipers_on", false))
+	tr_w["wipers_on"] = won
+	_show_toast(L10n.t("🌧 前挡风玻璃雨刮：%s", "🌧 Windshield Wipers: %s") % (L10n.t("已开启", "ON") if won else L10n.t("已关闭", "OFF")))
 
 
 # Manual driving: throw the next switch ahead for this train's route
@@ -5049,8 +5057,8 @@ func _build_ui() -> void:
 
 	var cam_hint := Label.new()
 	cam_hint.text = L10n.t(
-		"↑↓←→ 视角移动/旋转 · W/S 牵引制动 · X 倒档 · O 车门 · V 暂停\nK 保留手动 · J 锁道岔 · U AI道岔 · G 手动扳道岔(特殊情况)",
-		"Arrows Camera · W/S Throttle/Brake · X Reverse · O Doors · V Pause\nK Hold Manual · J Lock Switch · U AI Switch · G Throw Switch"
+		"↑↓←→ 视角移动/旋转 · W/S 牵引制动 · X 倒档 · O 车门 · I 雨刮 · V 暂停\nK 保留手动 · J 锁道岔 · U AI道岔 · G 手动扳道岔(特殊情况)",
+		"Arrows Camera · W/S Throttle/Brake · X Reverse · O Doors · I Wipers · V Pause\nK Hold Manual · J Lock Switch · U AI Switch · G Throw Switch"
 	)
 	cam_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	cam_hint.add_theme_font_size_override("font_size", 12)
@@ -5117,6 +5125,7 @@ func _build_ui() -> void:
 	_btn_doors = _make_btn(L10n.t("开关车门 (O/Space)", "Doors (O/Space)"), func(): _toggle_doors_with_safety_check())
 	act_row.add_child(_btn_doors)
 	act_row.add_child(_make_btn(L10n.t("叮叮铜铃警示 (H)", "Bell (H)"), func(): _ring_tram_bell()))
+	act_row.add_child(_make_btn(L10n.t("雨刮 (I)", "Wipers (I)"), func(): _toggle_wipers()))
 	_btn_drive_mode = _make_btn(L10n.t("切换手动驾驶 (Q)", "Manual Drive (Q)"), func(): _transit_sim.manual_drive = not _transit_sim.manual_drive)
 	act_row.add_child(_btn_drive_mode)
 	act_row.add_child(_make_btn(L10n.t("换端折返 (R)", "Change Cab (R)"), func(): _do_cab_change()))
