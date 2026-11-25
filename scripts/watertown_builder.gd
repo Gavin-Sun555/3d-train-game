@@ -16,8 +16,8 @@ const CELL := 120.0
 const FAR_RANGE := 900.0
 const NEAR_RANGE := 180.0
 
-const TILE := Color(0.20, 0.21, 0.23)
-const TILE_CAP := Color(0.13, 0.14, 0.15)
+const TILE := Color(0.14, 0.15, 0.16)
+const TILE_CAP := Color(0.09, 0.09, 0.10)
 const WOOD := Color(0.27, 0.18, 0.13)
 const WOOD_LT := Color(0.42, 0.30, 0.21)
 const PLINTH := Color(0.42, 0.42, 0.41)
@@ -102,7 +102,7 @@ static func _poly(p_ref: Vector3, layer: String, xf: Transform3D, pts: Array, co
 		w.append(xf * q)
 	var n: Vector3 = ((w[1] as Vector3) - (w[0] as Vector3)).cross((w[2] as Vector3) - (w[0] as Vector3)).normalized()
 	for i in range(1, w.size() - 1):
-		for v: Vector3 in [w[0], w[i], w[i + 1]]:
+		for v: Vector3 in [w[0], w[i + 1], w[i]]: # clockwise about n: Godot's front face, so n lights the right side
 			st.set_color(col)
 			st.set_normal(n)
 			st.add_vertex(v)

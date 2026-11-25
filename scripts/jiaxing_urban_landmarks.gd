@@ -2,7 +2,7 @@ class_name JiaxingUrbanLandmarks
 extends RefCounted
 
 # Detailed bespoke 3D landmarks for Jiaxing's major civic, medical, commercial & eastern wetland sites:
-#   - 嘉兴天主教堂 · 圣母显灵堂 (Gothic Twin-Spire Cathedral, national heritage)
+#   (天主堂, 江南大厦, 戴梦得, 旭辉广场 and 中山影城 are built by ZhongshanBlockBuilder)
 #   - 嘉兴市第一医院 / 第二医院 / 中医医院 (Major medical complexes with red-cross & helipad)
 #   - 八佰伴购物中心 & 标志性环形空中人行天桥 (Yaohan Plaza + Circular Skywalk Footbridge)
 #   - 嘉兴希尔顿酒店 (Hilton Jiaxing landmark glass tower)
@@ -12,9 +12,6 @@ extends RefCounted
 
 
 static func build(root: Node3D, lm: Dictionary, lights: Array) -> void:
-	if lm.has("catholic_church"):
-		var cc: Dictionary = lm["catholic_church"]
-		_catholic_church(root, _p(cc["pos"]), float(cc.get("angle", 0.06)), lights)
 	if lm.has("first_hospital"):
 		var h1: Dictionary = lm["first_hospital"]
 		_first_hospital(root, _p(h1["pos"]), float(h1.get("angle", 0.03)), lights)
@@ -42,15 +39,8 @@ static func build(root: Node3D, lm: Dictionary, lights: Array) -> void:
 	if lm.has("pingshan_park"):
 		var ps: Dictionary = lm["pingshan_park"]
 		_pingshan_park(root, _p(ps["pos"]), float(ps.get("angle", 0.14)), lights)
-	if lm.has("jiangnan_mall"):
-		var jn: Dictionary = lm["jiangnan_mall"]
-		_jiangnan_mall(root, _p(jn["pos"]), float(jn.get("angle", 0.16)), lights)
-	if lm.has("diamond_plaza"):
-		var dm: Dictionary = lm["diamond_plaza"]
-		_diamond_plaza(root, _p(dm["pos"]), float(dm.get("angle", 0.14)), lights)
-	if lm.has("cifi_plaza"):
-		var cf: Dictionary = lm["cifi_plaza"]
-		_cifi_plaza(root, _p(cf["pos"]), float(cf.get("angle", 0.17)), lights)
+	if lm.has("zhongshan_block"):
+		ZhongshanBlockBuilder.build(root, lm["zhongshan_block"], lights)
 	if lm.has("shaonian_street"):
 		var sn: Dictionary = lm["shaonian_street"]
 		_shaonian_pedestrian_street(root, _p(sn["pos"]), float(sn.get("angle", 0.144)), lights)
@@ -105,51 +95,6 @@ static func _red_cross(parent: Node3D, pos: Vector3, ry: float, sz: float = 3.2)
 	_box(holder, Vector3(sz * 1.35, sz * 1.35, 0.25), Vector3.ZERO, bg, 0.0, 0.0, 0.0, false)
 	_box(holder, Vector3(sz, sz * 0.34, 0.38), Vector3(0.0, 0.0, 0.08), rc, 0.0, 0.0, 0.0, false)
 	_box(holder, Vector3(sz * 0.34, sz, 0.38), Vector3(0.0, 0.0, 0.08), rc, 0.0, 0.0, 0.0, false)
-
-
-# =============================================================================================
-# 1. 嘉兴天主教堂 · 圣母显灵堂 (Gothic Twin-Spire Cathedral, National Heritage Monument)
-# =============================================================================================
-static func _catholic_church(parent: Node3D, center: Vector3, angle: float, lights: Array) -> void:
-	var ch := Node3D.new()
-	ch.name = "JiaxingCatholicChurch"
-	ch.position = center
-	ch.rotation.y = angle
-	parent.add_child(ch)
-
-	var brick_grey := _mat(Color(0.46, 0.46, 0.49), 0.80)
-	var brick_red := _mat(Color(0.64, 0.27, 0.22), 0.78)
-	var stone := _mat(Color(0.84, 0.82, 0.78), 0.74)
-	var slate := _mat(Color(0.20, 0.22, 0.28), 0.56, 0.10)
-	var rose := _emissive(Color(0.96, 0.72, 0.34), 1.5)
-	var gold := _mat(Color(0.94, 0.78, 0.24), 0.25, 0.78)
-
-	# Courtyard stone terrace
-	_box(ch, Vector3(44.0, 0.06, 62.0), Vector3(0.0, 0.03, 0.0), stone, 0.0, 0.0, 0.0, false)
-	# Long Gothic nave (42m long, 18m wide, 16m tall) + pitched slate roof & side buttresses
-	_box(ch, Vector3(18.0, 15.5, 42.0), Vector3(0.0, 7.75, -4.0), brick_grey)
-	for bz: float in [-20.0, -12.0, -4.0, 4.0, 12.0]:
-		for bs: float in [-1.0, 1.0]:
-			_box(ch, Vector3(2.2, 13.5, 1.6), Vector3(bs * 9.8, 6.75, bz), brick_red)
-			_box(ch, Vector3(0.25, 4.8, 1.8), Vector3(bs * 9.05, 8.2, bz + 4.0), rose, 0.0, 0.0, 0.0, false)
-	_box(ch, Vector3(11.5, 0.65, 43.0), Vector3(-5.0, 18.2, -4.0), slate, 0.0, 0.62)
-	_box(ch, Vector3(11.5, 0.65, 43.0), Vector3(5.0, 18.2, -4.0), slate, 0.0, -0.62)
-	# Iconic Twin Gothic Bell Towers (34m tall) flanking the West/South Facade with Rose Window & Golden Crosses!
-	for ts: float in [-1.0, 1.0]:
-		var tx := ts * 7.8
-		_box(ch, Vector3(6.4, 24.0, 6.4), Vector3(tx, 12.0, 18.5), brick_grey)
-		for band_y: float in [6.0, 13.0, 20.0]:
-			_box(ch, Vector3(6.8, 0.85, 6.8), Vector3(tx, band_y, 18.5), brick_red)
-		_cyl(ch, 0.25, 4.2, 11.5, Vector3(tx, 29.7, 18.5), slate, 4, Vector3(0.0, PI * 0.25, 0.0))
-		# Golden spire cross atop each bell tower
-		_box(ch, Vector3(0.24, 3.2, 0.24), Vector3(tx, 36.8, 18.5), gold)
-		_box(ch, Vector3(1.6, 0.24, 0.24), Vector3(tx, 37.4, 18.5), gold)
-	# Central Gothic gable portal + luminous stained-glass rose window
-	_box(ch, Vector3(10.0, 19.5, 2.2), Vector3(0.0, 9.75, 19.8), brick_red)
-	_cyl(ch, 2.6, 2.6, 0.45, Vector3(0.0, 12.6, 21.0), rose, 16, Vector3(PI * 0.5, 0.0, 0.0))
-	_box(ch, Vector3(4.2, 6.2, 1.2), Vector3(0.0, 3.1, 20.9), stone)
-	_sign(ch, "嘉 兴 天 主 教 堂", Vector3(0.0, 21.2, 21.2), 0.0, 60, 0.022, Color(0.98, 0.90, 0.68))
-	_add_light(ch, Vector3(0.0, 14.0, 26.0), Color(1.0, 0.86, 0.60), 46.0, lights)
 
 
 # =============================================================================================
@@ -588,166 +533,6 @@ static func _pingshan_park(parent: Node3D, center: Vector3, angle: float, lights
 
 	_add_light(ps, Vector3(0.0, top_y + 8.0, -8.0), Color(1.0, 0.82, 0.44), 55.0, lights)
 	_add_light(ps, Vector3(0.0, 9.0, 58.0), Color(1.0, 0.84, 0.52), 48.0, lights)
-
-
-# =============================================================================================
-# 11. 江南大厦 (Jiangnan Department Store — Iconic Corner Flagship Mall at 中山东路 / 禾兴南路)
-# =============================================================================================
-static func _jiangnan_mall(parent: Node3D, center: Vector3, angle: float, lights: Array) -> void:
-	var jn := Node3D.new()
-	jn.name = "JiangnanDepartmentStore"
-	jn.position = center
-	jn.rotation.y = angle
-	parent.add_child(jn)
-
-	var stone_warm := _mat(Color(0.84, 0.79, 0.71), 0.66)
-	var stone_trim := _mat(Color(0.92, 0.89, 0.84), 0.56)
-	var accent_red := _mat(Color(0.76, 0.14, 0.12), 0.42, 0.12)
-	var bronze := _mat(Color(0.42, 0.34, 0.24), 0.36, 0.65)
-	var glass := _glass(Color(0.24, 0.42, 0.58), 0.64)
-	var glow_red := _emissive(Color(0.96, 0.18, 0.14), 2.1)
-	var glow_warm := _emissive(Color(1.0, 0.90, 0.64), 1.5)
-	var plaza := _mat(Color(0.80, 0.78, 0.74), 0.76)
-
-	# Corner granite entrance plaza
-	_box(jn, Vector3(68.0, 0.12, 52.0), Vector3(0.0, 0.06, 0.0), plaza, 0.0, 0.0, 0.0, false)
-	# 6-Story Flagship Department Store Podium (56m x 38m x 25m)
-	_box(jn, Vector3(56.0, 25.0, 38.0), Vector3(2.0, 12.5, -2.0), stone_warm)
-	# Horizontal architectural stone cornices & illuminated display window bands
-	for fy: float in [4.8, 9.2, 13.6, 18.0, 22.4]:
-		_box(jn, Vector3(57.0, 0.65, 39.0), Vector3(2.0, fy, -2.0), stone_trim)
-	_box(jn, Vector3(50.0, 14.5, 38.5), Vector3(2.0, 13.5, -2.0), glass)
-	# Ground-floor grand department store display windows (glowing warm inside)
-	_box(jn, Vector3(48.0, 4.2, 38.6), Vector3(2.0, 2.3, -2.0), glow_warm, 0.0, 0.0, 0.0, false)
-	# Iconic Curved/Chamfered SW Corner Glass Atrium Tower facing 中山东路/禾兴南路 intersection!
-	_cyl(jn, 12.2, 12.2, 29.0, Vector3(-22.0, 14.5, 14.0), glass, 16)
-	_cyl(jn, 12.8, 12.8, 1.2, Vector3(-22.0, 26.2, 14.0), accent_red, 16)
-	_cyl(jn, 12.8, 12.8, 1.0, Vector3(-22.0, 29.2, 14.0), stone_trim, 16)
-	_cyl(jn, 13.8, 13.8, 0.55, Vector3(-22.0, 5.2, 14.0), bronze, 16)
-	# Upper Stepped Main Commercial Office Block (12-story, 48m total) + Crown
-	_box(jn, Vector3(36.0, 22.0, 24.0), Vector3(6.0, 36.0, -5.0), stone_warm)
-	_box(jn, Vector3(30.0, 18.0, 24.5), Vector3(6.0, 36.0, -5.0), glass)
-	_box(jn, Vector3(38.0, 1.6, 26.0), Vector3(6.0, 47.4, -5.0), stone_trim)
-	_box(jn, Vector3(24.0, 3.2, 14.0), Vector3(6.0, 49.6, -5.0), accent_red)
-	# Iconic glowing red rooftop & corner signage facing South (中山东路) & West (禾兴南路)
-	_box(jn, Vector3(32.0, 0.45, 0.45), Vector3(2.0, 25.4, 17.5), glow_red, 0.0, 0.0, 0.0, false)
-	_sign(jn, "江  南  大  厦", Vector3(2.0, 27.6, 17.6), 0.0, 118, 0.036, Color(0.98, 0.20, 0.16))
-	_sign(jn, "JIANGNAN DEPARTMENT STORE", Vector3(2.0, 24.2, 17.6), 0.0, 42, 0.024, Color(0.98, 0.90, 0.62))
-	_sign(jn, "江  南  大  厦", Vector3(-26.5, 27.6, -2.0), -PI * 0.5, 110, 0.034, Color(0.98, 0.20, 0.16))
-	_sign(jn, "江 南 大 厦", Vector3(6.0, 49.8, 2.4), 0.0, 96, 0.034, Color(0.98, 0.88, 0.34))
-	_add_light(jn, Vector3(-18.0, 14.0, 24.0), Color(1.0, 0.88, 0.66), 60.0, lights)
-
-
-# =============================================================================================
-# 12. 戴梦得大厦 · 戴梦得购物中心 (Diamond Plaza & Landmark Hotel Tower with Revolving Restaurant)
-# =============================================================================================
-static func _diamond_plaza(parent: Node3D, center: Vector3, angle: float, lights: Array) -> void:
-	var dm := Node3D.new()
-	dm.name = "DiamondPlazaTower"
-	dm.position = center
-	dm.rotation.y = angle
-	parent.add_child(dm)
-
-	var stone_silver := _mat(Color(0.76, 0.79, 0.84), 0.46, 0.18)
-	var facade_navy := _mat(Color(0.14, 0.19, 0.30), 0.38, 0.40)
-	var glass_blue := _glass(Color(0.18, 0.38, 0.62), 0.68)
-	var gold := _mat(Color(0.92, 0.78, 0.30), 0.28, 0.74)
-	var glow_gold := _emissive(Color(1.0, 0.86, 0.46), 1.9)
-	var glow_blue := _emissive(Color(0.40, 0.74, 1.0), 1.7)
-	var plaza := _mat(Color(0.78, 0.79, 0.81), 0.74)
-
-	# --- A. 6-Story Diamond Shopping Center Podium (戴梦得购物中心, 60m x 46m x 24m) ---
-	_box(dm, Vector3(72.0, 0.12, 58.0), Vector3(0.0, 0.06, 0.0), plaza, 0.0, 0.0, 0.0, false)
-	_box(dm, Vector3(60.0, 24.0, 46.0), Vector3(0.0, 12.0, 0.0), stone_silver)
-	_box(dm, Vector3(54.0, 16.5, 46.6), Vector3(0.0, 12.5, 0.0), glass_blue)
-	_box(dm, Vector3(60.6, 16.5, 38.0), Vector3(0.0, 12.5, 0.0), glass_blue)
-	for py: float in [5.4, 10.6, 15.8, 21.0, 24.2]:
-		_box(dm, Vector3(61.4, 0.65, 47.4), Vector3(0.0, py, 0.0), facade_navy)
-	# Faceted Diamond Entrance Canopy facing North (toward 中山东路) & East (toward 禾兴南路)
-	_box(dm, Vector3(24.0, 1.1, 7.5), Vector3(0.0, 6.2, -25.5), facade_navy)
-	_box(dm, Vector3(24.4, 0.3, 7.8), Vector3(0.0, 6.8, -25.5), glow_gold, 0.0, 0.0, 0.0, false)
-	_box(dm, Vector3(7.5, 1.1, 22.0), Vector3(32.5, 6.2, 0.0), facade_navy)
-	_box(dm, Vector3(7.8, 0.3, 22.4), Vector3(32.5, 6.8, 0.0), glow_gold, 0.0, 0.0, 0.0, false)
-
-	# --- B. Iconic 88m Octagonal Skyscraper Tower + Crown Revolving Restaurant (戴梦得旋转餐厅!) ---
-	_cyl(dm, 16.5, 17.5, 58.0, Vector3(-4.0, 53.0, 2.0), glass_blue, 8, Vector3(0.0, PI / 8.0, 0.0))
-	for rib_k in range(8):
-		var a := float(rib_k) * TAU / 8.0 + PI / 8.0
-		_box(dm, Vector3(1.5, 58.5, 1.5), Vector3(-4.0 + cos(a) * 16.8, 53.0, 2.0 + sin(a) * 16.8), stone_silver, -a)
-	for band_y: float in [36.0, 48.0, 60.0, 72.0, 81.5]:
-		_cyl(dm, 17.3, 17.3, 0.75, Vector3(-4.0, band_y, 2.0), facade_navy, 8, Vector3(0.0, PI / 8.0, 0.0))
-	# Signature Panoramic Circular Revolving Restaurant Drum at 82m..89m!
-	_cyl(dm, 15.8, 13.8, 2.2, Vector3(-4.0, 83.2, 2.0), stone_silver, 20)
-	_cyl(dm, 15.6, 15.6, 4.4, Vector3(-4.0, 86.5, 2.0), glow_gold, 20)
-	_cyl(dm, 16.2, 16.2, 0.55, Vector3(-4.0, 84.4, 2.0), facade_navy, 20)
-	_cyl(dm, 16.2, 16.2, 0.55, Vector3(-4.0, 88.8, 2.0), facade_navy, 20)
-	_cyl(dm, 4.2, 15.2, 4.8, Vector3(-4.0, 91.4, 2.0), facade_navy, 16)
-	_cyl(dm, 0.18, 0.55, 11.0, Vector3(-4.0, 99.0, 2.0), gold, 8)
-	_box(dm, Vector3(1.8, 1.8, 1.8), Vector3(-4.0, 104.5, 2.0), glow_blue, 0.0, 0.0, 0.0, false)
-
-	# Bilingual Signage facing North (中山东路) & East (禾兴南路)
-	_sign(dm, "戴 梦 得 大 厦", Vector3(0.0, 22.8, -23.6), PI, 116, 0.036, Color(0.98, 0.86, 0.36))
-	_sign(dm, "D I A M O N D   P L A Z A", Vector3(0.0, 19.4, -23.6), PI, 48, 0.026, Color(0.84, 0.92, 1.0))
-	_sign(dm, "戴 梦 得 购 物 中 心", Vector3(30.6, 22.8, 0.0), PI * 0.5, 104, 0.034, Color(0.98, 0.86, 0.36))
-	_sign(dm, "戴 梦 得", Vector3(-4.0, 77.5, -14.8), PI, 98, 0.042, Color(1.0, 0.90, 0.42))
-	_add_light(dm, Vector3(0.0, 16.0, -30.0), Color(1.0, 0.90, 0.68), 64.0, lights)
-	_add_light(dm, Vector3(34.0, 14.0, 0.0), Color(0.88, 0.94, 1.0), 58.0, lights)
-
-
-# =============================================================================================
-# 13. 旭辉广场 (Jiaxing CIFI Plaza — Modern Champagne-Gold Mall, Twin Towers & Sunken Forecourt on 中山东路)
-# =============================================================================================
-static func _cifi_plaza(parent: Node3D, center: Vector3, angle: float, lights: Array) -> void:
-	var cf := Node3D.new()
-	cf.name = "JiaxingCIFIPlaza"
-	cf.position = center
-	cf.rotation.y = angle
-	parent.add_child(cf)
-
-	var champagne := _mat(Color(0.84, 0.74, 0.58), 0.36, 0.46)
-	var stone_lt := _mat(Color(0.88, 0.86, 0.83), 0.56)
-	var charcoal := _mat(Color(0.20, 0.22, 0.26), 0.46, 0.32)
-	var glass := _glass(Color(0.26, 0.48, 0.62), 0.62)
-	var glow_amber := _emissive(Color(1.0, 0.68, 0.24), 2.1)
-	var glow_warm := _emissive(Color(1.0, 0.92, 0.76), 1.4)
-	var water_fnt := _mat(Color(0.22, 0.56, 0.72), 0.14, 0.20)
-	var plaza := _mat(Color(0.82, 0.80, 0.76), 0.74)
-
-	# --- A. Broad Sunken Granite Forecourt Plaza facing 中山东路 (North, -Z) ---
-	_box(cf, Vector3(96.0, 0.12, 68.0), Vector3(0.0, 0.06, -4.0), plaza, 0.0, 0.0, 0.0, false)
-	# Reflecting fountain basin & illuminated CIFI sculptural totem in forecourt
-	_cyl(cf, 7.5, 8.2, 0.65, Vector3(0.0, 0.35, -31.0), stone_lt, 18)
-	JiaxingLandmarks.add_fountain(cf, Vector3(0.0, 0.0, -31.0), 6.6, 0.71, 4.2, 10, 2.4)
-	_box(cf, Vector3(1.8, 9.5, 1.8), Vector3(24.0, 4.75, -31.0), champagne)
-	_box(cf, Vector3(2.0, 1.6, 2.0), Vector3(24.0, 8.2, -31.0), glow_amber, 0.0, 0.0, 0.0, false)
-
-	# --- B. 5-Story Contemporary Champagne-Gold Shopping Mall Podium (84m x 42m x 22m) ---
-	_box(cf, Vector3(84.0, 22.0, 42.0), Vector3(0.0, 11.0, 2.0), stone_lt)
-	_box(cf, Vector3(76.0, 17.0, 42.6), Vector3(0.0, 10.5, 2.0), glass)
-	# Signature sweeping horizontal champagne-gold louver ribbons along the 中山东路 facade
-	for ly: float in [5.0, 9.4, 13.8, 18.2, 22.2]:
-		_box(cf, Vector3(85.8, 0.85, 43.8), Vector3(0.0, ly, 2.0), champagne)
-	# Dramatic recessed double-height central atrium portal with glowing golden arch
-	_box(cf, Vector3(26.0, 14.0, 4.5), Vector3(0.0, 7.2, -20.5), charcoal)
-	_box(cf, Vector3(22.0, 11.5, 4.8), Vector3(0.0, 6.0, -20.6), glow_warm, 0.0, 0.0, 0.0, false)
-	_box(cf, Vector3(28.0, 1.4, 6.5), Vector3(0.0, 14.6, -21.2), champagne)
-	_box(cf, Vector3(28.4, 0.35, 6.8), Vector3(0.0, 15.4, -21.2), glow_amber, 0.0, 0.0, 0.0, false)
-
-	# --- C. Twin Modern Glass-and-Champagne Commercial / Apartment Towers (56m East + 46m West) ---
-	_box(cf, Vector3(24.0, 34.0, 22.0), Vector3(24.0, 39.0, 8.0), glass)
-	_box(cf, Vector3(25.2, 1.1, 23.2), Vector3(24.0, 56.2, 8.0), champagne)
-	for tx_r: float in [12.0, 20.0, 28.0, 36.0]:
-		_box(cf, Vector3(0.9, 34.5, 22.6), Vector3(tx_r, 39.0, 8.0), champagne)
-	_box(cf, Vector3(22.0, 24.0, 20.0), Vector3(-25.0, 34.0, 8.0), glass)
-	_box(cf, Vector3(23.2, 1.1, 21.2), Vector3(-25.0, 46.2, 8.0), champagne)
-	for tx_l: float in [-36.0, -28.5, -21.5, -14.0]:
-		_box(cf, Vector3(0.9, 24.5, 20.6), Vector3(tx_l, 34.0, 8.0), champagne)
-
-	# Bold Glowing Signage facing North directly onto 中山东路 & T1 western terminus!
-	_sign(cf, "旭  辉  广  场", Vector3(0.0, 20.6, -20.6), PI, 126, 0.038, Color(1.0, 0.72, 0.24))
-	_sign(cf, "C I F I   P L A Z A", Vector3(0.0, 17.0, -20.6), PI, 52, 0.028, Color(0.98, 0.96, 0.92))
-	_sign(cf, "旭 辉 广 场", Vector3(24.0, 53.5, -3.5), PI, 94, 0.036, Color(1.0, 0.76, 0.26))
-	_add_light(cf, Vector3(0.0, 14.0, -28.0), Color(1.0, 0.84, 0.56), 68.0, lights)
 
 
 # =============================================================================================

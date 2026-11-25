@@ -117,6 +117,19 @@ JIANGNAN_MALL_POS = (-625.0, -1105.0)     # 江南大厦 (中山东路/禾兴南
 DIAMOND_PLAZA_POS = (-740.0, -900.0)      # 戴梦得大厦 · 戴梦得购物中心 (禾兴南路520号商圈地标)
 CIFI_PLAZA_POS = (-955.0, -885.0)         # 旭辉广场 (中山东路666号核心商业综合体)
 CATHOLIC_CHURCH_POS = (-522.0, -894.0)    # 嘉兴天主教堂 (圣母显灵堂)
+# 中山东路 × 禾兴南路 block, laid out from the satellite view (built by ZhongshanBlockBuilder): sites kept free of
+# generated blocks and vacant-plot greening -- 中山影城 + corner plaza, 戴梦得, 旭辉广场, 江南大厦, the 天主堂 lawn
+ZS_RECTS = [
+    (-806.0, -998.0, -694.0, -936.0),    # 中山影城 and its round corner plaza
+    (-796.0, -938.0, -688.0, -800.0),    # 戴梦得 podium, rotunda, tower, triangular wing
+    (-944.0, -990.0, -800.0, -832.0),    # 旭辉广场 forecourt, U podium and towers
+    (-680.0, -1140.0, -585.0, -1047.0),  # 江南大厦
+    (-668.0, -1034.0, -452.0, -792.0),   # 天主堂 and its open lawn
+]
+
+
+def in_zs_rect(x, y):
+    return any(x0 <= x <= x1 and y0 <= y <= y1 for (x0, y0, x1, y1) in ZS_RECTS)
 FIRST_HOSPITAL_POS = (-1362.0, 1765.0)    # 嘉兴市第一医院
 SECOND_HOSPITAL_POS = (-198.0, -1781.0)   # 嘉兴市第二医院
 TCM_HOSPITAL_POS = (-2518.0, -835.0)      # 嘉兴市中医医院
@@ -1558,10 +1571,6 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
         (ZICHENG_POS, 92.0, "zicheng_park"),
         ((-315.0, -935.0), 72.0, "zicheng_park_north"),
         (PINGSHAN_PARK_POS, 74.0, "pingshan_park"),
-        (JIANGNAN_MALL_POS, 48.0, "jiangnan_mall"),
-        (DIAMOND_PLAZA_POS, 54.0, "diamond_plaza"),
-        (CIFI_PLAZA_POS, 64.0, "cifi_plaza"),
-        (CATHOLIC_CHURCH_POS, 58.0, "catholic_church"),
         (FIRST_HOSPITAL_POS, 128.0, "first_hospital"),
         (SECOND_HOSPITAL_POS, 95.0, "second_hospital"),
         (TCM_HOSPITAL_POS, 102.0, "tcm_hospital"),
@@ -1589,6 +1598,8 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
         for lpos, lrad, _ in lm_zones:
             if math.hypot(cen[0] - lpos[0], cen[1] - lpos[1]) < lrad:
                 return False
+        if in_zs_rect(cen[0], cen[1]):
+            return False
         # Keep the full Jiaxing South HSR Station + North Forecourt Plaza + Bus Transit Hub precinct clear of random blocks!
         dx_s = cen[0] - SOUTH_STA_POS[0]
         dy_s = cen[1] - SOUTH_STA_POS[1]
@@ -3845,7 +3856,7 @@ def main():
                     if any(point_in_poly(qx, qy, wp) for qx, qy in ((cx, cy), (r0[0], r0[1]), (r0[2], r0[1]), (r0[2], r0[3]), (r0[0], r0[3]))):
                         near = True
                         break
-            if near:
+            if near or in_zs_rect(cx, cy):
                 continue
             areas.append({"kind": "vacant_green", "pts": [rnd((r0[0], r0[1])), rnd((r0[2], r0[1])), rnd((r0[2], r0[3])), rnd((r0[0], r0[3]))]})
             n_vac += 1
@@ -4083,6 +4094,21 @@ def main():
     print(f"Scenic features: {len(scenic_paths)} park walkways, {len(scenic_pavilions)} lakeside pavilions, "
           f"{len(yh_boats)} Yuehe canal boats, arch={rnd(yh_arch_pos)}, opera={rnd(yh_opera_pos)}")
 
+    # 天主堂 lawn stays an open lawn (no generated loop path, benches or tree clumps); its two car parks get
+    # parked cars from the block builder
+    zs_parking = []
+    for a in areas:
+        pts_a = a.get("pts") or []
+        if not pts_a:
+            continue
+        cx_a = sum(q[0] for q in pts_a) / len(pts_a)
+        cy_a = sum(q[1] for q in pts_a) / len(pts_a)
+        if not in_zs_rect(cx_a, cy_a):
+            continue
+        if a.get("kind") == "grass":
+            a["plain"] = True
+        elif a.get("kind") == "parking":
+            zs_parking.append(pts_a)
     landmarks = {
         "jiaxing_south_station": {"pos": rnd(SOUTH_STA_POS), "angle": round(hsr_angle, 4)},
         "yanyu_tower": {"pos": rnd(YANYU_POS), "island_pts": island_pts},
@@ -4112,10 +4138,7 @@ def main():
         "zicheng_park": {"pos": rnd(ZICHENG_POS), "angle": 0.05},
         "pingshan_park": {"pos": rnd(PINGSHAN_PARK_POS), "angle": 0.14},
         "shaonian_street": {"pos": rnd(SHAONIAN_POS), "angle": 0.144},
-        "jiangnan_mall": {"pos": rnd(JIANGNAN_MALL_POS), "angle": 0.16},
-        "diamond_plaza": {"pos": rnd(DIAMOND_PLAZA_POS), "angle": 0.14},
-        "cifi_plaza": {"pos": rnd(CIFI_PLAZA_POS), "angle": 0.17},
-        "catholic_church": {"pos": rnd(CATHOLIC_CHURCH_POS), "angle": 0.06},
+        "zhongshan_block": {"parking": zs_parking},
         "first_hospital": {"pos": rnd(FIRST_HOSPITAL_POS), "angle": 0.03},
         "second_hospital": {"pos": rnd(SECOND_HOSPITAL_POS), "angle": 0.08},
         "tcm_hospital": {"pos": rnd(TCM_HOSPITAL_POS), "angle": -0.10},

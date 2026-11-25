@@ -846,6 +846,9 @@ static func _build_parks_detail(
 				var in_n := Vector2(-d.y, d.x) if is_ccw else Vector2(d.y, -d.x)
 				_add_strip_prism(curb_st, p0, p1, in_n, 0.0, 0.28, 0.015, 0.14, Color(0.68, 0.67, 0.63))
 
+		if bool(a.get("plain", false)):
+			continue # an open lawn kept as it is (天主堂): no loop path, benches or tree clumps
+
 		# 2B. Organic Inset Loop Greenway / Walking Path & Central Stone Focal Plaza (Medium & Large Parks!)
 		if area_m2 >= 1400.0 and span >= 34.0 and kind != "wood":
 			var inset := clampf(minf(pmax.x - pmin.x, pmax.y - pmin.y) * 0.18, 6.0, 14.0)
