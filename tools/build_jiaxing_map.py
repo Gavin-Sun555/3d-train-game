@@ -2170,7 +2170,48 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
                 ex += 48.0
             ey += 40.0
 
-    print(f"Buildings: {len(out)} total ({osm_cnt} real OSM + {lu_cnt} landuse compounds + {yuehe_cnt} Yuehe dry-land houses + {street_cnt} street-front + {east_cnt} eastern block compounds)")
+    # --- E. Block interiors inside the 中环 ring: the old city is packed with east-west walk-up rows (Amap satellite,
+    # Nov 2026), not street-front buildings around empty lots. Rows of 5-7 storey slabs fill whatever the blocks still
+    # have free (roads, water, parks, landmarks and earlier buildings are respected by can_place); towers / 洋房 where
+    # the block's development profile says so, with their wider spacing.
+    ring_cnt = 0
+    ry = -3250.0 + 16.0
+    row_i = 0
+    while ry < 1450.0 - 16.0:
+        rx = -2900.0 + (21.0 if row_i % 2 else 0.0)
+        while rx < 2250.0 - 16.0:
+            zt = zone_profile(rx, ry)[0]
+            if zt == "walkup":
+                hl = rng.uniform(19.0, 27.0)
+                hw = rng.uniform(5.6, 6.6)
+                adv = 2.0 * hl + rng.uniform(9.0, 14.0)
+            else:
+                hl = rng.uniform(14.5, 19.0)
+                hw = rng.uniform(6.8, 8.2)
+                adv = 2.0 * hl + rng.uniform(16.0, 24.0)
+                if zt == "tower" and row_i % 2 == 1:
+                    rx += adv
+                    continue  # high-rise rows need their sunlight spacing
+            if rng.random() < 0.88:
+                ang = rng.uniform(-0.03, 0.03)
+                poly = make_rect_poly(rx + hl, ry, ang, hl, hw)
+                pxs = [p[0] for p in poly]
+                pys = [p[1] for p in poly]
+                bb = (min(pxs), min(pys), max(pxs), max(pys))
+                near_rd = False
+                for (rax, ray, rbx, rby, rhw) in road_grid.query(rx - 160, ry - 160, rx + 160, ry + 160):
+                    if seg_dist(rx + hl, ry, rax, ray, rbx, rby)[0] < 160.0:
+                        near_rd = True
+                        break
+                if near_rd and in_active((rx + hl, ry)) and can_place(poly, bb, allow_in_park=False, water_margin=3.0):
+                    out.append(profile_building(poly, rx + hl, ry, 1, ang, hl, hw))
+                    taken.add((bb[0], bb[1], bb[2], bb[3], poly), *bb)
+                    ring_cnt += 1
+            rx += adv
+        ry += 27.0
+        row_i += 1
+
+    print(f"Buildings: {len(out)} total ({osm_cnt} real OSM + {lu_cnt} landuse compounds + {yuehe_cnt} Yuehe dry-land houses + {street_cnt} street-front + {east_cnt} eastern block compounds + {ring_cnt} 中环 block interiors)")
     return out
 
 
