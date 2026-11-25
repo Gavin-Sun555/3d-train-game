@@ -3414,6 +3414,53 @@ def main():
     )
     gated_compounds = build_gated_compounds(landuse_zones, ways, nodes, road_grid, water_grid, rail_grid, bld_grid)
 
+    # 底商 face the street from OUTSIDE the compound: wherever a compound fence would pass in front of a building
+    # with shopfronts (within 12 m of its street side), the fence is cut there and the shop building itself forms
+    # the compound edge — the fence runs on behind / between the buildings
+    shop_dir = {}
+    for sf in storefronts:
+        bi = int(sf.get("b", -1))
+        if bi >= 0 and bi not in shop_dir:
+            shop_dir[bi] = sf["n"]
+    shop_grid = Grid(40.0)
+    for bi, nv in shop_dir.items():
+        bp = blds[bi]["pts"]
+        xs = [q[0] for q in bp]
+        ys = [q[1] for q in bp]
+        shop_grid.add((bp, nv), min(xs) - 13, min(ys) - 13, max(xs) + 13, max(ys) + 13)
+
+    def in_front_of_shop(px, py):
+        for (bp, nv) in shop_grid.query(px, py, px, py):
+            for t in (0.0, 1.5, 3.0, 4.5, 6.0, 7.5, 9.0, 10.5, 12.0):
+                if point_in_poly(px - nv[0] * t, py - nv[1] * t, bp):
+                    return True
+        return False
+
+    cut_m = 0.0
+    for comp in gated_compounds:
+        new_segs = []
+        for (sa, sb) in comp["segs"]:
+            L = math.hypot(sb[0] - sa[0], sb[1] - sa[1])
+            n = max(1, int(L / 1.0))
+            run_start = None
+            for k in range(n + 1):
+                f = k / n
+                px, py = sa[0] + (sb[0] - sa[0]) * f, sa[1] + (sb[1] - sa[1]) * f
+                keep = not in_front_of_shop(px, py)
+                if keep and run_start is None:
+                    run_start = f
+                if (not keep or k == n) and run_start is not None:
+                    f_end = f if keep else max(run_start, (k - 1) / n)
+                    a = (sa[0] + (sb[0] - sa[0]) * run_start, sa[1] + (sb[1] - sa[1]) * run_start)
+                    b = (sa[0] + (sb[0] - sa[0]) * f_end, sa[1] + (sb[1] - sa[1]) * f_end)
+                    if math.hypot(b[0] - a[0], b[1] - a[1]) >= 2.2:
+                        new_segs.append([rnd(a), rnd(b)])
+                    run_start = None
+                if not keep:
+                    cut_m += L / n
+        comp["segs"] = new_segs
+    print(f"底商 outside compounds: {cut_m / 1000.0:.1f} km of compound fence removed in front of shopfronts")
+
     # 小区绿化: the courtyard of every gated compound is landscaped lawn (buildings stand on it) with trees in the
     # gaps between blocks. A lawn is only laid where its whole outline keeps clear of roads, rail, water and other
     # mapped areas (no coplanar overlaps); it is a plain lawn layer, not a detailed park

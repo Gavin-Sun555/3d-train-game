@@ -1,9 +1,11 @@
 shader_type spatial;
-render_mode diffuse_burley, specular_schlick_ggx;
+render_mode diffuse_burley, specular_schlick_ggx, cull_disabled;
 
 varying vec3 v_world;
 varying vec3 v_local_nrm;
 varying vec4 v_col;
+varying vec2 v_uv;
+uniform bool leaf_cards = false; // on only for the sculpted crowns, whose UVs mark their leaf cards
 
 float hash31(vec3 p) {
 	p = fract(p * vec3(127.1, 311.7, 74.7));
@@ -42,10 +44,22 @@ void vertex() {
 	v_world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	v_local_nrm = NORMAL;
 	v_col = COLOR;
+	v_uv = UV;
 }
 
 void fragment() {
 	float cam_d = distance(v_world, CAMERA_POSITION_WORLD);
+	// Leaf cards (UV >= 0): a ragged cluster of leaves cut out of the quad; crown clumps carry UV = -1
+	if (leaf_cards && v_uv.x >= 0.0) {
+		vec2 c = v_uv - 0.5;
+		float d = length(c) * 2.0;
+		float lobes = noise3(vec3(v_uv * 5.5, v_col.r * 7.0));
+		float leaves = noise3(vec3(v_uv * 15.0, 3.7));
+		float mask = (1.0 - d) + (lobes - 0.5) * 0.9 + (leaves - 0.5) * 0.45;
+		if (mask < 0.12) {
+			discard;
+		}
+	}
 
 	// Multi-scale 3D leaf clusters so tree crowns never look like smooth plastic balls!
 	float big_clump = noise3(v_world * 2.4);

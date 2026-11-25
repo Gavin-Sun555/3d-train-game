@@ -336,7 +336,9 @@ var _btn_global_tsp: Button
 var _btn_stats_global_tsp: Button
 var _lbl_speed: Label
 var _lbl_speed_limit: Label
-var _lbl_limit_ahead: Label # manual driving: next speed-limit change and its distance
+var _lbl_limit_ahead: Label
+const SWITCH_LOAD_DIST := 700.0 # a tram switch this far away shows the loading spinner
+const SWITCH_LOAD_RADIUS := 800.0 # city tiles built around the new tram before play resumes # manual driving: next speed-limit change and its distance
 var _lbl_notch: Label
 var _lbl_drv_status: Label
 var _btn_doors: Button
@@ -1535,9 +1537,52 @@ func _sync_landmark_monorail() -> void:
 				(car as Node3D).visible = true
 
 
+# Switch the watched / driven tram. A jump to a tram far away pauses behind a spinner while the city around it
+# is built (it used to pop in tile by tile over many seconds while the old neighbourhood was still being
+# finished and torn down)
+func _switch_tram(action: Callable) -> void:
+	if _startup_loading:
+		return
+	var before := _get_traffic_focus_pos()
+	action.call()
+	_after_tram_switch(before)
+
+
+func _after_tram_switch(before: Vector3) -> void:
+	var now_p := _get_traffic_focus_pos()
+	_snap_camera_next = true
+	if _city_tiles == null or _startup_loading or before.distance_to(now_p) < SWITCH_LOAD_DIST:
+		return
+	_city_tiles.retarget(now_p)
+	_begin_loading_overlay(L10n.t("正在切换列车", "Switching Tram"), L10n.t("正在加载周边景观...", "Loading the surroundings..."))
+	var need := maxi(1, _city_tiles.near_unbuilt_count(now_p, SWITCH_LOAD_RADIUS))
+	var t0 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 9000:
+		var going := _city_tiles.prewarm_step(now_p, SWITCH_LOAD_RADIUS)
+		var left := _city_tiles.near_unbuilt_count(now_p, SWITCH_LOAD_RADIUS)
+		_set_startup_progress(lerpf(6.0, 90.0, 1.0 - float(left) / float(need)),
+			L10n.t("正在加载周边景观 (%d/%d)...", "Loading the surroundings (%d/%d)...") % [need - left, need])
+		await get_tree().process_frame
+		if not going or left == 0:
+			break
+	_set_startup_progress(94.0, L10n.t("正在准备路口交通...", "Preparing nearby traffic..."))
+	await get_tree().process_frame
+	if _traffic_sim != null:
+		_traffic_sim.prewarm_near(_graph, now_p, 520.0)
+	_snap_camera_next = true
+	_update_camera(0.016)
+	for _w in range(3):
+		await get_tree().process_frame
+	_end_loading_overlay()
+
+
 func _switch_line(delta_i: int) -> void:
+	if _startup_loading:
+		return
+	var before_p := _get_traffic_focus_pos()
 	var before := int(_transit_sim.get_active_tram().get("line_id", -1))
 	_transit_sim.cycle_active_line(delta_i)
+	_after_tram_switch(before_p)
 	var tr := _transit_sim.get_active_tram()
 	if tr.is_empty():
 		return
@@ -2714,7 +2759,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				KEY_5: _set_cam_mode(CamMode.BIRD)
 				KEY_C: _set_cam_mode((_cam_mode + 1) % 5)
 				KEY_F:
-					_transit_sim.cycle_active_tram(1)
+					_switch_tram(func(): _transit_sim.cycle_active_tram(1))
 				KEY_L:
 					_switch_line(1)
 				KEY_P:
@@ -4731,8 +4776,8 @@ func _build_ui() -> void:
 	rt_vbox.add_child(rt_btns)
 	rt_btns.add_child(_make_btn(L10n.t("◀ 上一线路", "◀ Prev Line"), func(): _switch_line(-1)))
 	rt_btns.add_child(_make_btn(L10n.t("下一线路(L) ▶", "Next Line (L) ▶"), func(): _switch_line(1)))
-	rt_btns.add_child(_make_btn(L10n.t("◀ 本线上一列", "◀ Prev Tram"), func(): _transit_sim.cycle_active_tram(-1)))
-	rt_btns.add_child(_make_btn(L10n.t("本线下一列(F) ▶", "Next Tram (F) ▶"), func(): _transit_sim.cycle_active_tram(1)))
+	rt_btns.add_child(_make_btn(L10n.t("◀ 本线上一列", "◀ Prev Tram"), func(): _switch_tram(func(): _transit_sim.cycle_active_tram(-1))))
+	rt_btns.add_child(_make_btn(L10n.t("本线下一列(F) ▶", "Next Tram (F) ▶"), func(): _switch_tram(func(): _transit_sim.cycle_active_tram(1))))
 	_btn_pax_rate = _make_btn(L10n.t("客流: %s (P)", "Pax: %s (P)") % PassengerSim.spawn_level_name(_pax_sim.spawn_level if _pax_sim != null else 3), func():
 		var lvl := _pax_sim.cycle_spawn_level()
 		_btn_pax_rate.text = L10n.t("客流: %s (P)", "Pax: %s (P)") % PassengerSim.spawn_level_name(lvl)
@@ -5575,7 +5620,7 @@ func _refresh_stats_trams() -> void:
 			_fmt_hms(float(tr.get("st_dwell_s", 0.0))), _fmt_hms(float(tr.get("st_hold_s", 0.0)))]
 		row.gui_input.connect(func(ev: InputEvent) -> void:
 			if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
-				_transit_sim.select_tram(i)
+				_switch_tram(func(): _transit_sim.select_tram(i))
 				_show_toast(L10n.t("已切换到 %s 第%d列", "Switched to %s #%d") % [ln_disp, same.find(i) + 1])
 				_refresh_stats_modal_ui()
 		)

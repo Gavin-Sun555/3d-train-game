@@ -24,6 +24,7 @@ var _task_id := -1
 var _task_key := Vector2i.ZERO
 var _task_sig := 0
 var _task_result: Node3D = null
+var _discard_task := false # the tile in flight belongs to a view the camera has jumped away from
 # Real terrain: a finished tile is draped on the main thread (reading meshes back from the RenderingServer is
 # instant there, but waits a frame per call on a worker), a few milliseconds per frame, then swapped in
 var _drape := {} # {"key", "node", "sig", "queue": Array[Node]} while one is in progress
@@ -472,10 +473,7 @@ func step() -> void:
 	if _task_id >= 0:
 		if not WorkerThreadPool.is_task_completed(_task_id):
 			return
-		WorkerThreadPool.wait_for_task_completion(_task_id)
-		_task_id = -1
-		_install(_task_key, _task_result, _task_sig)
-		_task_result = null
+		_complete_task()
 		_swap_cooldown = SWAP_COOLDOWN_FRAMES
 		return
 	var key := _next_tile()
@@ -516,6 +514,8 @@ func _next_tile() -> Vector2i:
 		var t: Dictionary = _tiles[key]
 		if int(t["built_sig"]) == int(t["sig"]):
 			continue
+		if (not _stage.is_empty() and _stage["key"] == key) or (not _drape.is_empty() and _drape["key"] == key):
+			continue # being attached / draped right now
 		var c := (Vector2(key) + Vector2(0.5, 0.5)) * TILE
 		var d := c.distance_squared_to(f)
 		if d < best_d:
@@ -606,11 +606,13 @@ func _stage_step(budget_ms: float) -> void:
 	var i := int(_stage["i"])
 	var labels := 0
 	var unlimited := budget_ms >= 1e8
+	# behind a loading screen (prewarm budgets) many more sign texts may be shaped per frame
+	var label_cap := LABELS_PER_FRAME if budget_ms < 8.0 else LABELS_PER_FRAME * 10
 	while i < pairs.size() and float(Time.get_ticks_usec() - t0) < budget_ms * 1000.0:
 		var pr: Array = pairs[i]
 		var ch: Node = pr[1]
 		if ch is Label3D and ch.has_meta("pending_text"):
-			if labels >= LABELS_PER_FRAME and not unlimited:
+			if labels >= label_cap and not unlimited:
 				break
 			(ch as Label3D).text = str(ch.get_meta("pending_text"))
 			ch.remove_meta("pending_text")
@@ -672,10 +674,7 @@ func finish_pending() -> void:
 	if not _drape.is_empty():
 		_drape_step(1e9)
 	if _task_id >= 0:
-		WorkerThreadPool.wait_for_task_completion(_task_id)
-		_task_id = -1
-		_install(_task_key, _task_result, _task_sig)
-		_task_result = null
+		_complete_task()
 	if not _drape.is_empty():
 		_drape_step(1e9)
 	_flush_stage()
@@ -737,12 +736,9 @@ func prewarm_step(center: Vector3, radius_m: float = 1450.0) -> bool:
 	if _task_id >= 0:
 		if not WorkerThreadPool.is_task_completed(_task_id):
 			return true
-		WorkerThreadPool.wait_for_task_completion(_task_id)
-		_task_id = -1
-		_install(_task_key, _task_result, _task_sig)
-		_task_result = null
-		if not _drape.is_empty():
-			return true
+		_complete_task()
+		if not _drape.is_empty() or not _stage.is_empty():
+			return true # the tile just finished is still being attached: never dispatch it a second time
 	var key := _next_tile()
 	if key == Vector2i(2147483647, 0):
 		return false
@@ -756,6 +752,43 @@ func prewarm_step(center: Vector3, radius_m: float = 1450.0) -> bool:
 	var near_bays := _bays_near_key(key, _station_bays)
 	_task_id = WorkerThreadPool.add_task(_thread_build.bind(t["data"], near_bays, _clear_idx, track_ctx_ver), false, "city tile")
 	return true
+
+
+func _complete_task() -> void:
+	WorkerThreadPool.wait_for_task_completion(_task_id)
+	_task_id = -1
+	if _discard_task:
+		_discard_task = false
+		if _task_result != null:
+			_task_result.free() # never entered the tree: cheap to drop
+	else:
+		_install(_task_key, _task_result, _task_sig)
+	_task_result = null
+
+
+static func _tile_centre(key: Vector2i) -> Vector2:
+	return (Vector2(key) + Vector2(0.5, 0.5)) * TILE
+
+
+# The camera jumped (switched to another tram): drop work for the old neighbourhood at once instead of finishing,
+# installing and then unloading it, and free what is now out of range
+func retarget(pos: Vector3) -> void:
+	focus = pos
+	var f := Vector2(pos.x, pos.z)
+	if not _stage.is_empty() and _tile_centre(_stage["key"]).distance_to(f) > BUILD_RADIUS:
+		var pairs: Array = _stage["pairs"]
+		for j in range(int(_stage["i"]), pairs.size()):
+			var ch: Node = pairs[j][1]
+			if is_instance_valid(ch) and ch.get_parent() == null:
+				ch.free()
+		var root = _stage["node"]
+		_stage = {}
+		if is_instance_valid(root):
+			_retire(root as Node)
+	if _task_id >= 0 and _tile_centre(_task_key).distance_to(f) > BUILD_RADIUS:
+		_discard_task = true
+	_unload_tick = 0
+	_unload_far()
 
 
 func _exit_tree() -> void:

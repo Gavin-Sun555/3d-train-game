@@ -2332,6 +2332,7 @@ static func _build_tree_chunk(parent: Node3D, trees: Array, idxs: Array, vis_end
 
 	var foliage_mat := ShaderMaterial.new()
 	foliage_mat.shader = load("res://shaders/foliage.gdshader") as Shader
+	foliage_mat.set_shader_parameter("leaf_cards", false) # primitive sphere crowns: their UVs are not leaf cards
 
 	# 1. Sidewalk Cast-Iron Tree Pit Grates & Granite Planter Rings
 	var pit_mm := MultiMesh.new()
@@ -2579,6 +2580,7 @@ static func apply_track_clearance(city_root: Node3D, clear_idx: Dictionary, bays
 				var th := _clearance_hidden_set(wm, clear_idx, TrackBuilder.TREE_CLEARANCE_M, bays)
 				_apply_hidden(wm, th, 1)
 				_apply_hidden(chunk.get_node_or_null("TreeLeaf_S%d" % sp) as MultiMeshInstance3D, th, 1)
+				_apply_hidden(chunk.get_node_or_null("TreeLeafMid_S%d" % sp) as MultiMeshInstance3D, th, 1)
 			for fnm: String in ["FarBroadleaf", "FarConifer"]:
 				var fm := chunk.get_node_or_null(fnm) as MultiMeshInstance3D
 				if fm != null:

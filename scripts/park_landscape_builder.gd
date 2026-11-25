@@ -5,6 +5,7 @@ extends RefCounted
 # benches, picnic tables, flowerbeds, pavilions, and the Lake Union waterfront park masterpiece.
 
 const TREE_CHUNK := 360.0
+const LEAF_HI_RANGE := 190.0 # detailed crowns (leaf cards) up to here, the lighter mid-LOD crown beyond
 const PROP_CHUNK := 380.0
 
 static var _species_cache: Dictionary = {}
@@ -1331,6 +1332,7 @@ static func _build_multi_species_trees(
 
 	var foliage_mat := ShaderMaterial.new()
 	foliage_mat.shader = load("res://shaders/foliage.gdshader") as Shader
+	foliage_mat.set_shader_parameter("leaf_cards", true)
 
 	var pit_box := BoxMesh.new()
 	pit_box.size = Vector3(1.52, 0.04, 1.52)
@@ -1346,14 +1348,20 @@ static func _build_multi_species_trees(
 	far_broad.height = 4.2
 	far_broad.radial_segments = 8
 	far_broad.rings = 4
-	far_broad.material = foliage_mat
+	# a fresh material, not foliage_mat.duplicate(): this also runs on city-tile worker threads, where duplicating
+	# reads the shader parameters back from the RenderingServer synchronously and deadlocks against a main
+	# thread that is waiting for the tile
+	var far_foliage := ShaderMaterial.new()
+	far_foliage.shader = foliage_mat.shader
+	far_foliage.set_shader_parameter("leaf_cards", false)
+	far_broad.material = far_foliage
 
 	var far_conifer := CylinderMesh.new()
 	far_conifer.top_radius = 0.15
 	far_conifer.bottom_radius = 2.5
 	far_conifer.height = 9.2
 	far_conifer.radial_segments = 8
-	far_conifer.material = foliage_mat
+	far_conifer.material = far_foliage
 
 	# Group trees into 160m spatial chunks
 	var chunks := {}
@@ -1456,9 +1464,29 @@ static func _build_multi_species_trees(
 			l_mmi.multimesh = l_mm
 			l_mmi.set_meta("base_tfs", sp_tfs)
 			l_mmi.material_override = foliage_mat
-			l_mmi.visibility_range_end = 360.0
+			l_mmi.visibility_range_end = LEAF_HI_RANGE
+			l_mmi.visibility_range_end_margin = 12.0
 			l_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 			chunk_node.add_child(l_mmi)
+			# lighter crown (no leaf cards, fewer segments) for the middle distance
+			var lm_mm := MultiMesh.new()
+			lm_mm.transform_format = MultiMesh.TRANSFORM_3D
+			lm_mm.use_colors = true
+			lm_mm.mesh = pair["leaf_mid"]
+			lm_mm.instance_count = sp_list.size()
+			for k2 in range(sp_list.size()):
+				lm_mm.set_instance_transform(k2, sp_tfs[k2])
+				lm_mm.set_instance_color(k2, (sp_list[k2] as Dictionary)["tint"] as Color)
+			var lm_mmi := MultiMeshInstance3D.new()
+			lm_mmi.name = "TreeLeafMid_S%d" % sp
+			lm_mmi.multimesh = lm_mm
+			lm_mmi.set_meta("base_tfs", sp_tfs.duplicate())
+			lm_mmi.material_override = foliage_mat
+			lm_mmi.visibility_range_begin = LEAF_HI_RANGE
+			lm_mmi.visibility_range_begin_margin = 12.0
+			lm_mmi.visibility_range_end = 360.0
+			lm_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			chunk_node.add_child(lm_mmi)
 
 		# Far LOD instances (beyond 350m)
 		if not far_broad_list.is_empty():
@@ -1521,12 +1549,18 @@ static func _tree_tint(sp: int, rnd: float) -> Color:
 
 
 static func _get_species_meshes(sp: int) -> Dictionary:
+	_species_mutex.lock()
 	if _species_cache.has(sp):
-		return _species_cache[sp]
+		var cached: Dictionary = _species_cache[sp]
+		_species_mutex.unlock()
+		return cached
 	var wst := SurfaceTool.new()
 	wst.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var lst := SurfaceTool.new()
 	lst.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_collect_blobs = true
+	_collect_thread = OS.get_thread_caller_id()
+	_blobs.clear()
 
 	match sp:
 		0: # PNW DOUGLAS FIR / WESTERN RED CEDAR (Majestic layered conifer!)
@@ -1643,11 +1677,107 @@ static func _get_species_meshes(sp: int) -> Dictionary:
 				var len_d := 2.6 + float(k % 3) * 0.45
 				_taper_cyl(lst, 0.22, 0.46, top_p.y - len_d, top_p.y, 6, Color.WHITE, Vector3(top_p.x, 0.0, top_p.z))
 
+	_collect_blobs = false
+	_collect_thread = -1
 	wst.generate_normals()
-	lst.generate_normals()
-	var res := {"wood": wst.commit(), "leaf": lst.commit()}
+	var other_leaf := sp == 0 or sp == 5 # conifer tiers / willow curtains: plain geometry with generated normals
+	if other_leaf:
+		lst.generate_normals()
+	var other_arr: Array = lst.commit_to_arrays() if other_leaf else []
+	var blobs := _blobs.duplicate()
+	_blobs.clear()
+	# crown centre: blob centres weighted by size
+	var cc := Vector3.ZERO
+	var wsum := 0.0
+	for b: Array in blobs:
+		var w := (b[1] as Vector3).length()
+		cc += (b[0] as Vector3) * w
+		wsum += w
+	if wsum > 0.0:
+		cc /= wsum
+	var hi := ArrayMesh.new()
+	var mid := ArrayMesh.new()
+	if not blobs.is_empty():
+		var hst := SurfaceTool.new()
+		hst.begin(Mesh.PRIMITIVE_TRIANGLES)
+		var mst := SurfaceTool.new()
+		mst.begin(Mesh.PRIMITIVE_TRIANGLES)
+		var crown_lo := 1e9
+		var crown_hi := -1e9
+		for b: Array in blobs:
+			crown_lo = minf(crown_lo, (b[0] as Vector3).y - (b[1] as Vector3).y)
+			crown_hi = maxf(crown_hi, (b[0] as Vector3).y + (b[1] as Vector3).y)
+		for b: Array in blobs:
+			_add_crown_clump(hst, b[0], b[1], float(b[2]), cc, crown_lo, crown_hi, 11, 7, true)
+			_add_crown_clump(mst, b[0], b[1], float(b[2]), cc, crown_lo, crown_hi, 8, 4, false)
+		hst.commit(hi)
+		mst.commit(mid)
+	if other_leaf:
+		hi.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, other_arr)
+		mid.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, other_arr)
+	var res := {"wood": wst.commit(), "leaf": hi, "leaf_mid": mid}
 	_species_cache[sp] = res
+	_species_mutex.unlock()
 	return res
+
+
+# A foliage clump of a broadleaf crown: a noise-lumped ellipsoid whose normals lean out from the WHOLE crown's
+# centre (soft canopy shading instead of faceted stones), darker toward the inside / bottom of the crown, and
+# with leaf cards (cut to leafy shapes in foliage.gdshader via their UVs) breaking up the silhouette
+static func _add_crown_clump(st: SurfaceTool, center: Vector3, radii: Vector3, seed_v: float, crown_c: Vector3,
+		crown_lo: float, crown_hi: float, segs: int, rings: int, cards: bool) -> void:
+	var grid: Array = []
+	for r in range(rings + 1):
+		var phi := PI * float(r) / float(rings)
+		var row: Array = []
+		for sg in range(segs):
+			var th := TAU * (float(sg) + 0.5 * float(r % 2)) / float(segs)
+			var dir := Vector3(sin(phi) * cos(th), cos(phi), sin(phi) * sin(th))
+			var bump := 0.82 + 0.22 * _hash01(dir.x * 4.0 + seed_v, dir.z * 4.0 + dir.y * 2.5, seed_v) \
+				+ 0.10 * _hash01(dir.x * 11.0 - seed_v, dir.y * 9.0 + dir.z * 7.0, seed_v + 3.0)
+			var v := center + Vector3(dir.x * radii.x, dir.y * radii.y, dir.z * radii.z) * bump
+			var n_out := ((v - crown_c).normalized() * 0.65 + dir * 0.35).normalized()
+			var hgt := clampf((v.y - crown_lo) / maxf(0.1, crown_hi - crown_lo), 0.0, 1.0)
+			var ao := lerpf(0.62, 1.0, sqrt(hgt)) * lerpf(0.86, 1.0, clampf(n_out.dot((v - crown_c).normalized()) * 0.5 + 0.5, 0.0, 1.0))
+			row.append([v, n_out, Color(ao, ao, ao)])
+		grid.append(row)
+	for r in range(rings):
+		var r0: Array = grid[r]
+		var r1: Array = grid[r + 1]
+		for sg in range(segs):
+			var s1 := (sg + 1) % segs
+			for q: Array in [[r0[sg], r0[s1], r1[s1]], [r0[sg], r1[s1], r1[sg]]]:
+				for vv: Array in q:
+					st.set_color(vv[2])
+					st.set_normal(vv[1])
+					st.set_uv(Vector2(-1.0, -1.0))
+					st.add_vertex(vv[0])
+	if not cards:
+		return
+	var n_cards := int(clampf(radii.x * radii.z * 5.5, 6.0, 16.0))
+	for k in range(n_cards):
+		var h1 := _hash01(seed_v * 3.1 + float(k), float(k) * 1.7, seed_v)
+		var h2 := _hash01(float(k) * 2.3, seed_v * 1.9 + float(k), seed_v + 1.0)
+		var h3 := _hash01(seed_v + float(k) * 0.37, float(k) * 5.1, seed_v + 2.0)
+		var phi := acos(clampf(1.0 - 1.7 * h1, -1.0, 1.0)) # favour the upper / outer surface
+		var th := TAU * h2
+		var dir := Vector3(sin(phi) * cos(th), cos(phi), sin(phi) * sin(th))
+		var pc := center + Vector3(dir.x * radii.x, dir.y * radii.y, dir.z * radii.z) * (0.98 + 0.16 * h3)
+		var n_out := ((pc - crown_c).normalized() * 0.65 + dir * 0.35).normalized()
+		var t1 := n_out.cross(Vector3.UP if absf(n_out.y) < 0.95 else Vector3.RIGHT).normalized()
+		var t2 := n_out.cross(t1).normalized()
+		var rot := TAU * h3
+		var ax := (t1 * cos(rot) + t2 * sin(rot)) * (0.72 + 0.45 * h1)
+		var ay := (t2 * cos(rot) - t1 * sin(rot)) * (0.72 + 0.45 * h2)
+		ay = (ay + n_out * 0.25).normalized() * ay.length() # tilt out of the surface
+		var hgt := clampf((pc.y - crown_lo) / maxf(0.1, crown_hi - crown_lo), 0.0, 1.0)
+		var shade := lerpf(0.72, 1.06, sqrt(hgt))
+		var cq: Array = [[pc - ax - ay, Vector2(0, 1)], [pc + ax - ay, Vector2(1, 1)], [pc + ax + ay, Vector2(1, 0)], [pc - ax + ay, Vector2(0, 0)]]
+		for idx: int in [0, 1, 2, 0, 2, 3]:
+			st.set_color(Color(shade, shade, shade))
+			st.set_normal(n_out)
+			st.set_uv(cq[idx][1])
+			st.add_vertex(cq[idx][0])
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1680,7 +1810,16 @@ static func _add_evergreen_tier(
 		_add_vc_tri(st, base_c, ring[i], ring[j], col.darkened(0.28))
 
 
+static var _collect_blobs := false
+static var _collect_thread := -1
+static var _blobs: Array = [] # [center, radii, seed] gathered while a species crown is being built
+static var _species_mutex := Mutex.new() # crowns are built from the main thread and from city-tile workers
+
+
 static func _add_faceted_blob(st: SurfaceTool, center: Vector3, radii: Vector3, col: Color, seed_v: float) -> void:
+	if _collect_blobs and _collect_thread == OS.get_thread_caller_id():
+		_blobs.append([center, radii, seed_v])
+		return
 	# Organic perturbed geodesic-like foliage cluster (3 rings x 8 segments, bumpy natural silhouette)
 	var segs := 8
 	var rings := 4
