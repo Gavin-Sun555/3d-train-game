@@ -130,6 +130,26 @@ ZS_RECTS = [
 
 def in_zs_rect(x, y):
     return any(x0 <= x <= x1 and y0 <= y <= y1 for (x0, y0, x1, y1) in ZS_RECTS)
+
+
+# 南湖天地 (east shore between the lake and 纺工路/T1), laid out from the satellite view, and the two Hyatt hotels
+# (built by NanhuBuilder): sites kept free of generated blocks
+NH_RECTS = [
+    (690.0, -485.0, 912.0, -345.0),     # 嘉绢 sawtooth hall and the glass shop pavilions east of it
+    (690.0, -345.0, 935.0, -262.0),     # central axis plaza and the pavilions on its south side
+    (836.0, -272.0, 920.0, -170.0),     # 南湖书院
+    (935.0, -322.0, 1136.0, 100.0),     # new 南湖天地 glass mall along 纺工路 (construction ground up to T1)
+    (895.0, -322.0, 946.0, 60.0),       # west side of 南湖路: low-rise only
+    (838.0, -172.0, 946.0, 60.0),       # 南堰新景 shore promenade
+    (878.0, -640.0, 1080.0, -360.0),    # 南湖凯悦酒店 and 凯悦嘉轩酒店
+    (1040.0, -420.0, 1110.0, -340.0),   # 凯悦嘉轩酒店 corner at 景湖路 × 纺工路
+    (520.0, -665.0, 785.0, -476.0),     # 鸳湖里弄 lane houses
+]
+NH_LANES_RECT = (522.0, -660.0, 780.0, -480.0)
+
+
+def in_nh_rect(x, y):
+    return any(x0 <= x <= x1 and y0 <= y <= y1 for (x0, y0, x1, y1) in NH_RECTS)
 FIRST_HOSPITAL_POS = (-1362.0, 1765.0)    # 嘉兴市第一医院
 SECOND_HOSPITAL_POS = (-198.0, -1781.0)   # 嘉兴市第二医院
 TCM_HOSPITAL_POS = (-2518.0, -835.0)      # 嘉兴市中医医院
@@ -1563,7 +1583,6 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
         (HAOGU_PAGODA_POS, 42.0, "haogu_pagoda"),
         (HUIJINGYUAN_POS, 64.0, "huijingyuan"),
         (NANHU_GATE_POS, 58.0, "nanhu_gate"),
-        (NANHU_TIANDI_POS, 152.0, "nanhu_tiandi"),
         (MEMORIAL_POS, 105.0, "nanhu_memorial"),
         (GOV_POS, 125.0, "jiaxing_gov"),
         (JIAXING_NO1_POS, 215.0, "jiaxing_no1_school"),
@@ -1598,7 +1617,7 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
         for lpos, lrad, _ in lm_zones:
             if math.hypot(cen[0] - lpos[0], cen[1] - lpos[1]) < lrad:
                 return False
-        if in_zs_rect(cen[0], cen[1]):
+        if in_zs_rect(cen[0], cen[1]) or in_nh_rect(cen[0], cen[1]):
             return False
         # Keep the full Jiaxing South HSR Station + North Forecourt Plaza + Bus Transit Hub precinct clear of random blocks!
         dx_s = cen[0] - SOUTH_STA_POS[0]
@@ -3856,7 +3875,7 @@ def main():
                     if any(point_in_poly(qx, qy, wp) for qx, qy in ((cx, cy), (r0[0], r0[1]), (r0[2], r0[1]), (r0[2], r0[3]), (r0[0], r0[3]))):
                         near = True
                         break
-            if near or in_zs_rect(cx, cy):
+            if near or in_zs_rect(cx, cy) or in_nh_rect(cx, cy):
                 continue
             areas.append({"kind": "vacant_green", "pts": [rnd((r0[0], r0[1])), rnd((r0[2], r0[1])), rnd((r0[2], r0[3])), rnd((r0[0], r0[3]))]})
             n_vac += 1
@@ -4109,10 +4128,58 @@ def main():
             a["plain"] = True
         elif a.get("kind") == "parking":
             zs_parking.append(pts_a)
+    # 鸳湖里弄: rows of two-storey lane houses (grey tile gables, lime or brick walls) on an east-west lane grid,
+    # kept off the canal and the roads
+    nh_lanes = []
+    rng_l = random.Random(5150)
+    lx0, ly0, lx1, ly1 = NH_LANES_RECT
+    yy = ly0 + 8.0
+    row = 0
+    while yy < ly1 - 6.0:
+        xx = lx0 + 6.0 + (row % 2) * 4.0
+        while xx < lx1 - 6.0:
+            hl = rng_l.uniform(8.0, 14.0)
+            hd = rng_l.uniform(9.0, 11.0)
+            cxh, cyh = xx + hl * 0.5, yy
+            corners = [(cxh + sx * hl * 0.5, cyh + sy * hd * 0.5) for sx in (-1, 1) for sy in (-1, 1)] + [(cxh, cyh)]
+            ok = True
+            for (qx, qy) in corners:
+                for wp in water_grid.query(qx - 1, qy - 1, qx + 1, qy + 1):
+                    if point_in_poly(qx, qy, wp):
+                        ok = False
+                        break
+                if not ok:
+                    break
+                for (rax, ray, rbx, rby, rhw) in road_grid.query(qx - 30, qy - 30, qx + 30, qy + 30):
+                    if seg_dist(qx, qy, rax, ray, rbx, rby)[0] < rhw + 3.0:
+                        ok = False
+                        break
+                if not ok:
+                    break
+            if ok:
+                nh_lanes.append({"c": rnd((cxh, cyh)), "l": round(hl, 1), "d": round(hd, 1),
+                                 "h": round(rng_l.choice((7.2, 7.8, 8.6, 9.4)), 1), "f": 1 if row % 2 == 0 else -1,
+                                 "brick": 1 if rng_l.random() < 0.35 else 0})
+            xx += hl + rng_l.uniform(0.0, 1.5)
+        yy += 12.0 if row % 2 == 0 else 15.0
+        row += 1
+    print(f"鸳湖里弄: {len(nh_lanes)} lane houses")
+    # 壕股塔 fronts the water: face the nearest lake shore
+    best_w = (1e9, 0.0, 1.0)
+    for wp in water_grid.query(HAOGU_PAGODA_POS[0] - 260, HAOGU_PAGODA_POS[1] - 260, HAOGU_PAGODA_POS[0] + 260, HAOGU_PAGODA_POS[1] + 260):
+        for k in range(len(wp)):
+            a_w, b_w = wp[k], wp[(k + 1) % len(wp)]
+            dd, _ = seg_dist(HAOGU_PAGODA_POS[0], HAOGU_PAGODA_POS[1], a_w[0], a_w[1], b_w[0], b_w[1])
+            if dd < best_w[0]:
+                mx_w, my_w = (a_w[0] + b_w[0]) * 0.5, (a_w[1] + b_w[1]) * 0.5
+                best_w = (dd, mx_w - HAOGU_PAGODA_POS[0], my_w - HAOGU_PAGODA_POS[1])
+    lw = math.hypot(best_w[1], best_w[2]) or 1.0
+    haogu_face = [round(best_w[1] / lw, 3), round(best_w[2] / lw, 3)]
+    print(f"壕股塔: shore {best_w[0]:.0f} m away, facing {haogu_face}")
     landmarks = {
         "jiaxing_south_station": {"pos": rnd(SOUTH_STA_POS), "angle": round(hsr_angle, 4)},
         "yanyu_tower": {"pos": rnd(YANYU_POS), "island_pts": island_pts},
-        "haogu_pagoda": {"pos": rnd(HAOGU_PAGODA_POS)},
+        "haogu_pagoda": {"pos": rnd(HAOGU_PAGODA_POS), "face": haogu_face},
         "huijingyuan": {"pos": rnd(HUIJINGYUAN_POS)},
         "nanhu_gate": {"pos": rnd(NANHU_GATE_POS), "angle": -1.32},
         "nanhu_tiandi": {"pos": rnd(NANHU_TIANDI_POS)},
@@ -4139,6 +4206,7 @@ def main():
         "pingshan_park": {"pos": rnd(PINGSHAN_PARK_POS), "angle": 0.14},
         "shaonian_street": {"pos": rnd(SHAONIAN_POS), "angle": 0.144},
         "zhongshan_block": {"parking": zs_parking},
+        "nanhu_district": {"lanes": nh_lanes},
         "first_hospital": {"pos": rnd(FIRST_HOSPITAL_POS), "angle": 0.03},
         "second_hospital": {"pos": rnd(SECOND_HOSPITAL_POS), "angle": 0.08},
         "tcm_hospital": {"pos": rnd(TCM_HOSPITAL_POS), "angle": -0.10},

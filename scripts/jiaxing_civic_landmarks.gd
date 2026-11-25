@@ -2,7 +2,7 @@ class_name JiaxingCivicLandmarks
 extends RefCounted
 
 # Realistic bespoke 3D landmarks for Jiaxing's iconic civic, scenic, heritage & aviation sites:
-#   - 南湖景区: 壕股塔 (7-story Song pagoda), 会景园码头 (ferry pavilion + boats), 南湖天地 (waterfront district)
+#   - 南湖景区: 会景园码头 (ferry pavilion + boats); 壕股塔, 烟雨楼 and 南湖天地 are built by NanhuBuilder
 #   - 嘉兴市人民政府 (Municipal Government civic palace + Citizen Square)
 #   - 嘉兴市第一中学 (Historic arched clocktower campus + 400m athletics track stadium)
 #   - 月河历史街区 (Jiangnan horse-head gable watertown street, archway, lanterns, canal boats)
@@ -13,15 +13,12 @@ extends RefCounted
 
 
 static func build(root: Node3D, lm: Dictionary, lights: Array) -> void:
-	if lm.has("haogu_pagoda"):
-		_haogu_pagoda(root, _p(lm["haogu_pagoda"]["pos"]), lights)
+	NanhuBuilder.build(root, lm, lights) # 湖心岛 烟雨楼, 壕股塔, 南湖天地, 凯悦 hotels
 	if lm.has("huijingyuan"):
 		_huijingyuan(root, _p(lm["huijingyuan"]["pos"]), lights)
 	if lm.has("nanhu_gate"):
 		var ng: Dictionary = lm["nanhu_gate"]
 		_nanhu_gate(root, _p(ng["pos"]), float(ng.get("angle", -0.25)), lights)
-	if lm.has("nanhu_tiandi"):
-		_nanhu_tiandi(root, _p(lm["nanhu_tiandi"]["pos"]), lights)
 	if lm.has("jiaxing_gov"):
 		var g: Dictionary = lm["jiaxing_gov"]
 		_jiaxing_gov(root, _p(g["pos"]), float(g.get("angle", 0.0)), lights)
@@ -92,55 +89,6 @@ static func _add_light(p: Node3D, pos: Vector3, col: Color, rng: float, lights: 
 	pl.visible = false
 	p.add_child(pl)
 	lights.append(pl)
-
-
-# =============================================================================================
-# 1. 南湖景区 · 壕股塔 (7-Story Song-Style Octagonal Pagoda on Nanhu's West/North Shore)
-# =============================================================================================
-static func _haogu_pagoda(parent: Node3D, center: Vector3, lights: Array) -> void:
-	var pg := Node3D.new()
-	pg.name = "NanhuHaoguPagoda"
-	pg.position = center
-	parent.add_child(pg)
-
-	var stone := _mat(Color(0.82, 0.80, 0.76), 0.76)
-	var wall_cream := _mat(Color(0.91, 0.88, 0.81), 0.82)
-	var wood_red := _mat(Color(0.56, 0.16, 0.12), 0.56, 0.04)
-	var tile_dark := _mat(Color(0.20, 0.22, 0.26), 0.58, 0.08)
-	var gold := _mat(Color(0.90, 0.74, 0.22), 0.28, 0.72)
-	var warm := _emissive(Color(1.0, 0.80, 0.44), 1.4)
-
-	# Stepped octagonal stone base terrace
-	_cyl(pg, 11.5, 12.2, 2.2, Vector3(0.0, 1.1, 0.0), stone, 8)
-	_cyl(pg, 9.6, 10.2, 1.0, Vector3(0.0, 2.7, 0.0), stone, 8)
-
-	# 7 tapering octagonal Song-style stories (~42m total height)
-	var y_cur := 3.2
-	for lv in range(7):
-		var frac := float(lv) / 6.0
-		var r_body := lerpf(6.8, 3.6, frac)
-		var h_story := lerpf(5.2, 3.6, frac)
-		# Cream brick octagonal core
-		_cyl(pg, r_body * 0.96, r_body, h_story, Vector3(0.0, y_cur + h_story * 0.5, 0.0), wall_cream, 8)
-		# Vermilion wooden balcony collar & window glow bands
-		_cyl(pg, r_body + 0.45, r_body + 0.45, 0.75, Vector3(0.0, y_cur + 0.55, 0.0), wood_red, 8)
-		for side in range(4):
-			var ang := float(side) * PI * 0.5
-			_box(pg, Vector3(1.1, 1.9, 0.25), Vector3(cos(ang) * (r_body - 0.05), y_cur + h_story * 0.52, sin(ang) * (r_body - 0.05)), warm, -ang + PI * 0.5, 0.0, 0.0, false)
-		# Upturned dark-tile octagonal eave roof
-		_cyl(pg, r_body * 0.92, r_body + 2.35, 1.45, Vector3(0.0, y_cur + h_story + 0.45, 0.0), tile_dark, 8)
-		y_cur += h_story + 0.95
-
-	# Steep pyramidal spire cap + golden bronze finial (塔刹)
-	_cyl(pg, 0.4, 4.4, 3.6, Vector3(0.0, y_cur + 1.8, 0.0), tile_dark, 8)
-	_cyl(pg, 0.12, 0.42, 6.2, Vector3(0.0, y_cur + 6.4, 0.0), gold, 10)
-	_cyl(pg, 0.65, 0.65, 0.55, Vector3(0.0, y_cur + 5.2, 0.0), gold, 12)
-	_sign(pg, "壕 股 塔", Vector3(0.0, 7.2, 7.6), 0.0, 68, 0.024, Color(0.96, 0.84, 0.34))
-
-	# Lakeside temple courtyard flanking halls
-	_box(pg, Vector3(22.0, 5.2, 10.0), Vector3(-20.0, 2.6, 8.0), wall_cream)
-	_box(pg, Vector3(24.5, 1.4, 12.2), Vector3(-20.0, 5.8, 8.0), tile_dark)
-	_add_light(pg, Vector3(0.0, 14.0, 12.0), Color(1.0, 0.80, 0.46), 46.0, lights)
 
 
 # =============================================================================================
@@ -239,153 +187,6 @@ static func _nanhu_gate(parent: Node3D, center: Vector3, angle: float, lights: A
 	_box(ng, Vector3(8.5, 1.1, 2.2), Vector3(0.0, 1.75, -12.0), wood_red)
 	_box(ng, Vector3(5.6, 1.4, 1.8), Vector3(0.0, 2.8, -12.0), gold)
 	_add_light(ng, Vector3(0.0, 11.0, 8.0), Color(1.0, 0.86, 0.56), 54.0, lights)
-
-
-# =============================================================================================
-# 3. 南湖景区 · 南湖天地 & 嘉兴南湖凯悦酒店 (Nanhu Tiandi Flagship Waterfront Commercial Complex + Hyatt Nanhu)
-#    Jiaxing's #1 lakefront destination: 嘉绢印象 (1920s red-brick sawtooth silk mill & 34m brick chimney),
-#    鸳湖里弄 / 堰月街区 (8 sculpted Jiangnan zinc-and-glass pavilions, sky-decks & amphitheater),
-#    230m stepped lakeside timber promenade, AND 嘉兴南湖凯悦酒店 (Hyatt Nanhu lakeside resort hotel)!
-# =============================================================================================
-static func _nanhu_tiandi(parent: Node3D, center: Vector3, lights: Array) -> void:
-	var td := Node3D.new()
-	td.name = "NanhuTiandiDistrict"
-	td.position = center
-	parent.add_child(td)
-
-	var brick := _mat(Color(0.58, 0.25, 0.19), 0.78)
-	var brick_dk := _mat(Color(0.42, 0.18, 0.14), 0.82)
-	var travertine := _mat(Color(0.86, 0.82, 0.75), 0.62)
-	var stone_plaza := _mat(Color(0.79, 0.77, 0.73), 0.78)
-	var slate := _mat(Color(0.18, 0.20, 0.24), 0.44, 0.24)
-	var bronze := _mat(Color(0.36, 0.28, 0.20), 0.36, 0.62)
-	var cedar := _mat(Color(0.60, 0.42, 0.26), 0.72)
-	var deck := _mat(Color(0.55, 0.41, 0.28), 0.76)
-	var glass := _glass(Color(0.24, 0.44, 0.58), 0.60)
-	var glass_rail := _glass(Color(0.55, 0.76, 0.86), 0.42)
-	var warm := _emissive(Color(1.0, 0.88, 0.64), 1.4)
-	var gold_led := _emissive(Color(1.0, 0.78, 0.36), 1.9)
-	var pool_water := _mat(Color(0.14, 0.42, 0.52), 0.14, 0.22)
-	var willow := _mat(Color(0.24, 0.50, 0.22), 0.84)
-	var trunk := _mat(Color(0.30, 0.22, 0.16), 0.88)
-
-	# --- A. 230m Multi-Level Lakeside Timber Boardwalk, Stone Plazas & Sunken Amphitheater (亲水长廊) ---
-	_box(td, Vector3(112.0, 0.08, 226.0), Vector3(10.0, 0.04, 6.0), stone_plaza, 0.0, 0.0, 0.0, false)
-	# Cantilevered lakeside wooden promenade + glass balustrade + warm linear LED strip
-	_box(td, Vector3(16.0, 0.28, 224.0), Vector3(-44.0, 0.18, 6.0), deck, 0.0, 0.0, 0.0, false)
-	_box(td, Vector3(0.16, 1.05, 222.0), Vector3(-51.6, 0.85, 6.0), glass_rail, 0.0, 0.0, 0.0, false)
-	_box(td, Vector3(0.24, 0.14, 222.0), Vector3(-51.6, 0.34, 6.0), gold_led, 0.0, 0.0, 0.0, false)
-	# Stepped lakefront amphitheater viewing terraces + architectural water-mirror pool at center plaza
-	for step_i in range(4):
-		var st_w := 34.0 - float(step_i) * 3.2
-		_box(td, Vector3(st_w, 0.24, 28.0 - float(step_i) * 2.2), Vector3(-34.0 + float(step_i) * 1.4, 0.16 + float(step_i) * 0.22, 18.0), stone_plaza, 0.0, 0.0, 0.0, false)
-	_box(td, Vector3(18.0, 0.12, 26.0), Vector3(-16.0, 0.10, -2.0), pool_water, 0.0, 0.0, 0.0, false)
-	# Lakeside willow & camphor tree grove along the waterfront deck
-	for wz in range(-96, 114, 18):
-		if absf(float(wz) - 18.0) < 16.0:
-			continue
-		ParkLandscapeBuilder.plant_tree(td, Vector3(-39.0, 0.1, float(wz)), 5 if (wz / 18) % 2 == 0 else 1, 1.0, Color(0.24, 0.44, 0.18) if (wz / 18) % 2 == 0 else ParkLandscapeBuilder.CAMPHOR)
-
-	# --- B. Zone 1: 嘉绢印象 — 1920s Red-Brick Silk Mill Heritage Halls (Sawtooth Roofs & 34m Brick Chimney!) ---
-	# Main silk-mill exhibition & flagship retail hall (z = -24, x = +16)
-	_box(td, Vector3(48.0, 12.2, 34.0), Vector3(16.0, 6.1, -24.0), brick)
-	_box(td, Vector3(48.5, 4.4, 30.0), Vector3(16.0, 2.3, -24.0), glass)
-	_box(td, Vector3(46.0, 3.6, 28.0), Vector3(16.0, 2.1, -24.0), warm, 0.0, 0.0, 0.0, false)
-	# Signature red-brick pilasters & dark-steel industrial arched window mullions
-	for px_m in range(-18, 22, 8):
-		_box(td, Vector3(1.1, 12.6, 34.8), Vector3(16.0 + float(px_m), 6.3, -24.0), brick_dk)
-	# 4 iconic serrated industrial sawtooth skylight roofs (锯齿形厂房屋顶)
-	for st_i in range(4):
-		var sz_r := -36.0 + float(st_i) * 8.0
-		_box(td, Vector3(49.5, 0.45, 7.6), Vector3(16.0, 13.6, sz_r), slate, 0.0, 0.0, 0.34)
-		_box(td, Vector3(48.5, 2.3, 0.22), Vector3(16.0, 13.5, sz_r + 3.4), glass)
-	# Iconic 34m Historic Octagonal Red-Brick Silk Mill Chimney Landmark (嘉绢老烟囱!)
-	_cyl(td, 2.1, 3.6, 33.0, Vector3(-16.0, 16.5, -36.0), brick, 8)
-	_cyl(td, 2.5, 2.5, 0.9, Vector3(-16.0, 32.8, -36.0), brick_dk, 8)
-	_cyl(td, 2.65, 2.65, 0.42, Vector3(-16.0, 29.0, -36.0), gold_led, 8)
-	_sign(td, "嘉 绢 印 象", Vector3(-8.4, 10.6, -24.0), -PI * 0.5, 68, 0.024, Color(0.98, 0.88, 0.52))
-
-	# --- C. Zone 2: 鸳湖里弄 & 堰月街区 — 7 Contemporary Jiangnan Glass-and-Zinc Commercial Pavilions ---
-	# Each pavilion features sweeping cantilevered zinc eaves, warm cedar soffits, double-height glazing,
-	# lit retail interiors, 2F panoramic lakeside dining terraces & flagship brand fascia signs!
-	var pav_specs := [
-		[Vector3(-12.0, 0.0, 32.0), Vector3(36.0, 10.8, 24.0), "星巴克臻选 · 喜茶"],
-		[Vector3(28.0, 0.0, 26.0), Vector3(34.0, 12.0, 26.0), "霸王茶姬 · 华为旗舰"],
-		[Vector3(-14.0, 0.0, 66.0), Vector3(38.0, 11.2, 24.0), "外婆家 · 鸳湖里弄"],
-		[Vector3(28.0, 0.0, 68.0), Vector3(36.0, 10.6, 26.0), "优衣库 · 堰月街区"],
-		[Vector3(-12.0, 0.0, 100.0), Vector3(34.0, 9.8, 22.0), "南湖书院 · 文创馆"],
-		[Vector3(28.0, 0.0, 102.0), Vector3(32.0, 10.4, 22.0), "江南丝绸生活馆"],
-	]
-	for sp: Array in pav_specs:
-		var p: Vector3 = sp[0]
-		var sz: Vector3 = sp[1]
-		var sign_txt: String = sp[2]
-		# Limestone ground/upper core + crystal floor-to-ceiling retail curtain walls + glowing warm interiors
-		_box(td, sz, p + Vector3(0.0, sz.y * 0.5, 0.0), travertine)
-		_box(td, Vector3(sz.x + 0.35, 4.6, sz.z - 3.6), p + Vector3(0.0, 2.4, 0.0), glass)
-		_box(td, Vector3(sz.x - 3.6, 4.6, sz.z + 0.35), p + Vector3(0.0, 2.4, 0.0), glass)
-		_box(td, Vector3(sz.x - 1.6, 3.9, sz.z - 5.2), p + Vector3(0.0, 2.1, 0.0), warm, 0.0, 0.0, 0.0, false)
-		# 2F cantilevered panoramic lakeside terrace deck with bronze handrail
-		_box(td, Vector3(sz.x + 4.4, 0.42, sz.z + 4.4), p + Vector3(0.0, 5.1, 0.0), bronze)
-		_box(td, Vector3(sz.x + 4.2, 1.0, 0.14), p + Vector3(0.0, 5.8, sz.z * 0.5 + 2.1), glass_rail, 0.0, 0.0, 0.0, false)
-		_box(td, Vector3(0.14, 1.0, sz.z + 4.2), p + Vector3(-sz.x * 0.5 - 2.1, 5.8, 0.0), glass_rail, 0.0, 0.0, 0.0, false)
-		# Dramatic sweeping double-pitched dark-zinc Jiangnan roof with warm cedar timber eaves soffit
-		_box(td, Vector3(sz.x + 5.0, 0.32, sz.z + 4.6), p + Vector3(0.0, sz.y + 0.15, 0.0), cedar)
-		_box(td, Vector3(sz.x + 5.6, 0.52, sz.z * 0.64), p + Vector3(0.0, sz.y + 1.65, -sz.z * 0.25), slate, 0.0, 0.0, 0.34)
-		_box(td, Vector3(sz.x + 5.6, 0.52, sz.z * 0.64), p + Vector3(0.0, sz.y + 1.65, sz.z * 0.25), slate, 0.0, 0.0, -0.34)
-		_box(td, Vector3(sz.x + 5.8, 0.35, 0.55), p + Vector3(0.0, sz.y + 3.2, 0.0), bronze)
-		_sign(td, sign_txt, p + Vector3(-sz.x * 0.5 - 0.35, 5.6, 0.0), -PI * 0.5, 48, 0.020, Color(0.98, 0.90, 0.58))
-	# Elevated glass-and-bronze pedestrian skybridge linking 嘉绢印象 & 鸳湖里弄 courtyards
-	_box(td, Vector3(12.0, 0.55, 22.0), Vector3(8.0, 5.2, 2.0), bronze)
-	_box(td, Vector3(11.6, 2.8, 22.0), Vector3(8.0, 6.8, 2.0), glass_rail, 0.0, 0.0, 0.0, false)
-
-	# --- D. Zone 3: 嘉兴南湖凯悦酒店 (Hyatt Nanhu — Sculptural Lakeside Luxury Resort Hotel!) ---
-	var hy := Node3D.new()
-	hy.name = "NanhuHyattHotel"
-	hy.position = Vector3(10.0, 0.0, -88.0)
-	td.add_child(hy)
-	# Grand granite arrival plaza, reflecting water mirror & cantilevered bronze porte-cochère canopy
-	_box(hy, Vector3(84.0, 0.14, 62.0), Vector3(0.0, 0.07, 0.0), stone_plaza, 0.0, 0.0, 0.0, false)
-	_box(hy, Vector3(24.0, 0.12, 10.0), Vector3(-22.0, 0.14, 24.0), pool_water, 0.0, 0.0, 0.0, false)
-	_box(hy, Vector3(22.0, 0.75, 11.0), Vector3(24.0, 5.4, 22.0), bronze)
-	_box(hy, Vector3(22.4, 0.25, 11.4), Vector3(24.0, 5.85, 22.0), gold_led, 0.0, 0.0, 0.0, false)
-	for pc_x: float in [15.0, 33.0]:
-		_cyl(hy, 0.38, 0.42, 5.4, Vector3(pc_x, 2.7, 26.0), travertine, 10)
-	# Double-height crystal glass lobby & lakeside banquet ballroom wing (west wing facing Nanhu Lake)
-	_box(hy, Vector3(68.0, 7.6, 28.0), Vector3(2.0, 3.8, 0.0), travertine)
-	_box(hy, Vector3(62.0, 6.2, 28.6), Vector3(2.0, 3.3, 0.0), glass)
-	_box(hy, Vector3(56.0, 5.2, 24.0), Vector3(2.0, 2.8, 0.0), warm, 0.0, 0.0, 0.0, false)
-	# Sculptural stepped L-shaped 7-story resort guestroom wings (29m main + 21m lake-view step-down!)
-	_box(hy, Vector3(58.0, 22.0, 20.0), Vector3(8.0, 18.6, -4.0), travertine)
-	_box(hy, Vector3(52.0, 18.5, 20.6), Vector3(8.0, 18.6, -4.0), glass)
-	_box(hy, Vector3(22.0, 14.0, 32.0), Vector3(-24.0, 14.6, 4.0), travertine)
-	_box(hy, Vector3(22.6, 11.2, 26.0), Vector3(-24.0, 14.6, 4.0), glass)
-	# Signature champagne-bronze horizontal floor slabs, balcony railings & vertical travertine fins
-	for fy_h: float in [11.2, 15.0, 18.8, 22.6, 26.4, 29.8]:
-		_box(hy, Vector3(60.5, 0.55, 22.4), Vector3(8.0, fy_h, -4.0), bronze)
-	for fy_w: float in [11.2, 15.0, 18.8, 21.8]:
-		_box(hy, Vector3(24.4, 0.52, 34.0), Vector3(-24.0, fy_w, 4.0), bronze)
-	for fin_x in range(-18, 36, 9):
-		_box(hy, Vector3(0.85, 22.4, 21.8), Vector3(float(fin_x), 18.6, -4.0), travertine)
-	# Rooftop sky-lounge canopy, glowing cornice line & panoramic garden terrace
-	_box(hy, Vector3(61.5, 0.35, 23.0), Vector3(8.0, 30.2, -4.0), gold_led, 0.0, 0.0, 0.0, false)
-	_box(hy, Vector3(36.0, 3.6, 14.0), Vector3(8.0, 31.8, -4.0), glass)
-	_box(hy, Vector3(42.0, 0.85, 18.0), Vector3(8.0, 34.0, -4.0), slate)
-	# Crisp illuminated Hyatt signage facing Nanhu Lake (West), South plaza & East (纺工路 / T1!)
-	_sign(hy, "嘉兴南湖凯悦酒店", Vector3(-35.6, 20.6, 4.0), -PI * 0.5, 86, 0.030, Color(0.98, 0.88, 0.44))
-	_sign(hy, "H Y A T T   N A N H U", Vector3(-35.6, 17.6, 4.0), -PI * 0.5, 44, 0.024, Color(0.96, 0.96, 0.98))
-	_sign(hy, "嘉兴南湖凯悦酒店", Vector3(38.6, 26.2, -4.0), PI * 0.5, 90, 0.032, Color(0.98, 0.88, 0.44))
-	_sign(hy, "H Y A T T", Vector3(38.6, 22.8, -4.0), PI * 0.5, 52, 0.026, Color(0.96, 0.96, 0.98))
-	_sign(hy, "嘉兴南湖凯悦酒店 · HYATT", Vector3(8.0, 28.4, 7.6), 0.0, 74, 0.028, Color(0.98, 0.88, 0.44))
-
-	# Iconic illuminated waterfront landmark sign "南 湖 天 地" facing Nanhu Lake & East T1 approach
-	_box(td, Vector3(1.4, 7.6, 22.0), Vector3(-42.0, 3.8, 18.0), slate)
-	_box(td, Vector3(1.6, 0.32, 22.4), Vector3(-42.0, 7.6, 18.0), gold_led, 0.0, 0.0, 0.0, false)
-	_sign(td, "南 湖 天 地", Vector3(-43.0, 4.8, 18.0), -PI * 0.5, 96, 0.030, Color(0.98, 0.86, 0.42))
-	_sign(td, "NANHU TIANDI", Vector3(-43.0, 2.5, 18.0), -PI * 0.5, 38, 0.022, Color(0.95, 0.96, 0.98))
-	_sign(td, "南 湖 天 地 · NANHU TIANDI", Vector3(52.0, 8.8, 14.0), PI * 0.5, 86, 0.028, Color(0.98, 0.86, 0.42))
-	_add_light(td, Vector3(-28.0, 12.0, 18.0), Color(1.0, 0.86, 0.62), 68.0, lights)
-	_add_light(hy, Vector3(14.0, 14.0, 20.0), Color(1.0, 0.88, 0.66), 68.0, lights)
 
 
 # =============================================================================================
