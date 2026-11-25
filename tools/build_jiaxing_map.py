@@ -2230,6 +2230,29 @@ def build_road_signs(edges, nodes_list):
     def nice(nm):
         return nm and not any(k in nm for k in SIGN_SKIP)
 
+    # every sign post must stand off the asphalt of EVERY road, not just its own (twin carriageways, a wide cross
+    # street at a short leg and a sharp bend all used to drop plates in the traffic lanes)
+    CELL = 40.0
+    surf = defaultdict(list)
+    for e in edges:
+        if e.get("underground") or e.get("hide_road"):
+            continue
+        pts = e["pts"]
+        hw = float(e["width"]) * 0.5
+        for k in range(len(pts) - 1):
+            ax, ay = pts[k]
+            bx, by = pts[k + 1]
+            seg = (ax, ay, bx, by, hw)
+            for gx in range(int(math.floor((min(ax, bx) - hw) / CELL)), int(math.floor((max(ax, bx) + hw) / CELL)) + 1):
+                for gy in range(int(math.floor((min(ay, by) - hw) / CELL)), int(math.floor((max(ay, by) + hw) / CELL)) + 1):
+                    surf[(gx, gy)].append(seg)
+
+    def clear_of_roads(px, py, pad):
+        for (ax, ay, bx, by, hw) in surf.get((int(math.floor(px / CELL)), int(math.floor(py / CELL))), ()):
+            if seg_dist(px, py, ax, ay, bx, by)[0] < hw + pad:
+                return False
+        return True
+
     signs = []
     plate_seen = set()
     for node, lg in legs.items():
@@ -2244,11 +2267,27 @@ def build_road_signs(edges, nodes_list):
             # --- street-name plate on the corner, parallel to its road, one per road per junction ---
             if nice(nm) and (node, nm) not in plate_seen and L >= 20.0:
                 plate_seen.add((node, nm))
-                p, d = along(seq, 11.0)
-                rx, ry = -d[1], d[0]
-                side = 1.0 if (node % 2 == 0) else -1.0
-                signs.append({"k": "name", "p": [round(p[0] + rx * side * (w * 0.5 + 1.3), 2), round(p[1] + ry * side * (w * 0.5 + 1.3), 2)],
-                              "d": [round(d[0], 4), round(d[1], 4)], "t": nm, "py": road_pinyin(nm)})
+                side0 = 1.0 if (node % 2 == 0) else -1.0
+                spot = None
+                for dist_p in (11.0, 15.0, 20.0, 26.0, 33.0, 40.0):
+                    if dist_p > L - 4.0:
+                        break
+                    p, d = along(seq, dist_p)
+                    rx, ry = -d[1], d[0]
+                    for side in (side0, -side0):
+                        for off in (1.3, 2.4):
+                            qx = p[0] + rx * side * (w * 0.5 + off)
+                            qy = p[1] + ry * side * (w * 0.5 + off)
+                            if clear_of_roads(qx, qy, 0.7):
+                                spot = (qx, qy, d)
+                                break
+                        if spot:
+                            break
+                    if spot:
+                        break
+                if spot:
+                    signs.append({"k": "name", "p": [round(spot[0], 2), round(spot[1], 2)],
+                                  "d": [round(spot[2][0], 4), round(spot[2][1], 4)], "t": nm, "py": road_pinyin(nm)})
             # --- overhead guide sign on a main-road approach (traffic drives toward this node) ---
             if w < 15.0 or L < 110.0 or not nice(nm):
                 continue
@@ -2272,13 +2311,26 @@ def build_road_signs(edges, nodes_list):
                 names["S"] = nm
             if sum(1 for v in names.values() if v) < 2:
                 continue
-            dist = min(75.0, L * 0.45)
-            p, d = along(seq, dist)
-            # traffic on this side drives toward the node, i.e. along -d; its right-hand kerb is right of -d
-            tdx, tdy = -d[0], -d[1]
-            rx, ry = -tdy, tdx
-            signs.append({"k": "guide", "p": [round(p[0] + rx * (w * 0.5 + 0.9), 2), round(p[1] + ry * (w * 0.5 + 0.9), 2)],
-                          "d": [round(tdx, 4), round(tdy, 4)], "w": round(w, 1), "tram": bool(e.get("tram_median")),
+            dist0 = min(75.0, L * 0.45)
+            spot = None
+            for dist in (dist0, dist0 - 15.0, dist0 + 15.0, dist0 - 28.0):
+                if dist < 30.0 or dist > L - 20.0:
+                    continue
+                p, d = along(seq, dist)
+                # traffic on this side drives toward the node, i.e. along -d; its right-hand kerb is right of -d
+                tdx, tdy = -d[0], -d[1]
+                rx, ry = -tdy, tdx
+                for off in (0.9, 2.0):
+                    qx, qy = p[0] + rx * (w * 0.5 + off), p[1] + ry * (w * 0.5 + off)
+                    if clear_of_roads(qx, qy, 0.5):
+                        spot = (qx, qy, tdx, tdy)
+                        break
+                if spot:
+                    break
+            if spot is None:
+                continue
+            signs.append({"k": "guide", "p": [round(spot[0], 2), round(spot[1], 2)],
+                          "d": [round(spot[2], 4), round(spot[3], 4)], "w": round(w, 1), "tram": bool(e.get("tram_median")),
                           "L": names["L"], "S": names["S"], "R": names["R"]})
     return signs
 
@@ -3701,6 +3753,104 @@ def main():
         n_buf += 1
     print(f"机非隔离带: {n_buf} major road edges with planted buffers")
 
+    # Where T1 turns off a boulevard, the road carrying straight on across the junction keeps the boulevard's
+    # width (in Jiaxing the cross-section does not halve at the turn); the widening runs along the straight chain to
+    # the next real junction, and any OSM twin strip it swallows is hidden so the asphalt does not double up
+    n_wide = n_wide_twin = 0
+    vis_deg = defaultdict(int)
+    for e in graph_edges:
+        if not e.get("hide_road") and not e.get("underground"):
+            vis_deg[e["a"]] += 1
+            vis_deg[e["b"]] += 1
+    at_node = defaultdict(list)
+    for e in graph_edges:
+        if e.get("hide_road") or e.get("underground") or len(e["pts"]) < 2:
+            continue
+        at_node[e["a"]].append(e)
+        at_node[e["b"]].append(e)
+
+    def _leave(e, n, reach=15.0):
+        seq = e["pts"] if e["a"] == n else list(reversed(e["pts"]))
+        ox, oy = seq[0]
+        acc = 0.0
+        for k in range(len(seq) - 1):
+            ax, ay = seq[k]
+            bx, by = seq[k + 1]
+            acc += math.hypot(bx - ax, by - ay)
+            if acc >= reach:
+                break
+        dx, dy = bx - ox, by - oy
+        d = math.hypot(dx, dy)
+        return (dx / d, dy / d) if d > 1e-6 else (0.0, 0.0)
+
+    widened = set()
+    wide_segs = []
+    for te in graph_edges:
+        if te["id"] not in t1_edge_ids or te.get("underground") or te.get("bridge"):
+            continue
+        tw = float(te["width"])
+        for n in (te["a"], te["b"]):
+            th = _leave(te, n)
+            # only where the tram turns (or ends): along a straight T1 run a road leaving "straight on" is a twin
+            others = [c for c in at_node[n] if c["id"] in t1_edge_ids and c is not te]
+            if any(th[0] * _leave(c, n)[0] + th[1] * _leave(c, n)[1] < -0.87 for c in others):
+                continue
+            best, best_dot = None, -0.92
+            for c in at_node[n]:
+                if c["id"] in t1_edge_ids or c.get("bridge") or c["id"] in widened or "支路" in c["name"] \
+                        or c["name"] != te["name"]:
+                    continue
+                ch = _leave(c, n)
+                dot = th[0] * ch[0] + th[1] * ch[1]
+                if dot < best_dot and float(c["width"]) < tw - 1.0:
+                    best, best_dot = c, dot
+            if best is None:
+                continue
+            # follow the straight chain through plain (degree-2) nodes, up to 650 m
+            cur, node, run = best, n, 0.0
+            while cur is not None and run < 650.0:
+                widened.add(cur["id"])
+                cur["width"] = tw
+                cur["lanes_f"] = max(int(cur.get("lanes_f", 1)), 2 if tw >= 23.5 else 1)
+                cur["lanes_b"] = max(int(cur.get("lanes_b", 1)), 2 if tw >= 23.5 else 1)
+                cur["divided"] = False
+                cur.pop("bike_buffer", None)
+                run += float(cur.get("length", 0.0))
+                p = cur["pts"]
+                for k in range(len(p) - 1):
+                    ax, ay = p[k]
+                    bx, by = p[k + 1]
+                    L = math.hypot(bx - ax, by - ay)
+                    if L > 1.0:
+                        wide_segs.append((ax, ay, bx, by, (bx - ax) / L, (by - ay) / L, tw * 0.5))
+                n_wide += 1
+                node = cur["b"] if cur["a"] == node else cur["a"]
+                if vis_deg[node] != 2:
+                    break
+                nxt = [c for c in at_node[node] if c is not cur]
+                cur = nxt[0] if nxt and nxt[0]["id"] not in t1_edge_ids and nxt[0]["id"] not in widened \
+                    and not nxt[0].get("bridge") else None
+    # twin strips now lying inside a widened road
+    for e in graph_edges:
+        if e["id"] in widened or e["id"] in t1_edge_ids or e.get("hide_road") or e.get("underground") or e.get("bridge"):
+            continue
+        p = e["pts"]
+        L_e = sum(math.hypot(p[k + 1][0] - p[k][0], p[k + 1][1] - p[k][1]) for k in range(len(p) - 1))
+        if L_e < 12.0:
+            continue
+        inside = True
+        for q in p:
+            if not any(seg_dist(q[0], q[1], ax, ay, bx, by)[0] < hw - 0.5 for (ax, ay, bx, by, _dx, _dy, hw) in wide_segs):
+                inside = False
+                break
+        if inside:
+            e["hide_road"] = True
+            e["lanes_f"] = 0
+            e["lanes_b"] = 0
+            n_wide_twin += 1
+    t1_surf_segs = t1_surf_segs + wide_segs
+    print(f"T1 turn continuations widened: {n_wide} edges, {n_wide_twin} twin strips hidden")
+
     # Update road_grid with widened T1 boulevard widths AND clear ANY building whose footprint encroaches on
     # the widened T1 corridor (guarantees ZERO tram tracks ever drive through a building or storefront!)
     t1_corridor_grid = Grid(80.0)
@@ -3774,17 +3924,22 @@ def main():
     # 底商 face the street from OUTSIDE the compound: wherever a compound fence would pass in front of a building
     # with shopfronts (within 12 m of its street side), the fence is cut there and the shop building itself forms
     # the compound edge — the fence runs on behind / between the buildings
-    shop_dir = {}
+    # (a corner building has shops on two faces: keep every distinct facing, not just the first)
+    shop_dir = defaultdict(list)
     for sf in storefronts:
         bi = int(sf.get("b", -1))
-        if bi >= 0 and bi not in shop_dir:
-            shop_dir[bi] = sf["n"]
+        if bi < 0:
+            continue
+        nv = sf["n"]
+        if all(nv[0] * o[0] + nv[1] * o[1] < 0.9 for o in shop_dir[bi]):
+            shop_dir[bi].append(nv)
     shop_grid = Grid(40.0)
-    for bi, nv in shop_dir.items():
+    for bi, nvs in shop_dir.items():
         bp = blds[bi]["pts"]
         xs = [q[0] for q in bp]
         ys = [q[1] for q in bp]
-        shop_grid.add((bp, nv), min(xs) - 13, min(ys) - 13, max(xs) + 13, max(ys) + 13)
+        for nv in nvs:
+            shop_grid.add((bp, nv), min(xs) - 13, min(ys) - 13, max(xs) + 13, max(ys) + 13)
 
     def in_front_of_shop(px, py):
         for (bp, nv) in shop_grid.query(px, py, px, py):
