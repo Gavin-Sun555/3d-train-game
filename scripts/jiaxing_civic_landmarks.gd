@@ -292,21 +292,21 @@ static func _hanlin_residence_and_skybridge(parent: Node3D, hanlin_center: Vecto
 	for px_r in range(-18, 20, 6):
 		_box(sb, Vector3(0.18, 2.7, 0.18), Vector3(float(px_r), 7.25, -2.25), steel_white)
 		_box(sb, Vector3(0.18, 2.7, 0.18), Vector3(float(px_r), 7.25, 2.25), steel_white)
-	# Supporting steel portal piers strictly outside the carriageway (x = +-16.5m) & glass elevator cores
+	# Supporting steel portal piers strictly outside the carriageway (x = +-17.5m) & glass elevator cores
 	for side_x: float in [-17.5, 17.5]:
 		_cyl(sb, 0.42, 0.48, 5.6, Vector3(side_x, 2.8, -1.6), steel_white, 10)
 		_cyl(sb, 0.42, 0.48, 5.6, Vector3(side_x, 2.8, 1.6), steel_white, 10)
-		# Glass elevator shaft + covered stair ramp landing on East (嘉兴一中) & West (瀚林府邸) sidewalks
-		_box(sb, Vector3(2.8, 8.2, 2.8), Vector3(side_x + signf(side_x) * 2.2, 4.1, -3.2), glass)
-		_box(sb, Vector3(3.1, 0.45, 3.1), Vector3(side_x + signf(side_x) * 2.2, 8.3, -3.2), steel_white)
-		# Sloped pedestrian stair flight running north along the sidewalk (y: 5.75 -> 0.0 over 14m)
-		_box(sb, Vector3(3.0, 0.45, 15.2), Vector3(side_x + signf(side_x) * 1.6, 2.85, 8.8), steel_white, 0.0, 0.0, 0.37)
-		_box(sb, Vector3(3.2, 0.22, 15.4), Vector3(side_x + signf(side_x) * 1.6, 5.45, 8.8), glass, 0.0, 0.0, 0.37, false)
-	# Central Station Drop Stairway & Elevator descending directly into the central 嘉兴一中站 tram platform!
-	_box(sb, Vector3(2.5, 0.42, 13.8), Vector3(0.0, 2.85, -8.2), steel_white, 0.0, 0.0, -0.39)
-	_box(sb, Vector3(2.6, 0.20, 14.0), Vector3(0.0, 5.35, -8.2), glass, 0.0, 0.0, -0.39, false)
-	_box(sb, Vector3(2.4, 7.6, 2.4), Vector3(0.0, 3.8, 3.6), glass)
-	_box(sb, Vector3(2.7, 0.38, 2.7), Vector3(0.0, 7.7, 3.6), steel_white)
+		# Glass elevator shaft on SOUTH side (z=+3.4) + covered stair ramp descending NORTH (-Z) directly to 嘉兴一中校门 & 瀚林府邸!
+		_box(sb, Vector3(2.8, 8.2, 2.8), Vector3(side_x + signf(side_x) * 2.2, 4.1, 3.4), glass)
+		_box(sb, Vector3(3.1, 0.45, 3.1), Vector3(side_x + signf(side_x) * 2.2, 8.3, 3.4), steel_white)
+		# Sloped pedestrian stair flight running NORTH along the sidewalk (y: 5.75 -> 0.0 over 14m, landing at z=-16.4!)
+		_box(sb, Vector3(3.0, 0.45, 15.2), Vector3(side_x + signf(side_x) * 1.6, 2.85, -8.8), steel_white, 0.0, 0.0, -0.37)
+		_box(sb, Vector3(3.2, 0.22, 15.4), Vector3(side_x + signf(side_x) * 1.6, 5.45, -8.8), glass, 0.0, 0.0, -0.37, false)
+	# Central Station Drop Stairway & Elevator descending SOUTH directly onto the north end of 嘉兴一中站 platform!
+	_box(sb, Vector3(2.5, 0.42, 13.8), Vector3(0.0, 2.85, 8.2), steel_white, 0.0, 0.0, 0.39)
+	_box(sb, Vector3(2.6, 0.20, 14.0), Vector3(0.0, 5.35, 8.2), glass, 0.0, 0.0, 0.39, false)
+	_box(sb, Vector3(2.4, 7.6, 2.4), Vector3(0.0, 3.8, -3.6), glass)
+	_box(sb, Vector3(2.7, 0.38, 2.7), Vector3(0.0, 7.7, -3.6), steel_white)
 	# Overhead bridge signs facing both north & south along 纺工路!
 	_sign(sb, "嘉 兴 一 中 站  ·  过 街 天 桥", Vector3(0.0, 6.9, 2.42), 0.0, 66, 0.024, Color(0.98, 0.90, 0.44))
 	_sign(sb, "嘉 兴 一 中 站  ·  过 街 天 桥", Vector3(0.0, 6.9, -2.42), PI, 66, 0.024, Color(0.98, 0.90, 0.44))
@@ -330,13 +330,27 @@ static func _hanlin_residence_and_skybridge(parent: Node3D, hanlin_center: Vecto
 		for pz_p: float in [-30.0, -22.0]:
 			_cyl(hl, 0.20, 0.22, 4.2, Vector3(px_p, 2.1, pz_p), stone_dk, 8)
 
-	# Enclosed neoclassical perimeter wall (stone plinth + dark-iron fence) with Grand East Gate facing 纺工路!
-	for z_w: float in [-138.0, 138.0]:
-		_box(hl, Vector3(204.0, 2.2, 0.6), Vector3(0.0, 1.1, z_w), cream, 0.0, 0.0, 0.0, false)
+	# Enclosed neoclassical perimeter wall:
+	#   - North & West walls enclose the residential compound
+	#   - South boundary along 中环南路 is rendered by compound[70]'s road-parallel iron fence,
+	#     stopping strictly at the west edge of 瀚林商业广场 (x = 1351) so the SE commercial block & parking plaza
+	#     open cleanly all the way to 中环南路 & 纺工路 without a double/crossed rotated wall!
+	_box(hl, Vector3(204.0, 2.2, 0.6), Vector3(0.0, 1.1, -138.0), cream, 0.0, 0.0, 0.0, false)
 	_box(hl, Vector3(0.6, 2.2, 276.0), Vector3(-102.0, 1.1, 0.0), cream, 0.0, 0.0, 0.0, false)
-	# East wall facing 纺工路 with 26m grand gateway opening at z = +18 (aligned right by the skybridge!)
+	# East wall facing 纺工路: north of gate (z < 5) stays walled; south of gate opens cleanly to the commercial zone!
 	_box(hl, Vector3(0.7, 2.4, 140.0), Vector3(102.0, 1.2, -68.0), cream, 0.0, 0.0, 0.0, false)
-	_box(hl, Vector3(0.7, 2.4, 104.0), Vector3(102.0, 1.2, 86.0), cream, 0.0, 0.0, 0.0, false)
+	# Open granite commercial parking forecourt at the NW corner of 纺工路 × 中环南路 (east of 瀚林商业广场!)
+	var park_plaza := Node3D.new()
+	park_plaza.name = "HanlinCommercialForecourt"
+	parent.add_child(park_plaza)
+	var plaza_pave := _mat(Color(0.76, 0.76, 0.74), 0.78)
+	var stall_line := _mat(Color(0.95, 0.95, 0.94), 0.55)
+	_box(park_plaza, Vector3(24.0, 0.06, 62.0), Vector3(1405.0, 0.03, 1546.0), plaza_pave, 0.195, 0.0, 0.0, false)
+	for pk_i in range(10):
+		var py := 1522.0 + float(pk_i) * 5.2
+		var px := 1401.0 + (py - 1522.0) * 0.195
+		_box(park_plaza, Vector3(5.2, 0.04, 0.16), Vector3(px, 0.07, py), stall_line, 0.195, 0.0, 0.0, false)
+		_box(park_plaza, Vector3(5.2, 0.04, 0.16), Vector3(px + 9.2, 0.07, py), stall_line, 0.195, 0.0, 0.0, false)
 	# Grand Neoclassical East Gatehouse (瀚林府邸大门) + security lodge & boom barriers facing EAST (+X)
 	_box(hl, Vector3(5.2, 1.2, 28.0), Vector3(102.0, 7.6, 18.0), stone)
 	_box(hl, Vector3(6.4, 0.85, 30.5), Vector3(102.0, 8.5, 18.0), roof_slate)

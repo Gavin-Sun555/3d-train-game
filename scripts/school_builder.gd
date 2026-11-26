@@ -183,20 +183,36 @@ static func _sign(labels: Node3D, txt: String, pos: Vector3, ry: float, fsz: int
 
 # ------------------------------------------------------------------------------------------------- grounds
 static func _grounds(sc: Node3D, kit: Dictionary) -> void:
+	# Campus lawn quad following the REAL road-parallel campus boundary:
+	#   NW (-278, -196) -> NE (208, -196) -> SE (208, 212) -> SW (-216, 184)
+	#   West edge runs 100% parallel to 纺工路; South edge runs 100% parallel to 中环南路!
+	var lawn_poly := [Vector2(-278.0, -196.0), Vector2(208.0, -196.0), Vector2(208.0, 212.0), Vector2(-216.0, 184.0)]
+	var lawn_st := SurfaceTool.new()
+	lawn_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for tri_i in [0, 1, 2, 0, 2, 3]:
+		var lp_v: Vector2 = lawn_poly[tri_i]
+		lawn_st.set_normal(Vector3.UP)
+		lawn_st.set_uv(Vector2(lp_v.x * 0.02, lp_v.y * 0.02))
+		lawn_st.add_vertex(Vector3(lp_v.x, 0.02, lp_v.y))
 	var lawn := MeshInstance3D.new()
 	lawn.name = "CampusLawn"
-	var pm := PlaneMesh.new()
-	pm.size = Vector2(416.0, 388.0)
-	lawn.mesh = pm
+	lawn.mesh = lawn_st.commit()
 	lawn.material_override = JiaxingLandmarks.lawn_material()
-	lawn.position = Vector3(0.0, 0.02, 0.0)
 	lawn.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	sc.add_child(lawn)
 	var I := Transform3D.IDENTITY
-	# gate forecourt (tan tiles), the avenue to the round plaza, paths north / south from it, campus roads
-	# pavement strip along the 40 m 纺工路 (its kerb runs ~6 m west of the campus edge)
-	_b(kit, "op", I, Vector3(-217.0, 0.03, 12.0), Vector3(18.0, 0.06, 220.0), STONE_LT)
-	_b(kit, "op", I, Vector3(-200.0, 0.05, GATE_Z), Vector3(18.0, 0.06, 40.0), TAN)
+	# Gate forecourt (tan tiles) right at the foot of the north-facing skybridge east stairs (lz = +92),
+	# plus connecting campus paths into the existing central avenues (keeping all buildings untouched!)
+	var west_dir := (Vector2(-216.0, 184.0) - Vector2(-278.0, -196.0)).normalized()
+	var west_yaw := -atan2(west_dir.y, west_dir.x)
+	var west_mid := (Vector2(-278.0, -196.0) + Vector2(-216.0, 184.0)) * 0.5
+	var west_len := Vector2(-278.0, -196.0).distance_to(Vector2(-216.0, 184.0))
+	var west_xf := Transform3D(Basis(Vector3.UP, west_yaw), Vector3(west_mid.x, 0.0, west_mid.y))
+	_b(kit, "op", west_xf, Vector3(0.0, 0.03, 5.5), Vector3(west_len, 0.06, 11.0), STONE_LT)
+	# Entry forecourt & walkway leading from the new road-aligned main gate (at lz=+92) east into campus!
+	var g_pt := _west_fence_pt(92.0)
+	_b(kit, "op", I, Vector3(g_pt.x + 12.0, 0.05, 92.0), Vector3(26.0, 0.06, 34.0), TAN)
+	_b(kit, "op", I, Vector3((g_pt.x + 12.0 - 108.0) * 0.5, 0.05, 92.0), Vector3(absf(-108.0 - g_pt.x), 0.06, 10.0), TAN)
 	_b(kit, "op", I, Vector3(-150.0, 0.05, GATE_Z), Vector3(100.0, 0.06, 16.0), TAN)
 	_b(kit, "op", I, Vector3(-108.0, 0.05, -92.0), Vector3(12.0, 0.06, 112.0), STONE_LT)
 	_b(kit, "op", I, Vector3(-108.0, 0.05, -10.0), Vector3(10.0, 0.06, 46.0), STONE_LT)
@@ -265,15 +281,34 @@ static func _grounds(sc: Node3D, kit: Dictionary) -> void:
 	_strip(kit, rim_i, rim_o, 0.16, Color(0.52, 0.50, 0.46))
 
 
+const WEST_NW := Vector2(-278.0, -196.0)
+const WEST_SW := Vector2(-216.0, 184.0)
+const EAST_NE := Vector2(208.0, -196.0)
+const EAST_SE := Vector2(208.0, 212.0)
+const MAIN_GATE_Z := 92.0 # Directly at the foot of the north-facing skybridge east stairs!
+
+
+static func _west_fence_pt(z_val: float) -> Vector2:
+	var t := clampf((z_val - WEST_NW.y) / (WEST_SW.y - WEST_NW.y), 0.0, 1.0)
+	return WEST_NW.lerp(WEST_SW, t)
+
+
 static func _fence(kit: Dictionary) -> void:
+	# Road-parallel campus perimeter fence:
+	#   - West fence runs parallel to 纺工路 (WEST_NW -> WEST_SW), opening cleanly at MAIN_GATE_Z (= +92, foot of skybridge stairs!)
+	#   - South fence runs parallel to 中环南路 (WEST_SW -> EAST_SE)
+	#   - North & East fences enclose the campus cleanly while keeping all existing buildings untouched!
+	var g_n := _west_fence_pt(MAIN_GATE_Z - 20.0)
+	var g_s := _west_fence_pt(MAIN_GATE_Z + 20.0)
 	var runs := [
-		[Vector2(-208, -196), Vector2(-208, -54)], [Vector2(-208, -14), Vector2(-208, 196)],
-		[Vector2(-208, -196), Vector2(208, -196)], [Vector2(-208, 196), Vector2(208, 196)],
-		[Vector2(208, -196), Vector2(208, 196)],
+		[WEST_NW, g_n, true], [g_s, WEST_SW, true],
+		[WEST_NW, EAST_NE, false], [WEST_SW, EAST_SE, true],
+		[EAST_NE, EAST_SE, false],
 	]
 	for rn: Array in runs:
 		var a: Vector2 = rn[0]
 		var b: Vector2 = rn[1]
+		var show_pickets: bool = bool(rn[2])
 		var L := a.distance_to(b)
 		var u := (b - a) / L
 		var xf := Transform3D(Basis(Vector3.UP, -atan2(u.y, u.x)), Vector3(a.x, 0.0, a.y))
@@ -283,87 +318,85 @@ static func _fence(kit: Dictionary) -> void:
 		var n := int(L / 3.2)
 		for k in range(n + 1):
 			_b(kit, "op", xf, Vector3(float(k) * L / float(maxi(1, n)), 1.2, 0.0), Vector3(0.42, 2.4, 0.42), BRICK if k % 3 == 0 else FRAME)
-		if absf(a.x + 208.0) < 0.1 and absf(b.x + 208.0) < 0.1:
+		if show_pickets:
 			for k2 in range(int(L / 0.6)):
 				_b(kit, "op", xf, Vector3(float(k2) * 0.6 + 0.3, 1.55, 0.0), Vector3(0.035, 1.0, 0.035), FRAME)
 
 
-# Main gate (from the photo): a great natural granite stone carved 嘉興一中 in gold, a low hedge in front, stainless
-# retractable gates either side, the white V sculpture behind, a notice board, classical lamps along the avenue
+# Main gate placed directly at the foot of the north-facing skybridge east stairs along the road-parallel
+# West Fence (facing 纺工路!), complete with carved 嘉興一中 boulder, retractable gates, guardhouse & V sculpture!
 static func _main_gate(sc: Node3D, kit: Dictionary, labels: Node3D) -> void:
-	var I := Transform3D.IDENTITY
-	var gz := GATE_Z
+	var g_pos := _west_fence_pt(MAIN_GATE_Z)
+	var u_road := (WEST_SW - WEST_NW).normalized() # south along 纺工路
+	var gate_yaw := atan2(u_road.x, u_road.y) # local +Z = south along 纺工路, local +X = east into campus!
+	var G := Transform3D(Basis(Vector3.UP, gate_yaw), Vector3(g_pos.x, 0.0, g_pos.y))
 	var granite := Color(0.68, 0.57, 0.50)
-	# the stone: a natural boulder built from tilted, uneven chunks (rough top edge, slightly bulging faces)
-	var sx := -206.0
+	# Carved natural granite boulder "嘉興一中" facing 纺工路
 	var chunks := [
-		[Vector3(0.0, 1.45, 0.0), Vector3(2.3, 2.9, 10.6), 0.0, 0.0],
-		[Vector3(0.05, 3.05, -3.3), Vector3(2.0, 0.55, 4.0), 0.05, 0.02],
-		[Vector3(-0.05, 3.15, 0.4), Vector3(2.1, 0.75, 3.6), -0.04, -0.03],
-		[Vector3(0.1, 2.95, 3.6), Vector3(1.9, 0.45, 3.4), 0.06, 0.05],
-		[Vector3(-0.25, 1.4, -4.9), Vector3(1.9, 2.6, 1.6), 0.0, 0.12],
-		[Vector3(-0.2, 1.35, 4.9), Vector3(1.9, 2.5, 1.6), 0.0, -0.10],
-		[Vector3(-0.42, 1.5, -1.5), Vector3(1.6, 2.7, 4.0), 0.03, 0.0],
-		[Vector3(-0.38, 1.45, 2.4), Vector3(1.6, 2.6, 3.2), -0.03, 0.0],
+		[Vector3(2.0, 1.45, 0.0), Vector3(2.3, 2.9, 10.6), 0.0, 0.0],
+		[Vector3(2.05, 3.05, -3.3), Vector3(2.0, 0.55, 4.0), 0.05, 0.02],
+		[Vector3(1.95, 3.15, 0.4), Vector3(2.1, 0.75, 3.6), -0.04, -0.03],
+		[Vector3(2.1, 2.95, 3.6), Vector3(1.9, 0.45, 3.4), 0.06, 0.05],
+		[Vector3(1.75, 1.4, -4.9), Vector3(1.9, 2.6, 1.6), 0.0, 0.12],
+		[Vector3(1.8, 1.35, 4.9), Vector3(1.9, 2.5, 1.6), 0.0, -0.10],
+		[Vector3(1.58, 1.5, -1.5), Vector3(1.6, 2.7, 4.0), 0.03, 0.0],
+		[Vector3(1.62, 1.45, 2.4), Vector3(1.6, 2.6, 3.2), -0.03, 0.0],
 	]
 	for ci in range(chunks.size()):
 		var ch: Array = chunks[ci]
-		var cxf := Transform3D(Basis.from_euler(Vector3(float(ch[2]), 0.0, float(ch[3]))), Vector3(sx, 0.0, gz) + (ch[0] as Vector3))
+		var cxf := G * Transform3D(Basis.from_euler(Vector3(float(ch[2]), 0.0, float(ch[3]))), ch[0] as Vector3)
 		var tone := granite.lerp(Color(0.74, 0.64, 0.57), float(ci % 3) / 3.0).darkened(0.03 * float(ci % 2))
 		RoadSignBuilder._box(kit["op"], cxf, ch[1], tone)
 	kit["op_n"] = true
-	_b(kit, "op", I, Vector3(sx - 1.9, 0.35, gz), Vector3(1.6, 0.7, 11.4), Color(0.30, 0.46, 0.22))
-	_b(kit, "op", I, Vector3(sx - 1.9, 0.1, gz), Vector3(1.9, 0.2, 11.8), STONE)
-	_sign(labels, "嘉 興 一 中", Vector3(sx - 1.34, 1.85, gz), -PI * 0.5, 96, 0.020, Color(0.86, 0.64, 0.14))
-	# stainless retractable gates: top / bottom rails with criss-cross lattice
+	_b(kit, "op", G, Vector3(0.1, 0.35, 0.0), Vector3(1.6, 0.7, 11.4), Color(0.30, 0.46, 0.22))
+	_b(kit, "op", G, Vector3(0.1, 0.1, 0.0), Vector3(1.9, 0.2, 11.8), STONE)
+	var sign_w := G * Vector3(0.66, 1.85, 0.0)
+	_sign(labels, "嘉 興 一 中", sign_w, gate_yaw - PI * 0.5, 96, 0.020, Color(0.86, 0.64, 0.14))
+	# Stainless retractable gates flanking the boulder aligned along the angled West Fence
 	for side: float in [-1.0, 1.0]:
-		var z0 := gz + side * 6.2
-		var z1 := gz + side * 19.0
+		var z0 := side * 6.2
+		var z1 := side * 19.0
 		var L := absf(z1 - z0)
 		var zc := (z0 + z1) * 0.5
 		var steel := Color(0.80, 0.82, 0.84)
 		for y: float in [0.25, 1.75]:
-			_b(kit, "op", I, Vector3(-207.4, y, zc), Vector3(0.12, 0.10, L), steel)
+			_b(kit, "op", G, Vector3(0.4, y, zc), Vector3(0.12, 0.10, L), steel)
 		var n := int(L / 0.9)
 		for k in range(n):
 			var zz := minf(z0, z1) + (float(k) + 0.5) * L / float(n)
 			for sgn: float in [-1.0, 1.0]:
-				var xf := Transform3D(Basis(Vector3(1, 0, 0), sgn * 0.75), Vector3(-207.4, 1.0, zz))
+				var xf := G * Transform3D(Basis(Vector3(1, 0, 0), sgn * 0.75), Vector3(0.4, 1.0, zz))
 				RoadSignBuilder._box(kit["op"], xf, Vector3(0.05, 1.9, 0.05), steel)
-			_b(kit, "op", I, Vector3(-207.4, 1.0, zz), Vector3(0.08, 1.8, 0.08), steel)
+			_b(kit, "op", G, Vector3(0.4, 1.0, zz), Vector3(0.08, 1.8, 0.08), steel)
 		kit["op_n"] = true
-		# end posts with the track wheels' housing
-		_b(kit, "op", I, Vector3(-207.4, 1.0, z1), Vector3(0.5, 2.0, 0.5), steel.darkened(0.2))
-	# the V sculpture (photo: pale granite V on a tall rough-stone pedestal) on the axis behind the stone
-	var vx := -192.0
-	_b(kit, "op", I, Vector3(vx, 1.3, gz), Vector3(2.2, 2.6, 2.2), Color(0.58, 0.52, 0.47))
-	_b(kit, "op", I, Vector3(vx, 0.15, gz), Vector3(3.6, 0.3, 3.6), STONE_LT)
+		_b(kit, "op", G, Vector3(0.4, 1.0, z1), Vector3(0.5, 2.0, 0.5), steel.darkened(0.2))
+	# White V sculpture just inside the main gate
+	_b(kit, "op", G, Vector3(14.0, 1.3, 0.0), Vector3(2.2, 2.6, 2.2), Color(0.58, 0.52, 0.47))
+	_b(kit, "op", G, Vector3(14.0, 0.15, 0.0), Vector3(3.6, 0.3, 3.6), STONE_LT)
 	for sgn2: float in [-1.0, 1.0]:
-		var xf2 := Transform3D(Basis(Vector3(1, 0, 0), sgn2 * 0.68), Vector3(vx, 4.5, gz + sgn2 * 1.45))
+		var xf2 := G * Transform3D(Basis(Vector3(1, 0, 0), sgn2 * 0.68), Vector3(14.0, 4.5, sgn2 * 1.45))
 		RoadSignBuilder._box(kit["op"], xf2, Vector3(0.9, 4.6, 1.2), Color(0.78, 0.74, 0.70))
 	kit["op_n"] = true
-	# guardhouse (photo): small brick lodge with a slate hipped roof and a maroon awning over the turnstiles
-	var gh := Vector3(-199.0, 0.0, gz + 13.0)
-	_b(kit, "op", I, gh + Vector3(0.0, 1.6, 0.0), Vector3(6.0, 3.2, 5.0), BRICK)
-	_b(kit, "gl", I, gh + Vector3(-3.04, 1.8, 0.0), Vector3(0.06, 1.4, 3.6), GLASS)
-	_b(kit, "op", I, gh + Vector3(0.0, 3.3, 0.0), Vector3(6.6, 0.25, 5.6), WHITE)
-	_hip_roof(kit, gh, Vector2(6.0, 5.0), 3.4, 0.7)
-	_b(kit, "op", I, gh + Vector3(-5.0, 2.7, -1.0), Vector3(4.2, 0.12, 5.0), Color(0.40, 0.20, 0.22))
+	# Brick guardhouse lodge with hipped slate roof & maroon turnstile awning
+	var gh := Vector3(7.5, 0.0, 13.0)
+	_b(kit, "op", G, gh + Vector3(0.0, 1.6, 0.0), Vector3(6.0, 3.2, 5.0), BRICK)
+	_b(kit, "gl", G, gh + Vector3(-3.04, 1.8, 0.0), Vector3(0.06, 1.4, 3.6), GLASS)
+	_b(kit, "op", G, gh + Vector3(0.0, 3.3, 0.0), Vector3(6.6, 0.25, 5.6), WHITE)
+	_b(kit, "op", G, gh + Vector3(0.0, 3.7, 0.0), Vector3(5.6, 0.65, 4.6), SLATE)
+	_b(kit, "op", G, gh + Vector3(-5.0, 2.7, -1.0), Vector3(4.2, 0.12, 5.0), Color(0.40, 0.20, 0.22))
 	for az: float in [-3.4, 1.4]:
-		_b(kit, "op", I, gh + Vector3(-6.9, 1.35, az), Vector3(0.08, 2.7, 0.08), Color(0.78, 0.80, 0.82))
-	for tz: float in [-2.4, -0.8, 0.8]:
-		_b(kit, "op", I, gh + Vector3(-5.0, 0.5, tz), Vector3(1.2, 1.0, 0.3), Color(0.80, 0.82, 0.84))
-	# plate-recognition barrier sign with the LED display
-	_b(kit, "op", I, Vector3(-209.0, 0.7, gz - 7.0), Vector3(0.12, 1.4, 0.12), Color(0.12, 0.12, 0.13))
-	_b(kit, "op", I, Vector3(-209.0, 1.75, gz - 7.0), Vector3(0.3, 1.1, 0.55), Color(0.10, 0.10, 0.11))
-	_b(kit, "em", I, Vector3(-209.17, 1.75, gz - 7.0), Vector3(0.02, 0.7, 0.42), Color(0.30, 0.95, 0.40))
-	# notice board on the right of the gate
-	_b(kit, "op", I, Vector3(-203.0, 1.6, gz + 24.0), Vector3(0.3, 3.2, 7.0), Color(0.86, 0.87, 0.88))
-	_b(kit, "op", I, Vector3(-203.2, 2.0, gz + 24.0), Vector3(0.05, 2.2, 6.4), Color(0.70, 0.22, 0.20))
-	# classical lamps (black poles, three white globes) lining the avenue
+		_b(kit, "op", G, gh + Vector3(-6.9, 1.35, az), Vector3(0.08, 2.7, 0.08), Color(0.78, 0.80, 0.82))
+	# Plate-recognition barrier sign & school notice board
+	_b(kit, "op", G, Vector3(-1.2, 0.7, -7.0), Vector3(0.12, 1.4, 0.12), Color(0.12, 0.12, 0.13))
+	_b(kit, "op", G, Vector3(-1.2, 1.75, -7.0), Vector3(0.3, 1.1, 0.55), Color(0.10, 0.10, 0.11))
+	_b(kit, "em", G, Vector3(-1.37, 1.75, -7.0), Vector3(0.02, 0.7, 0.42), Color(0.30, 0.95, 0.40))
+	_b(kit, "op", G, Vector3(4.0, 1.6, 23.0), Vector3(0.3, 3.2, 7.0), Color(0.86, 0.87, 0.88))
+	_b(kit, "op", G, Vector3(3.8, 2.0, 23.0), Vector3(0.05, 2.2, 6.4), Color(0.70, 0.22, 0.20))
+	# Classical lamps lining the old central avenue toward the round plaza
+	var I := Transform3D.IDENTITY
 	for lx in range(-198, -116, 12):
 		for side2: float in [-1.0, 1.0]:
-			var lp := Vector3(float(lx), 0.0, gz + side2 * 9.5)
+			var lp := Vector3(float(lx), 0.0, GATE_Z + side2 * 9.5)
 			_b(kit, "op", I, lp + Vector3(0.0, 2.3, 0.0), Vector3(0.16, 4.6, 0.16), Color(0.12, 0.12, 0.13))
 			_b(kit, "op", I, lp + Vector3(0.0, 4.6, 0.0), Vector3(1.2, 0.08, 0.08), Color(0.12, 0.12, 0.13))
 			for gx: float in [-0.6, 0.0, 0.6]:
