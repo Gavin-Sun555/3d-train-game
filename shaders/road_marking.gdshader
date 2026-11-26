@@ -5,8 +5,8 @@ render_mode diffuse_burley, specular_schlick_ggx, cull_disabled;
 // Sit cleanly in front of road asphalt (0.12) while staying strictly behind ALL tram tracks (0.0),
 // so road paint never covers or z-fights with grass, stone, or grooved tram trackbeds.
 
-uniform vec3 paint_col : source_color = vec3(0.78, 0.77, 0.73);
-uniform float rough_val = 0.82;
+uniform vec3 paint_col : source_color = vec3(1.0, 1.0, 0.98);
+uniform float rough_val = 0.52;
 
 void vertex() {
 	vec4 vp = MODELVIEW_MATRIX * vec4(VERTEX, 1.0);
@@ -17,7 +17,8 @@ void vertex() {
 
 void fragment() {
 	ALBEDO = paint_col;
+	EMISSION = paint_col * 0.22;
 	ROUGHNESS = rough_val;
 	METALLIC = 0.0;
-	SPECULAR = 0.18;
+	SPECULAR = 0.34;
 }

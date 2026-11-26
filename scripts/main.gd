@@ -686,18 +686,18 @@ func _setup_environment() -> void:
 	env.background_mode = Environment.BG_SKY
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.76, 0.77, 0.79)
-	env.ambient_light_energy = 0.70
+	env.ambient_light_color = Color(0.74, 0.77, 0.82)
+	env.ambient_light_energy = 0.56
 	env.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
 
 	env.tonemap_mode = Environment.TONE_MAPPER_AGX
-	env.tonemap_exposure = 1.08
+	env.tonemap_exposure = 1.00
 	env.ssao_enabled = true
-	env.ssao_radius = 1.4
-	env.ssao_intensity = 1.45
+	env.ssao_radius = 1.75
+	env.ssao_intensity = 1.70
 	env.ssil_enabled = false
 	env.glow_enabled = true
-	env.glow_intensity = 0.28
+	env.glow_intensity = 0.26
 	env.glow_bloom = 0.03
 
 	_world_env.environment = env
@@ -705,14 +705,14 @@ func _setup_environment() -> void:
 
 	_sun = DirectionalLight3D.new()
 	_sun.shadow_enabled = true
-	# 2 cascades over 220m: ~2.5cm texels within 48m of the tram, cutting shadow passes in half!
+	# 2 crisp 4096px cascades over 300m: ~2cm texels near camera with deeper skyline shadows
 	_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
-	_sun.directional_shadow_split_1 = 0.22
-	_sun.directional_shadow_blend_splits = false
-	_sun.directional_shadow_max_distance = 220.0
-	_sun.shadow_bias = 0.06
-	_sun.shadow_normal_bias = 1.6
-	_sun.shadow_blur = 0.9
+	_sun.directional_shadow_split_1 = 0.24
+	_sun.directional_shadow_blend_splits = true
+	_sun.directional_shadow_max_distance = 300.0
+	_sun.shadow_bias = 0.05
+	_sun.shadow_normal_bias = 1.4
+	_sun.shadow_blur = 1.05
 	add_child(_sun)
 
 	_weather = WeatherSystem.new()

@@ -67,28 +67,32 @@ void fragment() {
 	float crack_w = abs(vnoise(xz * 0.85 + vec2(vnoise(xz * 2.2) * 1.4)) - 0.5);
 	float tar_snake = (1.0 - smoothstep(0.006, 0.020, crack_w)) * step(0.55, patch_macro);
 
-	// Dark bituminous asphalt (~0.05-0.08 albedo, slightly lighter older patches) with rich aggregate texture
-	vec3 base_asphalt = mix(vec3(0.052, 0.052, 0.055), vec3(0.076, 0.075, 0.074), patch_macro);
-	base_asphalt *= (0.88 + 0.22 * fine_agg) * (0.92 + 0.15 * med_agg) * (0.94 + 0.12 * coarse_wear);
+	// Weathered sunlit bituminous asphalt with rich dark-grey aggregate so white crosswalks & lane lines pop crisply
+	vec3 base_asphalt = mix(vec3(0.066, 0.067, 0.070), vec3(0.096, 0.095, 0.094), patch_macro);
+	base_asphalt *= (0.89 + 0.20 * fine_agg) * (0.93 + 0.14 * med_agg) * (0.95 + 0.10 * coarse_wear);
 
 	// Slightly darker oil streak down lane center, slightly polished lighter aggregate in tire ruts
 	float oil_center = exp(-pow((abs_u - 0.54) * 9.0, 2.0));
-	base_asphalt *= (1.0 - 0.12 * oil_center + 0.06 * rut);
-	base_asphalt = mix(base_asphalt, vec3(0.035, 0.035, 0.038), tar_snake * 0.75);
+	base_asphalt *= (1.0 - 0.11 * oil_center + 0.07 * rut);
+	base_asphalt = mix(base_asphalt, vec3(0.044, 0.044, 0.047), tar_snake * 0.72);
 
 	// Gutter moisture/grime AO along street curbs
 	float curb_ao = smoothstep(0.0, 0.11, 1.0 - abs_u);
-	base_asphalt *= mix(0.66, 1.0, curb_ao);
+	base_asphalt *= mix(0.68, 1.0, curb_ao);
 
+	// Always enforce an upward (+Y) world normal at ALL distances (prevents cull_disabled back-face
+	// segments from flipping to downward normals / pitch-black asphalt beyond 90m!)
+	float nx = 0.0;
+	float nz = 0.0;
 	if (cam_d < 90.0) {
 		float fade = (1.0 - smoothstep(50.0, 90.0, cam_d)) * 0.22;
-		float nx = (vnoise(xz * 26.0 + vec2(0.15, 0.0)) - vnoise(xz * 26.0)) * fade;
-		float nz = (vnoise(xz * 26.0 + vec2(0.0, 0.15)) - vnoise(xz * 26.0)) * fade;
-		NORMAL = normalize((VIEW_MATRIX * vec4(normalize(vec3(nx, 1.0, nz)), 0.0)).xyz);
+		nx = (vnoise(xz * 26.0 + vec2(0.15, 0.0)) - vnoise(xz * 26.0)) * fade;
+		nz = (vnoise(xz * 26.0 + vec2(0.0, 0.15)) - vnoise(xz * 26.0)) * fade;
 	}
+	NORMAL = normalize((VIEW_MATRIX * vec4(normalize(vec3(nx, 1.0, nz)), 0.0)).xyz);
 
 	ALBEDO = base_asphalt;
-	ROUGHNESS = clamp(0.89 + 0.07 * fine_agg - 0.11 * rut - 0.22 * tar_snake, 0.58, 0.96);
+	ROUGHNESS = clamp(0.88 + 0.07 * fine_agg - 0.12 * rut - 0.22 * tar_snake, 0.56, 0.95);
 	METALLIC = 0.0;
-	SPECULAR = 0.12 + 0.08 * rut;
+	SPECULAR = 0.14 + 0.09 * rut;
 }
