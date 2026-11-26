@@ -590,6 +590,15 @@ func _notification(what: int) -> void:
 		_release_static_caches()
 
 
+func _quit_game() -> void:
+	if not _in_home_menu and not _is_demo_readonly and not _game_over:
+		_save_current_progress(false)
+	if DisplayServer.get_name() != "headless":
+		DisplayServer.tts_stop()
+	_release_static_caches()
+	get_tree().quit()
+
+
 # Materials, shaders and meshes held in builders' static caches outlive the scene and would otherwise be
 # reported as leaked RIDs / ObjectDB instances when the rendering server shuts down: drop them on the way out
 static func _release_static_caches() -> void:
@@ -4310,14 +4319,18 @@ func _build_ui() -> void:
 	_hud_layer_ctrl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	master_root.add_child(_hud_layer_ctrl)
 
-	# 1. Persistent Top Mode & Lighting Bar (Centered Top)
+	# 1. Persistent Top Mode & Lighting Bar (Auto-Centered Top across all resolutions & languages)
+	var nav_wrap := CenterContainer.new()
+	nav_wrap.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	nav_wrap.offset_top = 12.0
+	nav_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hud_layer_ctrl.add_child(nav_wrap)
+
 	_nav_bar = _make_panel(Color(0.07, 0.09, 0.12, 0.90))
-	_nav_bar.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	_nav_bar.position = Vector2(-565, 12)
-	_hud_layer_ctrl.add_child(_nav_bar)
+	nav_wrap.add_child(_nav_bar)
 
 	var nav_hbox := HBoxContainer.new()
-	nav_hbox.add_theme_constant_override("separation", 7)
+	nav_hbox.add_theme_constant_override("separation", 5)
 	_nav_bar.add_child(nav_hbox)
 
 	nav_hbox.add_child(_make_btn(L10n.t("◀ 主页(Esc)", "◀ Home (Esc)"), func(): _enter_home_screen()))
@@ -4349,7 +4362,7 @@ func _build_ui() -> void:
 	_slider_time = HSlider.new()
 	_slider_time.min_value = 0.0; _slider_time.max_value = 24.0; _slider_time.step = 0.1
 	_slider_time.value = _time_hours
-	_slider_time.custom_minimum_size = Vector2(110, 22)
+	_slider_time.custom_minimum_size = Vector2(86, 22)
 	_slider_time.focus_mode = Control.FOCUS_NONE
 	_slider_time.value_changed.connect(func(v: float):
 		if not _updating_slider:
@@ -4369,6 +4382,12 @@ func _build_ui() -> void:
 	_lbl_fps.add_theme_font_size_override("font_size", 12)
 	_lbl_fps.add_theme_color_override("font_color", Color(0.55, 0.88, 0.70))
 	nav_hbox.add_child(_lbl_fps)
+
+	nav_hbox.add_child(VSeparator.new())
+	var btn_nav_quit := _make_btn(L10n.t("退出", "Quit"), func(): _quit_game())
+	btn_nav_quit.modulate = Color(1.0, 0.74, 0.74)
+	btn_nav_quit.tooltip_text = L10n.t("保存当前进度并退出游戏", "Save current progress and quit the game")
+	nav_hbox.add_child(btn_nav_quit)
 
 	# Toast Notification Banner (bottom-center above console, never overlaps top HUD panels)
 	_lbl_toast = Label.new()
@@ -5440,6 +5459,12 @@ func _build_home_screen_ui(parent: Control) -> void:
 	_btn_home_reset.custom_minimum_size = Vector2(125, 38)
 	act_bar.add_child(_btn_home_reset)
 
+	var btn_home_quit := _make_btn(L10n.t("退出游戏", "Quit Game"), func(): _quit_game())
+	btn_home_quit.custom_minimum_size = Vector2(118, 38)
+	btn_home_quit.modulate = Color(1.0, 0.74, 0.74)
+	btn_home_quit.tooltip_text = L10n.t("退出游戏程序", "Exit the game")
+	act_bar.add_child(btn_home_quit)
+
 
 func _build_slot_modal_ui(parent: Control) -> void:
 	_slot_modal = Control.new()
@@ -6183,7 +6208,7 @@ func _build_audio_modal_ui(parent: Control) -> void:
 	_audio_modal.add_child(center)
 
 	var card := _make_panel(Color(0.08, 0.11, 0.16, 0.97))
-	card.custom_minimum_size = Vector2(500, 506)
+	card.custom_minimum_size = Vector2(500, 554)
 	center.add_child(card)
 
 	var vbox := VBoxContainer.new()
@@ -6364,6 +6389,23 @@ func _build_audio_modal_ui(parent: Control) -> void:
 	note_lbl.add_theme_font_size_override("font_size", 12)
 	note_lbl.add_theme_color_override("font_color", Color(0.72, 0.78, 0.84))
 	vbox.add_child(note_lbl)
+
+	vbox.add_child(HSeparator.new())
+	var exit_row := HBoxContainer.new()
+	exit_row.add_theme_constant_override("separation", 10)
+	vbox.add_child(exit_row)
+	var btn_modal_home := _make_btn(L10n.t("◀ 返回主页", "◀ Return to Home"), func():
+		_audio_modal.visible = false
+		_enter_home_screen()
+	)
+	btn_modal_home.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	btn_modal_home.custom_minimum_size = Vector2(0, 34)
+	exit_row.add_child(btn_modal_home)
+	var btn_modal_quit := _make_btn(L10n.t("退出游戏", "Quit Game"), func(): _quit_game())
+	btn_modal_quit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	btn_modal_quit.custom_minimum_size = Vector2(0, 34)
+	btn_modal_quit.modulate = Color(1.0, 0.74, 0.74)
+	exit_row.add_child(btn_modal_quit)
 
 
 func _on_set_language(pref: String) -> void:
