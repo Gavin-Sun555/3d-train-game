@@ -4952,7 +4952,7 @@ func _build_ui() -> void:
 	var ai_style_defs := [
 		[L10n.t("缓慢", "Slow"), TransitSim.AIStyle.SLOW, L10n.t("缓慢模式：停稳后过2~3秒再开门、人上好后过几秒再关门、有乘客赶来会等待，开关门与加减速平缓柔和", "Slow: waits 2-3s before opening doors, holds for approaching riders, gentle acceleration & braking")],
 		[L10n.t("正常", "Normal"), TransitSim.AIStyle.NORMAL, L10n.t("正常模式：当前标准运营基准", "Normal: standard transit operation profile")],
-		[L10n.t("狂暴", "Furious"), TransitSim.AIStyle.FURIOUS, L10n.t("狂暴模式：加速度与刹车拉满、进出站高效，开关门与标准模式一致", "Furious: maximum acceleration & braking with smooth cruising and full normal boarding")],
+		[L10n.t("狂暴", "Furious"), TransitSim.AIStyle.FURIOUS, L10n.t("狂暴模式：加速度与刹车拉满、不做调距额外停站、终点站优先发车", "Furious: max accel/brake, no pacing hold, priority departure at termini")],
 	]
 	for sd in ai_style_defs:
 		var st_idx: int = sd[1]
@@ -6070,6 +6070,9 @@ func _boarding_status_text(tr: Dictionary, st_info: Dictionary) -> String:
 		if not _transit_sim.manual_drive and bool(tr.get("express_waiting", false)):
 			var done_tag_e := L10n.t("始发上客完毕", "Boarding done") if term_stage == "board_only" else L10n.t("上下客完毕", "Boarding done")
 			return L10n.t("⏳ %s %s · 正在开门待避快车（等快车离站后关门发车）…", "⏳ %s %s · Holding doors open for Express…") % [st_name, done_tag_e]
+		if not _transit_sim.manual_drive and bool(tr.get("furious_waiting", false)):
+			var done_tag_f := L10n.t("始发上客完毕", "Boarding done") if term_stage == "board_only" else L10n.t("上下客完毕", "Boarding done")
+			return L10n.t("⏳ %s %s · 正在终点站开门避让狂暴模式列车优先发车…", "⏳ %s %s · Holding doors open for Furious tram to depart first…") % [st_name, done_tag_f]
 		if not _transit_sim.manual_drive and bool(tr.get("pacing_waiting", false)):
 			var done_tag_p := L10n.t("始发上客完毕", "Boarding done") if term_stage == "board_only" else L10n.t("上下客完毕", "Boarding done")
 			return L10n.t("⏱ %s %s · 前方同线列车较近，正在站台开门调距（%.0fm / 均距 %.0fm）…", "⏱ %s %s · Holding doors open for headway pacing (%.0fm / avg %.0fm)…") % [
@@ -7243,7 +7246,7 @@ func _on_set_active_tram_ai_style(style: int) -> void:
 	var same_line := _transit_sim.line_tram_indices(int(tr["line_id"]))
 	var ord_i := same_line.find(_transit_sim.active_tram_idx) + 1
 	var desc := L10n.t("平缓驾驶 · 停稳2.5s开门 · 上客后延后关门并等待赶来乘客", "Gentle drive · 2.5s door delay · holds for approaching riders") if style == TransitSim.AIStyle.SLOW else (
-		L10n.t("加速度与刹车拉满 · 进出站高效 · 开关门同标准模式", "Max accel/brake · smooth cruise · full normal boarding") if style == TransitSim.AIStyle.FURIOUS else L10n.t("标准运营基准", "Standard transit profile")
+		L10n.t("加速度与刹车拉满 · 不做调距额外停站 · 终点站优先发车", "Max accel/brake · no pacing hold · priority departure at termini") if style == TransitSim.AIStyle.FURIOUS else L10n.t("标准运营基准", "Standard transit profile")
 	)
 	_show_toast(L10n.t("🚋 %s 第%d列 AI运营方式设为【%s】（%s）", "🚋 %s #%d AI mode set to [%s] (%s)") % [L10n.line_display_name(str(tr["line_name"])), ord_i, TransitSim.tram_ai_style_name(tr), desc])
 	_update_run_hud()

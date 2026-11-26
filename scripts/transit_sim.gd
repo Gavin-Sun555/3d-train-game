@@ -502,6 +502,11 @@ func set_tram_ai_style(tram_idx: int, style: int) -> void:
 		tr["ai_close_grace"] = 0.0
 	elif prev_style != AIStyle.SLOW and bool(tr.get("doors_target_open", false)):
 		tr["ai_close_grace"] = 2.8
+	if new_style == AIStyle.FURIOUS:
+		tr["pacing_waiting"] = false
+		tr["pacing_hold_t"] = 0.0
+		tr["furious_waiting"] = false
+		tr["furious_hold_t"] = 0.0
 
 
 func set_active_tram_ai_style(style: int) -> void:
@@ -722,6 +727,8 @@ func tram_status_text(tr: Dictionary) -> String:
 		var st_nm_h := L10n.station_display_name(st_nm_raw)
 		if bool(tr.get("express_waiting", false)):
 			return L10n.t("待避快车（开门） · %s", "Yielding to Express (Doors Open) · %s") % st_nm_h
+		if bool(tr.get("furious_waiting", false)):
+			return L10n.t("终点待避狂暴车（开门） · %s", "Yielding to Furious Tram (Doors Open) · %s") % st_nm_h
 		if bool(tr.get("pacing_waiting", false)):
 			return L10n.t("调距待发（开门） · %s", "Pacing Hold (Doors Open) · %s") % st_nm_h
 		if bool(here.get("unscheduled", false)):
@@ -729,6 +736,8 @@ func tram_status_text(tr: Dictionary) -> String:
 		return L10n.t("停站 · %s", "At Station · %s") % st_nm_h
 	if float(tr.get("express_hold_t", 0.0)) > 0.0 or bool(tr.get("express_waiting", false)):
 		return L10n.t("待避快车", "Yielding to Express")
+	if float(tr.get("furious_hold_t", 0.0)) > 0.0 or bool(tr.get("furious_waiting", false)):
+		return L10n.t("终点待避狂暴车", "Yielding to Furious Tram")
 	var nxt := find_next_stop_info(tr)
 	var nxt_name := L10n.station_display_name(str(nxt.get("name", "")))
 	if spd < 0.3:
@@ -1521,6 +1530,9 @@ func _step_ai_driver(
 				tr["dwell_elapsed"] = 0.0
 				tr["pacing_hold_t"] = 0.0
 				tr["pacing_waiting"] = false
+				tr["furious_hold_t"] = 0.0
+				tr["furious_waiting"] = false
+				tr["furious_hold_done"] = -1.0
 				tr["ai_close_grace"] = 2.8 if ai_style == AIStyle.SLOW else 0.0
 				if play_audio:
 					sound.play_door_chime()
@@ -1536,6 +1548,9 @@ func _step_ai_driver(
 				tr["dwell_elapsed"] = 0.0
 				tr["pacing_hold_t"] = 0.0
 				tr["pacing_waiting"] = false
+				tr["furious_hold_t"] = 0.0
+				tr["furious_waiting"] = false
+				tr["furious_hold_done"] = -1.0
 				tr["ai_close_grace"] = 2.8 if ai_style == AIStyle.SLOW else 0.0
 				if ai_style == AIStyle.SLOW:
 					tr["ai_open_delay"] = 2.2
@@ -1601,12 +1616,18 @@ func _step_ai_driver(
 			var express_hold := false
 			if hold_sid >= 0 and target_open:
 				express_hold = _holding_for_express(tr, my_idx, hold_sid, graph, dt)
-			var pacing_hold := false
+			# At multi-platform terminals, non-Furious trams yield to Furious trams so Furious departs first even if arriving later
+			var furious_hold := false
 			if hold_sid >= 0 and target_open and not express_hold:
+				furious_hold = _holding_for_furious(tr, my_idx, hold_sid, graph, dt)
+			else:
+				tr["furious_waiting"] = false
+			var pacing_hold := false
+			if hold_sid >= 0 and target_open and not express_hold and not furious_hold and ai_style != AIStyle.FURIOUS:
 				pacing_hold = _holding_for_pacing(tr, my_idx, hold_sid, dt)
 			else:
 				tr["pacing_waiting"] = false
-			var busy_now := (float(tr["dwell_timer"]) > 0.0) or boarding_on or walkers_hold or approaching_hold or express_hold or pacing_hold
+			var busy_now := (float(tr["dwell_timer"]) > 0.0) or boarding_on or walkers_hold or approaching_hold or express_hold or furious_hold or pacing_hold
 			if ai_style == AIStyle.SLOW:
 				if busy_now or door_r < 0.85:
 					tr["ai_close_grace"] = 2.8
@@ -1655,8 +1676,8 @@ func _step_ai_driver(
 			if bool(tr["is_loop"]) and dep_sid >= 0 and _terminal_departure_blocked(tr, dep_sid):
 				tr["notch"] = 3 # Hold at the platform: a tram is crossing over into the other platform track
 				return
-			if dep_sid >= 0 and _holding_for_express(tr, my_idx, dep_sid, graph, dt):
-				# An express entered the yield window while doors were closing: re-open doors and wait!
+			if dep_sid >= 0 and (_holding_for_express(tr, my_idx, dep_sid, graph, dt) or _holding_for_furious(tr, my_idx, dep_sid, graph, dt)):
+				# An express or priority furious tram entered the yield window while doors were closing: re-open doors and wait!
 				tr["doors_target_open"] = true
 				tr["ai_depart_pending"] = false
 				tr["notch"] = 3
@@ -1667,6 +1688,9 @@ func _step_ai_driver(
 			tr["express_hold_t"] = 0.0
 			tr["express_waiting"] = false
 			tr["express_hold_done"] = -1.0
+			tr["furious_hold_t"] = 0.0
+			tr["furious_waiting"] = false
+			tr["furious_hold_done"] = -1.0
 			tr["pacing_hold_t"] = 0.0
 			tr["pacing_waiting"] = false
 			if term_stage == "board_only":
@@ -1891,6 +1915,9 @@ func _step_ai_driver(
 		tr["dwell_elapsed"] = 0.0
 		tr["pacing_hold_t"] = 0.0
 		tr["pacing_waiting"] = false
+		tr["furious_hold_t"] = 0.0
+		tr["furious_waiting"] = false
+		tr["furious_hold_done"] = -1.0
 		if ai_style == AIStyle.SLOW:
 			# Slow mode: pause 2.5 seconds after stopping at the platform before opening doors
 			tr["ai_open_delay"] = 2.5
@@ -3237,6 +3264,8 @@ func _update_monorail_switches(graph: NetworkGraph) -> void:
 				var key := float(req[ti])
 				if de <= 0.0 or (de <= SW_SIGNAL_BACK and float(trams[ti]["speed_mps"]) > 0.3):
 					key -= 1e9 # already on it / past its stop point: cannot stop any more
+				elif int(trams[ti].get("ai_style", AIStyle.NORMAL)) == AIStyle.FURIOUS and not (ti == active_tram_idx and manual_drive):
+					key -= 1e6 # Furious AI gets switch priority over waiting non-Furious trains
 				if key < best_key:
 					best_key = key
 					cur = ti
@@ -3431,6 +3460,10 @@ func _has_tram_waiting_for_terminal(sid: int, elev: bool) -> bool:
 
 
 func _holding_for_pacing(tr: Dictionary, my_idx: int, _sid: int, dt: float) -> bool:
+	# Furious mode never extends station dwell for headway pacing
+	if int(tr.get("ai_style", AIStyle.NORMAL)) == AIStyle.FURIOUS:
+		tr["pacing_waiting"] = false
+		return false
 	var hw := _same_line_headway_info(tr, my_idx)
 	if not bool(hw.get("active", false)):
 		tr["pacing_waiting"] = false
@@ -3600,6 +3633,118 @@ func _quad_should_hold_for_express(tr: Dictionary, my_idx: int, sid: int, graph:
 	return false
 
 
+# ---------------------------------------------------------------------------------------------
+# Terminus Furious-First Priority Holding:
+#   When a tram is in Furious mode while other trams at the same multi-platform terminus (Platform A / B)
+#   are NOT in Furious mode, the non-Furious tram holds its doors open so the Furious tram departs first
+#   even if the Furious tram arrived later (works on both ground double-track & elevated monorail termini).
+# ---------------------------------------------------------------------------------------------
+const TERMINAL_FURIOUS_LOOK := 260.0
+const TERMINAL_FURIOUS_HOLD_MAX := 115.0
+
+func _holding_for_furious(tr: Dictionary, my_idx: int, sid: int, graph: NetworkGraph, dt: float) -> bool:
+	if int(tr.get("ai_style", AIStyle.NORMAL)) == AIStyle.FURIOUS or graph == null or sid < 0 or not graph.stations.has(sid):
+		tr["furious_hold_t"] = 0.0
+		tr["furious_waiting"] = false
+		return false
+	var my_z := _zone_for(tr, sid)
+	var at_multi_term := (not my_z.is_empty()) and bool(my_z.get("b_available", false)) and (
+		str(tr.get("term_stage", "")) == "board_only" or _on_terminal_departure_side(tr, sid)
+	)
+	if not at_multi_term:
+		tr["furious_hold_t"] = 0.0
+		tr["furious_waiting"] = false
+		return false
+
+	var held := float(tr.get("furious_hold_t", 0.0))
+	if held >= TERMINAL_FURIOUS_HOLD_MAX:
+		tr["furious_hold_done"] = float(sid)
+		tr["furious_waiting"] = false
+		return false
+	if held <= 0.0 and float(tr.get("furious_hold_done", -1.0)) == float(sid):
+		tr["furious_waiting"] = false
+		return false # already timed out once at this stop visit
+
+	var hold := false
+	var chk_age := float(tr.get("_fur_chk_t", 99.0)) + dt
+	if int(tr.get("_fur_chk_sid", -999)) == sid and chk_age < 0.15:
+		tr["_fur_chk_t"] = chk_age
+		hold = bool(tr.get("_fur_chk_val", false))
+	else:
+		hold = _terminal_should_hold_for_furious(tr, my_idx, sid)
+		tr["_fur_chk_sid"] = sid
+		tr["_fur_chk_t"] = 0.0
+		tr["_fur_chk_val"] = hold
+
+	if hold:
+		tr["furious_hold_t"] = held + dt
+		tr["furious_waiting"] = true
+	else:
+		tr["furious_hold_t"] = 0.0
+		tr["furious_waiting"] = false
+	return hold
+
+
+func _terminal_should_hold_for_furious(tr: Dictionary, my_idx: int, sid: int) -> bool:
+	var my_z := _zone_for(tr, sid)
+	if my_z.is_empty():
+		return false
+	var my_curve: Curve3D = tr["curve"]
+	var my_rlen := float(tr["route_len"])
+	var my_dir := float(tr["dir"])
+	var my_is_loop := bool(tr["is_loop"])
+	var tf_my := TrackBuilder.sample_track_frame(my_curve, float(my_z["exit_s"]), my_rlen, my_is_loop)
+	var my_out_fwd := (-tf_my.basis.z) * my_dir
+	my_out_fwd.y = 0.0
+	if my_out_fwd.length_squared() < 0.001:
+		my_out_fwd = _tram_heading(tr)
+	else:
+		my_out_fwd = my_out_fwd.normalized()
+
+	var my_elev := bool(tr.get("elevated", false))
+	var my_exp := bool(tr.get("express", false))
+	var occ := _terminal_occupancy(my_idx, int(tr["line_id"]), sid)
+	var other_plat_free := (not bool(occ["a"])) and (not bool(occ["b"]))
+	for j in range(trams.size()):
+		var w: Dictionary = trams[j]
+		if j == my_idx or bool(w.get("elevated", false)) != my_elev:
+			continue
+		if int(w.get("ai_style", AIStyle.NORMAL)) != AIStyle.FURIOUS:
+			continue
+		if my_exp and not bool(w.get("express", false)):
+			continue # Express retains priority over Local so Express <-> Furious never deadlocks
+		if bool(w.get("crashed", false)) or bool(w.get("derailed", false)) or bool(w.get("held_manual", false)):
+			continue
+		if j == active_tram_idx and manual_drive:
+			continue
+		var wz := _zone_for(w, sid)
+		if wz.is_empty():
+			continue
+		var w_curve: Curve3D = w["curve"]
+		var w_rlen := float(w["route_len"])
+		var w_dir := float(w["dir"])
+		var w_is_loop := bool(w["is_loop"])
+		var tf_ex := TrackBuilder.sample_track_frame(w_curve, float(wz["exit_s"]), w_rlen, w_is_loop)
+		var w_out_fwd := (-tf_ex.basis.z) * w_dir
+		w_out_fwd.y = 0.0
+		if w_out_fwd.length_squared() < 0.001 or w_out_fwd.normalized().dot(my_out_fwd) < 0.55:
+			continue
+		var w_res: Dictionary = w.get("term_res", {})
+		# 1. Furious tram already holds a platform reservation at this terminus (entering, turning back, boarding, or pulling out!)
+		if w_res.has(sid):
+			return true
+		# 2. Furious tram just cleared the terminal exit_s and is still within EXPRESS_LEADOUT ahead of the throat
+		var d_past := fposmod((float(w["s"]) - float(wz["exit_s"])) * w_dir, w_rlen)
+		if d_past >= 0.0 and d_past < EXPRESS_LEADOUT:
+			return true
+		# 3. Furious tram is approaching this terminus AND the other platform is free for it to pull right in!
+		if other_plat_free:
+			var d_arr := fposmod((float(wz["cusp_s"]) - float(w["s"])) * w_dir, w_rlen)
+			if d_arr > 0.0 and d_arr <= TERMINAL_FURIOUS_LOOK:
+				return true
+	return false
+
+
 # True forward travel heading of a tram along its route (works identically for front cab & rear cab active_end == 1!)
 func _tram_heading(tr: Dictionary) -> Vector3:
 	var curve: Curve3D = tr.get("curve")
@@ -3681,7 +3826,7 @@ const MERGE_STANDOFF := 13.0
 static func _is_tram_docked_holding(tr: Dictionary) -> bool:
 	if bool(tr.get("doors_target_open", false)) or float(tr.get("door_ratio", 0.0)) > 0.02:
 		return true
-	if bool(tr.get("ai_depart_pending", false)) or bool(tr.get("express_waiting", false)) or bool(tr.get("pacing_waiting", false)):
+	if bool(tr.get("ai_depart_pending", false)) or bool(tr.get("express_waiting", false)) or bool(tr.get("furious_waiting", false)) or bool(tr.get("pacing_waiting", false)):
 		return true
 	var ts := str(tr.get("term_stage", ""))
 	if ts == "alight_only" or ts == "flip_wait" or ts == "board_only":
@@ -3725,6 +3870,10 @@ func _update_merge_yields() -> void:
 			var db := float(hit.y) * MERGE_STEP
 			var a_exp := bool(a.get("express", false))
 			var b_exp := bool(b.get("express", false))
+			var a_fur := int(a.get("ai_style", AIStyle.NORMAL)) == AIStyle.FURIOUS and not (i == active_tram_idx and manual_drive)
+			var b_fur := int(b.get("ai_style", AIStyle.NORMAL)) == AIStyle.FURIOUS and not (j == active_tram_idx and manual_drive)
+			var a_prio := (a_exp and not b_exp) or (a_exp == b_exp and a_fur and not b_fur)
+			var b_prio := (b_exp and not a_exp) or (a_exp == b_exp and b_fur and not a_fur)
 			var a_docked := _is_tram_docked_holding(a)
 			var b_docked := _is_tram_docked_holding(b)
 			var a_spd := float(a.get("speed_mps", 0.0))
@@ -3739,19 +3888,19 @@ func _update_merge_yields() -> void:
 			elif b_docked and not a_docked:
 				b_yields = true
 			elif a_docked and b_docked:
-				# Both docked side-by-side at a twin-island station: express departs first; otherwise let first mover go.
-				if a_exp and not b_exp:
+				# Both docked side-by-side at a twin-island / multi-platform station: express/furious departs first.
+				if a_prio:
 					b_yields = true
-				elif b_exp and not a_exp:
+				elif b_prio:
 					b_yields = false
 				else:
 					continue
 			else:
-				# Both actively moving (or just starting to depart): give express merge priority over local whenever
-				# the local can still stop safely short of the fouling point!
-				if a_exp and not b_exp and b_can_stop and (da <= db + 75.0 or b_spd < 1.5):
+				# Both actively moving (or just starting to depart): give express/furious merge priority whenever
+				# the yielding tram can still stop safely short of the fouling point!
+				if a_prio and b_can_stop and (da <= db + 75.0 or b_spd < 1.5):
 					b_yields = true
-				elif b_exp and not a_exp and a_can_stop and (db <= da + 75.0 or a_spd < 1.5):
+				elif b_prio and a_can_stop and (db <= da + 75.0 or a_spd < 1.5):
 					b_yields = false
 				elif (b_yields and not b_can_stop) and a_can_stop:
 					b_yields = false
