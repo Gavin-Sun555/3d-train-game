@@ -5,3 +5,10 @@ dist/
 *.import
 traingame3d
 tools/osm_cache/raw/
+tools/osm_cache/google_earth_z16/
+tools/osm_cache/amap_z17/
+tools/osm_cache/amap_z17_poi/
+tools/osm_cache/amap_z18_poi/
+tools/osm_cache/jiaxing_real_buildings.json
+tools/osm_cache/jiaxing_amap_2025_buildings.json
+tools/osm_cache/jiaxing_real_shops_ocr.json

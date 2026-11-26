@@ -37,7 +37,20 @@ sys.path.insert(0, HERE)
 from extract_demo_data import road_width_for  # noqa: E402
 from osm_storefronts import KIND_WIDTH, SKIP_KINDS  # noqa: E402
 
-from jiaxing_t1_survey import T1_ROAD_WIDTHS, REAL_SHOPS, NO_SHOP_BOXES, CAMPUS_BOXES  # noqa: E402
+from jiaxing_t1_survey import NO_SHOP_BOXES  # noqa: E402
+from jiaxing_google_survey import (  # noqa: E402
+    ARCHETYPES,
+    REAL_CAMPUSES,
+    REAL_COMPOUNDS,
+    REAL_SHOPS_GOOGLE,
+    T1_ROAD_WIDTHS,
+    find_compound,
+    nearest_real_compound_name,
+    road_spec_for_name,
+)
+from google_earth_sampler import GoogleEarthSampler  # noqa: E402
+
+GE_SAMPLER = GoogleEarthSampler()
 
 # Projection centered at Nanhu Lake (南湖)
 LAT0, LON0 = 30.7550, 120.7520
@@ -72,7 +85,7 @@ def rect_ll(s, w, n, e):
 CHANGSHUI_CORRIDOR = rect_ll(30.7212, 120.7805, 30.7264, 120.8125)
 SAMS_SHUANGXI_RECT = rect_ll(30.7035, 120.7785, 30.7150, 120.8020)
 XIANGJIADANG_RECT = rect_ll(30.7905, 120.7850, 30.8180, 120.8240)
-QINGFENG_CORRIDOR = rect_ll(30.6945, 120.7936, 30.7264, 120.7992)
+QINGFENG_CORRIDOR = rect_ll(30.6945, 120.7895, 30.7264, 120.8035)
 SOUTH_STA_PRECINCT = rect_ll(30.6888, 120.7905, 30.6968, 120.8012)
 # Extended HSR railway track corridor (~1.6km WSW and ~1.5km ENE past Jiaxing South Station along real 沪昆高速线)
 HSR_RAIL_RECT = rect_ll(30.6830, 120.7775, 30.7025, 120.8125)
@@ -110,7 +123,7 @@ MEMORIAL_POS = proj(30.74986, 120.75693)  # 南湖革命纪念馆
 GOV_POS = (-95.0, 610.0)                  # 嘉兴市人民政府
 JIAXING_NO1_POS = (1680.0, 1385.0)        # 嘉兴市第一中学 (full authentic campus east of 纺工路, north of 中环南路)
 HANLIN_POS = (1268.0, 1412.0)             # 瀚林府邸 (嘉兴一中纺工路西侧高端封闭小区)
-NO1_BRIDGE_POS = (1432.1, 1531.9)         # 嘉兴一中站人行过街天桥 (直达中央有轨电车站台)
+NO1_BRIDGE_POS = (1427.6, 1506.5)         # 嘉兴一中站人行过街天桥 (位于站台北端，实景1:1对齐)
 YUEHE_POS = (-620.0, -1930.0)             # 月河历史街区南入口牌坊 (verified dry land!)
 ZICHENG_POS = (-306.0, -816.0)            # 子城遗址公园 · 谯楼
 PINGSHAN_PARK_POS = (-325.0, -1210.0)     # 瓶山公园 (real OSM park hillock north of 中山东路建国南路)
@@ -881,13 +894,15 @@ def buffer_polyline(pts, half_w):
 def area_kind(t):
     if t.get("natural") == "water" or t.get("water") or t.get("waterway") == "riverbank" or t.get("landuse") in ("reservoir", "basin"):
         return "water"
+    if t.get("landuse") in ("farmland", "orchard", "allotments", "plant_nursery", "greenhouse_horticulture"):
+        return "farmland"
     if t.get("leisure") in ("park", "garden", "dog_park", "nature_reserve", "playground") or t.get("landuse") == "cemetery":
         return "park"
     if t.get("natural") in ("wood", "scrub") or t.get("landuse") == "forest":
         return "wood"
     if t.get("landuse") in ("grass", "recreation_ground", "village_green", "meadow", "flowerbed") or t.get("natural") in ("grassland", "wetland"):
         return "grass"
-    if t.get("leisure") in ("pitch", "track", "sports_centre") and t.get("building") is None:
+    if t.get("leisure") in ("pitch", "track", "sports_centre", "stadium") and t.get("building") is None:
         return "sports"
     if t.get("amenity") == "parking" and t.get("parking", "surface") == "surface" and t.get("building") is None:
         return "parking"
@@ -1000,11 +1015,11 @@ def build_areas(nodes, ways, rels):
     sta_plaza = [(sx - 130, sy - 115), (sx + 130, sy - 115), (sx + 130, sy + 70), (sx - 130, sy + 70)]
     areas.append({"kind": "plaza", "pts": [rnd(p) for p in sta_plaza]})
     park_polys.append(sta_plaza)
-    # Full lush wetland meadow lawn covering Xiangjiadang Wetland Park (ZERO bare grey concrete around Xiangjiadang Lake!)
+    # Full lush wetland meadow lawn covering Xiangjiadang Wetland Park (visual green ground backdrop only —
+    # do NOT append into park_polys so the 900+ real lakeside villages & resorts around Xiangjiadang are preserved!)
     xr = XIANGJIADANG_RECT
     xj_meadow = [(xr[0] + 10, xr[1] + 10), (xr[2] - 10, xr[1] + 10), (xr[2] - 10, xr[3] - 10), (xr[0] + 10, xr[3] - 10)]
     areas.append({"kind": "park", "pts": [rnd(p) for p in xj_meadow]})
-    park_polys.append(xj_meadow)
     named_plazas.append({"name": "湘家荡湿地公园", "kind": "park", "pts": [rnd(p) for p in xj_meadow]})
     # Yuehe historic lotus-pond garden pocket lawn (荷花池公园) & Nanhu Scenic lakeside lawn aprons
     yuehe_garden = [(-865, -2250), (-755, -2250), (-755, -2140), (-865, -2140)]
@@ -1570,6 +1585,76 @@ def make_rect_poly(cx, cy, ang, hl, hw):
     return [(cx + lx * ca - ly * sa, cy + lx * sa + ly * ca) for lx, ly in corners]
 
 
+def make_shaped_poly(cx, cy, ang, hl, hw, shape_kind="rect"):
+    """Generate authentic Chinese residential / commercial building footprints (stepped 凸 slab,
+    winged lightwell slab, point-tower cross, L-block, or stairwell-projected walk-up) in local
+    building coordinates rotated by `ang`. Always simple & CCW-consistent."""
+    if shape_kind == "rect" or hl < 8.0 or hw < 4.5:
+        return make_rect_poly(cx, cy, ang, hl, hw)
+    ca, sa = math.cos(ang), math.sin(ang)
+    if shape_kind == "stepped_slab":
+        # Modern Chinese 高层板楼 (凸字退台板楼: central bay projects slightly south & north)
+        w0 = hw * 0.86
+        w1 = hw * 1.12
+        x1 = hl * 0.42
+        local = [
+            (-hl, -w0), (-x1, -w0), (-x1, -w1), (x1, -w1), (x1, -w0), (hl, -w0),
+            (hl, w0), (x1, w0), (x1, w1), (-x1, w1), (-x1, w0), (-hl, w0),
+        ]
+    elif shape_kind == "wing_slab":
+        # Twin-wing Chinese slab with recessed central north lightwell & proud end wings (工字/凹槽板楼)
+        w_in = hw * 0.72
+        w_out = hw * 1.08
+        x1 = hl * 0.36
+        local = [
+            (-hl, -w_out), (-x1, -w_out), (-x1, -w_in), (x1, -w_in), (x1, -w_out), (hl, -w_out),
+            (hl, w_out), (x1 * 0.85, w_out), (x1 * 0.85, w_in * 1.18), (-x1 * 0.85, w_in * 1.18),
+            (-x1 * 0.85, w_out), (-hl, w_out),
+        ]
+    elif shape_kind == "point_cross":
+        # Chinese 点式高层 / 蝶形点楼 (stepped-corner cross/pinwheel massing)
+        c_x = hl * 0.62
+        c_y = hw * 0.62
+        hx = min(hl, hw * 1.45)
+        hy = max(hw, hx * 0.78)
+        cx_ = hx * 0.56
+        cy_ = hy * 0.56
+        local = [
+            (-cx_, -hy), (cx_, -hy), (cx_, -cy_), (hx, -cy_),
+            (hx, cy_), (cx_, cy_), (cx_, hy), (-cx_, hy),
+            (-cx_, cy_), (-hx, cy_), (-hx, -cy_), (-cx_, -cy_),
+        ]
+    elif shape_kind == "L_wing":
+        # Authentic corner L-shaped apartment / street-front mixed-use block
+        wx = hl * 0.32
+        wy = hw * 0.45
+        local = [
+            (-hl, -hw), (hl, -hw), (hl, wy), (wx, wy), (wx, hw * 1.35), (-hl, hw * 1.35),
+        ]
+    elif shape_kind == "walkup_stair":
+        # Classic 1990s-2000s 单元多层板楼 with 2 crisp projecting north stairwell bays (flush under pitched roof eaves)
+        st_d = min(0.55, hw * 0.10)
+        s0, s1 = -hl * 0.48, -hl * 0.24
+        s2, s3 = hl * 0.24, hl * 0.48
+        local = [
+            (-hl, -hw), (s0, -hw), (s0, -hw - st_d), (s1, -hw - st_d), (s1, -hw),
+            (s2, -hw), (s2, -hw - st_d), (s3, -hw - st_d), (s3, -hw), (hl, -hw),
+            (hl, hw), (-hl, hw),
+        ]
+    else:
+        return make_rect_poly(cx, cy, ang, hl, hw)
+    return [(cx + lx * ca - ly * sa, cy + lx * sa + ly * ca) for lx, ly in local]
+
+
+def poly_fits_rect_roof(poly, hl, hw):
+    """Return True only when a rectangular OBB pitched roof cleanly covers the footprint (never over L-wings!)."""
+    if len(poly) == 6:
+        return False
+    area = abs(poly_area(poly))
+    box_area = max(1e-6, 4.0 * hl * hw)
+    return (area / box_area) >= 0.86
+
+
 def pitched_roof_dict(cx, cy, ang, hl, hw, shape="gabled"):
     rh = max(1.8, min(4.6, hw * 0.55))
     return {"shape": shape, "h": round(rh, 2), "c": [round(cx, 2), round(cy, 2)], "a": round(ang, 4),
@@ -1597,7 +1682,7 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
         (NANHU_GATE_POS, 58.0, "nanhu_gate"),
         (MEMORIAL_POS, 105.0, "nanhu_memorial"),
         (GOV_POS, 125.0, "jiaxing_gov"),
-        (JIAXING_NO1_POS, 215.0, "jiaxing_no1_school"),
+        (JIAXING_NO1_POS, 175.0, "jiaxing_no1_school"),
         (YUEHE_POS, 18.0, "yuehe_quarter"),
         (ZICHENG_POS, 92.0, "zicheng_park"),
         ((-315.0, -935.0), 72.0, "zicheng_park_north"),
@@ -1616,14 +1701,14 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
         (AIRPORT_TERM_POS, 260.0, "jiaxing_airport"),
     ]
 
-    def can_place(pts, bb, allow_in_park=False, water_margin=0.0, tight=False, allow_yuehe=False):
+    def can_place(pts, bb, allow_in_park=False, water_margin=0.0, tight=False, allow_yuehe=False, real_bldg=False):
         cen = centroid(pts)
         if not in_active(cen):
             return False
         # Preserve Yuehe Historic Quarter (月河历史街区) strictly for authentic 1-2 story Jiangnan heritage houses (zero modern towers!)
         if not allow_yuehe and -898.0 <= cen[0] <= -382.0 and -2272.0 <= cen[1] <= -1848.0:
             return False
-        # Never place synthetic residential/commercial blocks inside the Airport airside precinct
+        # Never place residential/commercial blocks inside the Airport airside precinct
         if not allow_in_park and in_airport_precinct(cen):
             return False
         for lpos, lrad, _ in lm_zones:
@@ -1636,25 +1721,31 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
         by1 = max(q[1] for q in pts)
         if any(bx1 > x0 and bx0 < x1 and by1 > y0 and by0 < y1 for (x0, y0, x1, y1) in ZS_RECTS + NH_RECTS):
             return False
-        # Keep the full Jiaxing South HSR Station + North Forecourt Plaza + Bus Transit Hub precinct clear of random blocks!
+        # Keep MAD Architects' 1:1 Jiaxing Station South Plaza circular green-roof pavilions & forest park
+        # (triangular plaza between SE tracks, 东方路 x=948, and 环城河 south canal y=-1040) clear of generic boxes!
+        if 650.0 <= cen[0] <= 948.0 and -1398.0 <= cen[1] <= -1040.0 and cen[1] > (-cen[0] - 485.0):
+            return False
+        # Keep the full Jiaxing South HSR Station + 1:1 Google Earth North Plaza precinct (Bus/Taxi Hubs,
+        # P2 Parking Garage, NE Grid-Frame Hotel, SW Atrium Building & W High-Rise Complex) 100% clear of
+        # overlapping generic satellite footprints!
         dx_s = cen[0] - SOUTH_STA_POS[0]
         dy_s = cen[1] - SOUTH_STA_POS[1]
         ca_s, sa_s = math.cos(0.4925), math.sin(0.4925)
         lx_s = dx_s * ca_s - dy_s * sa_s
         lz_s = dx_s * sa_s + dy_s * ca_s
-        if -160.0 <= lx_s <= 260.0 and -265.0 <= lz_s <= 80.0:
+        if -240.0 <= lx_s <= 272.0 and -362.0 <= lz_s <= 80.0:
             return False
-        # Keep the entire Jiaxing No.1 High School (嘉兴一中) campus + diagonal 纺工路 West Gate frontage wedge
-        # 100% free of blocking tall towers, AND clear the opposite 瀚林府邸 (Hanlin Residence) compound block!
+        # Keep the bespoke Jiaxing No.1 High School (嘉兴一中) campus and Hanlin Residence (瀚林府邸) inner courtyard
+        # clear of duplicate towers, while PRESERVING real 沿街商铺 strips lining both sides of 纺工路 & 赞成·学仕苑!
         def _in_no1_or_hanlin(qx, qy):
             x_fg = 1376.2 + (qy - 1260.2) * 0.2058
-            if 1162.0 <= qy <= 1602.0 and x_fg + 4.0 <= qx <= 1906.0:
+            if 1262.0 <= qy <= 1595.0 and x_fg + 14.0 <= qx <= 1898.0:
                 return True
-            if 1260.0 <= qy <= 1568.0 and 1150.0 <= qx <= x_fg - 10.0:
+            if 1285.0 <= qy <= 1545.0 and 1158.0 <= qx <= x_fg - 48.0:
                 return True
             return False
 
-        if _in_no1_or_hanlin(cen[0], cen[1]) or any(_in_no1_or_hanlin(p[0], p[1]) for p in pts):
+        if _in_no1_or_hanlin(cen[0], cen[1]):
             return False
         # Keep 少年路步行街 (Shaonian Pedestrian Street: 中山东路 -> 环城北路) corridor clear for bespoke arcades!
         if seg_dist(cen[0], cen[1], -445.0, -1065.0, -526.0, -1622.0)[0] < 22.0:
@@ -1662,8 +1753,9 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
         if any(seg_dist(p[0], p[1], -445.0, -1065.0, -526.0, -1622.0)[0] < 18.0 for p in pts):
             return False
         # Keep Jiaxing T1 open-cut U-trough tunnel ramps 100% free of surface buildings!
+        # East portal runs STRAIGHT NORTH down 纺工路/东方路 center median (993.3,-1075.3 -> 998.5,-1195.0)
         for (rax, ray, rbx, rby) in (
-            (997.81, -1170.11, 885.0, -1178.5),
+            (993.3, -1075.3, 998.5, -1195.0),
             (618.0, -1425.0, 596.91, -1523.54),
         ):
             if seg_dist(cen[0], cen[1], rax, ray, rbx, rby)[0] < 24.0:
@@ -1678,16 +1770,23 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
             for p in pts:
                 if seg_dist(p[0], p[1], ax, ay, bx, by)[0] < rw - 1.5:
                     return False
-        # Check road clearance
+        # Check road clearance (real satellite footprints sit right behind sidewalks; keep asphalt strictly clear)
+        rd_pad = 0.5 if real_bldg else 2.2
         for (ax, ay, bx, by, hw) in road_grid.query(bb[0] - 18, bb[1] - 18, bb[2] + 18, bb[3] + 18):
-            lim = hw + 2.2
-            if point_in_poly((ax + bx) * 0.5, (ay + by) * 0.5, pts):
+            lim = hw + rd_pad
+            if (not real_bldg or hw >= 5.2) and point_in_poly((ax + bx) * 0.5, (ay + by) * 0.5, pts):
                 return False
-            for p in pts:
-                if seg_dist(p[0], p[1], ax, ay, bx, by)[0] < lim:
-                    return False
-            if seg_dist(cen[0], cen[1], ax, ay, bx, by)[0] < lim:
+            if seg_dist(cen[0], cen[1], ax, ay, bx, by)[0] < (hw * 0.65 if real_bldg else lim):
                 return False
+            if not real_bldg:
+                for p in pts:
+                    if seg_dist(p[0], p[1], ax, ay, bx, by)[0] < lim:
+                        return False
+            else:
+                # For real buildings (already nudged off kerbs), reject only if a vertex still deeply intrudes into asphalt
+                for p in pts:
+                    if seg_dist(p[0], p[1], ax, ay, bx, by)[0] < max(0.0, hw - 1.8):
+                        return False
         # Check water clearance (including corners, edge midpoints & optional shoreline buffer margin!)
         w_pad = 4.0 + water_margin
         check_w_pts = [cen] + list(pts)
@@ -1727,6 +1826,29 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
                     return False
         return True
 
+    # Load 100% real-world satellite-extracted + OSM 3D building dataset (TUM GlobalBuildingAtlas LoD1, WGS-84)
+    # PLUS up-to-date 2021-2025 Amap real building footprints recovered across all of Jiaxing!
+    real_bldg_path = os.path.join(HERE, "osm_cache", "jiaxing_real_buildings.json")
+    amap_2025_path = os.path.join(HERE, "osm_cache", "jiaxing_amap_2025_buildings.json")
+    gba_real_buildings = []
+    osm_lod1_h = {}
+    if os.path.exists(real_bldg_path):
+        with open(real_bldg_path, "r", encoding="utf-8") as f_rb:
+            gba_real_buildings = json.load(f_rb)
+        for rb in gba_real_buildings:
+            if rb.get("s") == "osm" and rb.get("h", 0.0) > 1.0:
+                k_id = str(rb.get("k", ""))[3:-3]
+                if k_id.isdigit():
+                    osm_lod1_h[int(k_id)] = float(rb["h"])
+        print(f"Loaded {len(gba_real_buildings)} real Jiaxing buildings from {os.path.basename(real_bldg_path)}")
+    else:
+        print(f"WARNING: {real_bldg_path} not found — run tools/fetch_jiaxing_real_buildings.py first!")
+    if os.path.exists(amap_2025_path):
+        with open(amap_2025_path, "r", encoding="utf-8") as f_a25:
+            amap_2025 = json.load(f_a25)
+        gba_real_buildings.extend(amap_2025)
+        print(f"Loaded +{len(amap_2025)} brand-new 2021-2025 real buildings from {os.path.basename(amap_2025_path)}")
+
     # --- A. All real OSM buildings first ---
     osm_cnt = 0
     for wid, (refs, t) in ways.items():
@@ -1741,9 +1863,14 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
         xs = [p[0] for p in pts]
         ys = [p[1] for p in pts]
         bb = (min(xs), min(ys), max(xs), max(ys))
-        if not can_place(pts, bb, allow_in_park=True):
+        if not can_place(pts, bb, allow_in_park=True, real_bldg=True):
             continue
         kind = t.get("building", "yes")
+        is_sports_bldg = (t.get("leisure") in ("sports_hall", "stadium", "sports_centre") or
+                          kind in ("stadium", "grandstand") or
+                          (kind == "roof" and area > 2000.0))
+        if is_sports_bldg:
+            kind = "civic"
         h = None
         if t.get("height"):
             try:
@@ -1755,8 +1882,13 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
                 h = float(str(t["building:levels"]).split(";")[0]) * 3.3 + 1.0
             except ValueError:
                 h = None
+        if h is None and wid in osm_lod1_h:
+            raw_h = osm_lod1_h[wid]
+            h = raw_h if is_sports_bldg else (raw_h * 1.45 if raw_h < 12.0 else raw_h * 1.25)
         if h is None:
-            if kind in ("school", "university", "college", "hospital", "public", "civic"):
+            if is_sports_bldg:
+                h = 22.0
+            elif kind in ("school", "university", "college", "hospital", "public", "civic"):
                 h = 16.0 if area < 2500 else 22.0
             elif kind in ("commercial", "retail", "office"):
                 h = 18.0 if area < 1800 else 32.0
@@ -1767,216 +1899,598 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
             else:
                 h = 10.5 if area < 300 else (18.0 if area < 1200 else 26.0)
         h = max(4.0, min(140.0, h))
-        style = 0 if h >= 42.0 else (1 if kind in ("commercial", "retail", "school", "civic") else (3 if h <= 11.0 and area < 320 else 2))
+        style = 1 if is_sports_bldg else (0 if h >= 42.0 else (1 if kind in ("commercial", "retail", "school", "civic") else (3 if h <= 11.0 and area < 320 else 2)))
         b = {"pts": [rnd(p) for p in pts], "h": round(h, 1), "kind": kind, "style": style}
+        if is_sports_bldg:
+            b["colour"] = "#e2e6eb"
+            b["trim"] = "#4a525c"
         if t.get("name"):
             b["name"] = t["name"]
         if t.get("building:colour"):
             b["colour"] = t["building:colour"]
         if style == 3:
             o = obb(pts)
-            if o and abs(area) / (4.0 * o[3] * o[4] + 1e-6) > 0.72 and o[4] >= 2.8 and o[3] <= 34.0:
+            if o and abs(area) / (4.0 * o[3] * o[4] + 1e-6) > 0.84 and o[4] >= 2.8 and o[3] <= 34.0:
                 b["roof"] = pitched_roof_dict(*o)
                 b["roof_colour"] = "#333840"
+        if GE_SAMPLER.available:
+            ge = GE_SAMPLER.sample_footprint(pts)
+            if ge is not None:
+                if ge["roof_class"] == "steel_blue" and h <= 20.0:
+                    b["roof_colour"] = ge["roof_hex"]
+                    if "roof" not in b:
+                        o = obb(pts)
+                        if o and abs(area) / (4.0 * o[3] * o[4] + 1e-6) > 0.82:
+                            b["roof"] = pitched_roof_dict(*o)
+                            b["roof"]["h"] = round(max(1.2, min(2.4, o[4] * 0.28)), 2)
+                elif ge["roof_class"] == "terracotta_red" and h <= 24.0:
+                    b["roof_colour"] = ge["roof_hex"]
+                    if "roof" not in b:
+                        o = obb(pts)
+                        if o and abs(area) / (4.0 * o[3] * o[4] + 1e-6) > 0.84:
+                            b["roof"] = pitched_roof_dict(*o)
+                elif "roof" in b and ge["roof_class"] in ("dark_slate", "warm_tan"):
+                    b["roof_colour"] = ge["roof_hex"]
+        comp_osm = find_compound(*centroid(pts))
+        if comp_osm is not None and not b.get("name") and kind in ("apartments", "residential", "yes"):
+            b["name"] = comp_osm["name"]
+            if not b.get("colour") and comp_osm["wall"]:
+                b["colour"] = comp_osm["wall"]
+            if comp_osm["trim"]:
+                b["trim"] = comp_osm["trim"]
+            b["arch"] = comp_osm["arch_key"]
+        elif not b.get("colour"):
+            cx_o, cy_o = centroid(pts)
+            oh = (int(cx_o * 0.23) * 73856093 ^ int(cy_o * 0.23) * 19349663) & 0x7FFFFFFF
+            b["colour"] = ["#f0e4d0", "#eccfa8", "#f3efe6", "#e4eaf0", "#edd5b4", "#e4b292", "#e2e9e4", "#f4f1ea"][oh % 8]
         out.append(b)
         taken.add((bb[0], bb[1], bb[2], bb[3], pts), *bb)
         osm_cnt += 1
 
     rng = random.Random(20260521)
-    PALETTE_MODERN = ["#dcd8cf", "#cfc9be", "#d8d3c8", "#c8cfd6", "#e1ddd4", "#c5beb4"]
-    PALETTE_RES = ["#dfd7c8", "#d6c8b6", "#e4ded3", "#c9bfb2", "#d8cfc2", "#c8b9a6"]
-    PALETTE_JIANGNAN = ["#eae6de", "#e3dfd5", "#ece9e2", "#ded9ce"]
-    PALETTE_TOWER = ["#7c95ab", "#8ca3b8", "#6d8499", "#98aab8", "#b4bec6"]
-    # Facade schemes of Jiaxing compounds completed 2012-2025 (wall, trim): warm white / ivory / light warm grey
-    # 真石漆 and stone with dark grey or champagne lines; a few light-coffee and grey-white towers
-    PALETTE_ZH2026 = [
-        ("#e8e2d6", "#5b5e63"), ("#efe9dd", "#8a7a62"), ("#ddd6c9", "#4f5257"), ("#e4dccd", "#a08a68"),
-        ("#d6d3cc", "#44484e"), ("#ece8e1", "#6b6f75"), ("#d9cbb5", "#5a4c3c"), ("#e6ddd0", "#7d6a52"),
-        ("#cfcac2", "#3e4247"), ("#f1ede6", "#9a8d7a"),
+
+    def _lift_daylight_hex(hx, target_max=242):
+        """Scale wall hex proportionally up to bright daylight reflectance WITHOUT washing out hue saturation!"""
+        if not hx or not hx.startswith("#") or len(hx) != 7:
+            return hx
+        r = int(hx[1:3], 16)
+        g = int(hx[3:5], 16)
+        b_c = int(hx[5:7], 16)
+        mx = max(r, g, b_c, 1)
+        if mx < target_max:
+            sc = min(1.32, target_max / float(mx))
+            r = min(248, int(round(r * sc)))
+            g = min(248, int(round(g * sc)))
+            b_c = min(248, int(round(b_c * sc)))
+        return f"#{r:02x}{g:02x}{b_c:02x}"
+
+    # Bright, richly diverse Jiaxing daylight architectural palettes calibrated to Google Earth satellite imagery:
+    # distinct warm champagne-gold, sunlit apricot, terracotta-peach, crisp pure white, sky-blue Low-E glass,
+    # emerald-teal glass, pale butter-yellow, soft sage-cream, pearl-blue-silver & warm brick-red!
+    PALETTE_MODERN = [
+        "#f7f7f5", "#f5dfb8", "#d4e6f5", "#f0c294", "#f6edd6",
+        "#cde4df", "#e6ab86", "#dce8d8", "#f3d8a4", "#eaeef2",
     ]
+    PALETTE_RES = [
+        "#f5dfba", "#efbe8e", "#f7f3ea", "#d8e7f4", "#f4d29a",
+        "#e6a682", "#f4ead4", "#d6e6da", "#edb992", "#f1e3c4",
+    ]
+    PALETTE_JIANGNAN = ["#f7f4ed", "#f2ece0", "#f9f6f0", "#ede7da"]
+    PALETTE_TOWER = [
+        "#6eb0de", "#86c0e6", "#5fa2d2", "#d8e6f4", "#68b8b0",
+        "#e6eff7", "#c4dcf0", "#ebd8b0", "#7ebad8", "#f0f4f8",
+    ]
+    # Facade schemes of Jiaxing compounds (wall, trim): luminous AND unmistakably varied across blocks!
+    PALETTE_ZH2026 = [
+        ("#f6ead4", "#6b5a46"), ("#f5dba8", "#806242"), ("#f4f6f8", "#485260"), ("#f0be8e", "#7a523a"),
+        ("#d6e6f4", "#3c4c60"), ("#f7f4ec", "#565a62"), ("#e6a882", "#744a36"), ("#f4d69c", "#7c5e3e"),
+        ("#cde2dc", "#425852"), ("#f2e2c2", "#6e5a44"), ("#e8b48e", "#704c38"), ("#e2ebf4", "#465466"),
+    ]
+    GE_HUE_PALETTES = {
+        "bright_white": [("#f7f8fa", "#4a5360"), ("#f8f5ee", "#5c564e"), ("#eef3f8", "#445060"), ("#f4f2eb", "#58544c")],
+        "warm_cream":   [("#f6e2b8", "#785e42"), ("#f5d89e", "#806240"), ("#f7ebd0", "#6c5a46"), ("#f2cf94", "#7e5c3e")],
+        "terracotta":   [("#efb88e", "#7c4e38"), ("#e6a27c", "#764632"), ("#f2c49c", "#80543a"), ("#df9670", "#704230")],
+        "cool_silver":  [("#d6e6f4", "#3e4e62"), ("#cce0f2", "#3a4a5e"), ("#e4edf6", "#485666"), ("#c8dce8", "#3d5060")],
+        "blue_roof":    [("#d4e6f6", "#385270"), ("#c8dff4", "#344e6c"), ("#e2eef8", "#405874"), ("#c0daf0", "#364f6e")],
+        "warm_stone":   [("#f4e2c2", "#705c46"), ("#eed8b0", "#6c5640"), ("#d8e8dc", "#485e52"), ("#f2e8d4", "#64584a")],
+    }
 
     def zone_profile(px, py):
-        """Development profile of the ~220 m block a point lies in (one compound / developer design):
-        (type, tower floors, 洋房 floors, (wall, trim) scheme, compound id)."""
+        """Development profile of a point: uses real Google Maps/Earth surveyed Jiaxing compound
+        when available, otherwise deterministic ~220 m block developer profile."""
+        comp = find_compound(px, py)
+        if comp is not None:
+            arch = comp["arch"]
+            ak = comp["arch_key"]
+            hsh = abs(hash(comp["name"])) & 0x7FFFFFFF
+            f_lo, f_hi = arch["floors"]
+            tfl = f_lo + (hsh % max(1, f_hi - f_lo + 1))
+            y_lo, y_hi = arch.get("y_floors", arch["floors"])
+            yfl = y_lo + ((hsh // 13) % max(1, y_hi - y_lo + 1))
+            wall_c = _lift_daylight_hex(comp["wall"], 244) if comp["wall"] else arch["walls"][hsh % len(arch["walls"])]
+            trim_c = _lift_daylight_hex(comp["trim"], 130) if comp["trim"] else arch["trims"][(hsh // 7) % len(arch["trims"])]
+            roof_c = comp["roof"] or arch["roofs"][(hsh // 19) % len(arch["roofs"])]
+            if ak in ("old_walkup_red", "old_walkup_slate", "old_jiangnan"):
+                ctype = "walkup"
+            elif ak == "garden_yangfang":
+                ctype = "yangfang"
+            elif ak == "mixed_modern":
+                ctype = "mixed"
+            else:
+                ctype = "tower"
+            return ctype, tfl, yfl, (wall_c, trim_c), 800000 + (hsh % 199999), comp, roof_c
+
         cx_i, cy_i = int(math.floor(px / 220.0)), int(math.floor(py / 220.0))
         hsh = (cx_i * 73856093) ^ (cy_i * 19349663) ^ 0x5bd1e995
         hsh &= 0x7FFFFFFF
         r_t = (hsh % 1000) / 1000.0
         if in_zhonghuan(px, py):
-            ctype = "walkup" if r_t < 0.66 else ("yangfang" if r_t < 0.82 else "tower")
+            ctype = "walkup" if r_t < 0.68 else ("yangfang" if r_t < 0.85 else "tower")
         else:
-            ctype = "tower" if r_t < 0.62 else ("yangfang" if r_t < 0.84 else "mixed")
-        tfl = [18, 22, 24, 26, 28, 30, 32, 33][(hsh // 1000) % 8]
+            ctype = "tower" if r_t < 0.56 else ("yangfang" if r_t < 0.80 else "mixed")
+        tfl = [16, 18, 20, 22, 24, 26, 28, 30][(hsh // 1000) % 8]
         yfl = [6, 7, 8, 9, 11][(hsh // 8000) % 5]
         sch = PALETTE_ZH2026[(hsh // 40000) % len(PALETTE_ZH2026)]
-        return ctype, tfl, yfl, sch, 900000 + (hsh % 899999)
+        rc = ["#3c424b", "#924232", "#474d56", "#863b2d"][(hsh // 13000) % 4]
+        return ctype, tfl, yfl, sch, 900000 + (hsh % 899999), None, rc
 
-    def profile_building(poly, px, py, row_hint, b_ang, hl, hw):
-        ctype, tfl, yfl, sch, cid = zone_profile(px, py)
-        # mixed compounds: towers on the north half of the cell (+y is south), 洋房 on the south half
-        tower = ctype == "tower" or (ctype == "mixed" and (py / 220.0 - math.floor(py / 220.0)) < 0.5)
+    def choose_shape(px, py, ctype, row_hint, is_tower):
+        """Pick an authentic Chinese building footprint shape for this building."""
+        comp = find_compound(px, py)
+        hsh = (int(px * 0.37) * 2654435761 ^ int(py * 0.41) * 2246822519) & 0x7FFFFFFF
+        if comp is not None:
+            shapes = comp["arch"]["shapes"]
+            sh = shapes[hsh % len(shapes)]
+            if not is_tower and sh in ("point_cross", "wing_slab"):
+                return "walkup_stair" if (hsh % 3 != 0) else "rect"
+            return sh
+        if is_tower:
+            return ["stepped_slab", "wing_slab", "point_cross", "stepped_slab", "rect"][hsh % 5]
         if ctype == "walkup":
-            fl = [5, 6, 6, 6, 7][cid % 5]
-            b = {"pts": [rnd(p) for p in poly], "h": fl * 3.0 + 1.0, "kind": "apartments", "style": 3,
-                 "colour": PALETTE_RES[cid % len(PALETTE_RES)], "cpd": cid}
-            if cid % 2 == 0:  # 平改坡: about half the old compounds got pitched roofs
-                b["roof"] = pitched_roof_dict(px, py, b_ang, hl, hw, "gabled")
-                b["roof_colour"] = ["#40464e", "#6e4236", "#3a4048"][cid % 3]
+            return ["walkup_stair", "walkup_stair", "rect", "L_wing"][hsh % 4]
+        return ["walkup_stair", "rect", "stepped_slab"][hsh % 3]
+
+    def apply_google_earth_roof(b, poly, px, py, b_ang, hl, hw, is_tower):
+        """Refine roof color & industrial/pitched roof type using real Google Earth z16 satellite pixels."""
+        if not GE_SAMPLER.available:
             return b
-        if tower:
-            fl = max(11, tfl + rng.choice([0, 0, 0, -1, 1, -2, 2]))
-            b = {"pts": [rnd(p) for p in poly], "h": fl * 3.0 + 1.5, "kind": "apartments", "style": 2,
-                 "colour": sch[0], "trim": sch[1], "cpd": cid}
-        else:
-            b = {"pts": [rnd(p) for p in poly], "h": yfl * 3.0 + 1.2, "kind": "apartments", "style": 2,
-                 "colour": sch[0], "trim": sch[1], "cpd": cid, "yangfang": True,
-                 "roof": pitched_roof_dict(px, py, b_ang, hl, hw, "hipped"),
-                 "roof_colour": ["#3c4148", "#454a52", "#353a40"][cid % 3]}
+        ge = GE_SAMPLER.sample_footprint(poly)
+        if ge is None:
+            return b
+        rcls = ge["roof_class"]
+        if rcls == "steel_blue" and not is_tower and b["h"] <= 20.0:
+            # Real blue steel-roofed workshop / gym / warehouse visible on Google Earth
+            b["kind"] = "industrial"
+            b["style"] = 1
+            b["h"] = min(float(b["h"]), 12.5)
+            b["colour"] = "#c2c7cc"
+            if poly_fits_rect_roof(poly, hl, hw):
+                b["roof"] = pitched_roof_dict(px, py, b_ang, hl, hw, "gabled")
+                b["roof"]["h"] = round(max(1.2, min(2.4, hw * 0.28)), 2)
+                b["roof_colour"] = ge["roof_hex"]
+            b.pop("yangfang", None)
+            return b
+        if "roof" in b and rcls in ("terracotta_red", "dark_slate", "warm_tan"):
+            # Let real Google Earth roof color override generic default when not explicitly pinned by compound survey
+            if not b.get("_roof_pinned"):
+                b["roof_colour"] = ge["roof_hex"]
+        elif (not is_tower) and b["h"] <= 24.0 and rcls == "terracotta_red" and "roof" not in b and poly_fits_rect_roof(poly, hl, hw):
+            # Google Earth clearly shows a terracotta-red pitched roof here (平改坡!)
+            b["roof"] = pitched_roof_dict(px, py, b_ang, hl, hw, "gabled")
+            b["roof_colour"] = ge["roof_hex"]
         return b
 
-    # --- B. Authentic Chinese Residential Compounds (小区) & Commercial Zones from OSM landuse ---
-    lu_cnt = 0
-    for lu, ring in landuse_zones:
-        xs = [p[0] for p in ring]
-        ys = [p[1] for p in ring]
-        cx0, cy0 = centroid(ring)
-        if not in_active((cx0, cy0)):
-            continue
-        dist_old = math.hypot(cx0 - OLD_CITY_CENTER[0], cy0 - OLD_CITY_CENTER[1])
-        if lu == "residential":
-            # Chinese 小区: neat east-west oriented parallel south-facing slab apartment buildings (板楼)!
-            is_old = dist_old < 1450.0 or (in_zhonghuan(cx0, cy0) and zone_profile(cx0, cy0)[0] == "walkup")
-            if is_old:
-                # 1990s-2000s 老小区: 5-7 storey walk-up slabs with pitched tile roofs
-                step_x, step_y = 34.0, 28.0
-                y = min(ys) + step_y * 0.5
-                while y < max(ys) - 8.0:
-                    x = min(xs) + step_x * 0.5
-                    while x < max(xs) - 8.0:
-                        if point_in_poly(x, y, ring):
-                            hl = rng.uniform(11.0, 14.5)
-                            hw = rng.uniform(5.5, 7.2)
-                            ang = rng.uniform(-0.04, 0.04)  # South-facing!
-                            pts = make_rect_poly(x, y, ang, hl, hw)
-                            pxs = [p[0] for p in pts]
-                            pys = [p[1] for p in pts]
-                            bb = (min(pxs), min(pys), max(pxs), max(pys))
-                            if can_place(pts, bb):
-                                h = rng.choice([15.0, 18.0, 21.0])
-                                out.append({"pts": [rnd(p) for p in pts], "h": h, "kind": "apartments", "style": 3,
-                                            "colour": rng.choice(PALETTE_RES),
-                                            "roof": pitched_roof_dict(x, y, ang, hl, hw, "gabled"),
-                                            "roof_colour": rng.choice(["#40464e", "#6e4236", "#3a4048"])})
-                                taken.add((bb[0], bb[1], bb[2], bb[3], pts), *bb)
-                                lu_cnt += 1
-                        x += step_x
-                    y += step_y
-                continue
-            # 2010s-2020s 新小区 as built around Jiaxing today: one developer design per compound — 18-33 storey
-            # high-rise slabs (高层), 6-11 storey 洋房 with grey hipped roofs, or both (towers to the north, 洋房 to
-            # the south); one facade scheme for the whole compound; row spacing follows the sunlight rule
-            cid = lu_cnt * 7919 + int(cx0 * 3.1 + cy0 * 1.7)
-            r_t = rng.random()
-            ctype = "tower" if r_t < 0.56 else ("yangfang" if r_t < 0.80 else "mixed")
-            tower_fl = rng.choice([18, 22, 24, 26, 28, 30, 32, 33])
-            yang_fl = rng.choice([6, 7, 8, 9, 11])
-            scheme = rng.choice(PALETTE_ZH2026)
-            span_y = max(1.0, max(ys) - min(ys))
-            y = min(ys) + 13.0
-            row = 0
-            while y < max(ys) - 8.0:
-                frac = (y - min(ys)) / span_y  # 0 = north edge (+y is south)
-                tower_row = ctype == "tower" or (ctype == "mixed" and frac < 0.5)
-                if tower_row:
-                    fl_row = tower_fl
-                    h_row = fl_row * 3.0 + 1.5
-                    step_x = rng.uniform(52.0, 60.0)
-                    step_y = min(74.0, max(42.0, 0.56 * h_row + 16.0))
-                else:
-                    fl_row = yang_fl
-                    h_row = fl_row * 3.0 + 1.2
-                    step_x = rng.uniform(38.0, 44.0)
-                    step_y = 30.0 + fl_row * 0.9
-                x = min(xs) + step_x * 0.5 + (step_x * 0.25 if row % 2 else 0.0)
-                while x < max(xs) - 8.0:
-                    if point_in_poly(x, y, ring):
-                        if tower_row:
-                            hl = rng.uniform(15.5, 21.0)
-                            hw = rng.uniform(7.2, 8.6)
-                            fl = max(11, fl_row + rng.choice([0, 0, 0, -1, 1, -2, 2]))
-                            h = fl * 3.0 + 1.5
-                        else:
-                            hl = rng.uniform(12.0, 15.5)
-                            hw = rng.uniform(6.8, 7.8)
-                            h = fl_row * 3.0 + 1.2
-                        ang = rng.uniform(-0.03, 0.03)
-                        pts = make_rect_poly(x, y, ang, hl, hw)
-                        pxs = [p[0] for p in pts]
-                        pys = [p[1] for p in pts]
-                        bb = (min(pxs), min(pys), max(pxs), max(pys))
-                        if can_place(pts, bb):
-                            b = {"pts": [rnd(p) for p in pts], "h": h, "kind": "apartments", "style": 2,
-                                 "colour": scheme[0], "trim": scheme[1], "cpd": cid}
-                            if not tower_row:
-                                b["roof"] = pitched_roof_dict(x, y, ang, hl, hw, "hipped")
-                                b["roof_colour"] = rng.choice(["#3c4148", "#454a52", "#353a40"])
-                                b["yangfang"] = True
-                            out.append(b)
-                            taken.add((bb[0], bb[1], bb[2], bb[3], pts), *bb)
-                            lu_cnt += 1
-                    x += step_x
-                y += step_y
-                row += 1
-        elif lu in ("commercial", "retail", "governmental"):
-            step = 44.0
-            y = min(ys) + 20.0
-            while y < max(ys) - 12.0:
-                x = min(xs) + 20.0
-                while x < max(xs) - 12.0:
-                    if point_in_poly(x, y, ring):
-                        hl = rng.uniform(13.0, 19.0)
-                        hw = rng.uniform(10.0, 15.0)
-                        pts = make_rect_poly(x, y, 0.0, hl, hw)
-                        pxs = [p[0] for p in pts]
-                        pys = [p[1] for p in pts]
-                        bb = (min(pxs), min(pys), max(pxs), max(pys))
-                        if can_place(pts, bb):
-                            h = rng.choice([22.0, 32.0, 48.0, 64.0, 82.0])
-                            out.append({
-                                "pts": [rnd(p) for p in pts], "h": h, "kind": "office" if h >= 40 else "commercial",
-                                "style": 0 if h >= 40 else 1,
-                                "colour": rng.choice(PALETTE_TOWER if h >= 40 else PALETTE_MODERN),
-                            })
-                            taken.add((bb[0], bb[1], bb[2], bb[3], pts), *bb)
-                            lu_cnt += 1
-                    x += step
-                y += step
-        elif lu == "industrial":
-            step = 48.0
-            y = min(ys) + 22.0
-            while y < max(ys) - 12.0:
-                x = min(xs) + 22.0
-                while x < max(xs) - 12.0:
-                    if point_in_poly(x, y, ring):
-                        hl = rng.uniform(14.0, 21.0)
-                        hw = rng.uniform(9.0, 13.0)
-                        pts = make_rect_poly(x, y, 0.0, hl, hw)
-                        pxs = [p[0] for p in pts]
-                        pys = [p[1] for p in pts]
-                        bb = (min(pxs), min(pys), max(pxs), max(pys))
-                        if can_place(pts, bb):
-                            out.append({
-                                "pts": [rnd(p) for p in pts], "h": rng.choice([9.0, 11.5, 14.0]),
-                                "kind": "industrial", "style": 2, "colour": "#bfc6cc",
-                            })
-                            taken.add((bb[0], bb[1], bb[2], bb[3], pts), *bb)
-                            lu_cnt += 1
-                    x += step
-                y += step
+    def profile_building(poly, px, py, row_hint, b_ang, hl, hw):
+        ctype, tfl, yfl, sch, cid, comp, rc_default = zone_profile(px, py)
+        # mixed compounds: towers on the north half of the cell (+y is south), 洋房 on the south half
+        if comp is not None and ctype == "mixed":
+            bx0, by0, bx1, by1 = comp["box"]
+            frac_y = (py - by0) / max(1.0, by1 - by0)
+            tower = frac_y < 0.52
+        else:
+            tower = ctype == "tower" or (ctype == "mixed" and (py / 220.0 - math.floor(py / 220.0)) < 0.5)
+        roof_ok = poly_fits_rect_roof(poly, hl, hw)
 
-    # --- B2. Authentic Dense Continuous 1-2 Story Yuehe Historic Quarter (月河历史街区 连排粉墙黛瓦水乡民居) ---
-    # Packs hundreds of authentic shoulder-to-shoulder 1-2 story (4.2m..7.2m) Jiangnan watertown rowhouses
-    # strictly on DRY land lining every pedestrian stone alley & canal bank!
+        if ctype == "walkup":
+            if comp is not None:
+                f_lo, f_hi = comp["arch"]["floors"]
+                fl = f_lo + ((cid + int(abs(px) * 0.1)) % max(1, f_hi - f_lo + 1))
+                ak = comp["arch_key"]
+                wall_c, trim_c = sch
+                b = {
+                    "pts": [rnd(p) for p in poly],
+                    "h": round(fl * 3.0 + 1.0, 1),
+                    "kind": "apartments",
+                    "style": 3 if ak == "old_jiangnan" else 2,
+                    "colour": wall_c,
+                    "trim": trim_c,
+                    "cpd": cid,
+                    "arch": ak,
+                    "name": comp["name"],
+                }
+                if roof_ok and (ak == "old_jiangnan" or (cid + int(abs(py) * 0.05)) % 4 != 3):
+                    b["roof"] = pitched_roof_dict(px, py, b_ang, hl, hw + (0.28 if len(poly) == 12 else 0.0), comp["arch"]["roof_shape"] or "gabled")
+                    b["roof_colour"] = rc_default
+                    b["_roof_pinned"] = True
+                return apply_google_earth_roof(b, poly, px, py, b_ang, hl, hw, False)
+            fl = [5, 6, 6, 6, 7][cid % 5]
+            b = {
+                "pts": [rnd(p) for p in poly],
+                "h": fl * 3.0 + 1.0,
+                "kind": "apartments",
+                "style": 2,
+                "colour": PALETTE_RES[cid % len(PALETTE_RES)],
+                "trim": "#554c44",
+                "cpd": cid,
+                "arch": "old_walkup_slate",
+            }
+            if roof_ok and cid % 3 != 2:  # 平改坡: most old compounds in Jiaxing have pitched roofs
+                b["roof"] = pitched_roof_dict(px, py, b_ang, hl, hw + (0.28 if len(poly) == 12 else 0.0), "gabled")
+                b["roof_colour"] = rc_default
+            return apply_google_earth_roof(b, poly, px, py, b_ang, hl, hw, False)
+
+        if tower:
+            fl = max(11, tfl + rng.choice([0, 0, 0, -1, 1, -2, 2]))
+            ak = comp["arch_key"] if comp is not None else "modern_warm_slab"
+            b = {
+                "pts": [rnd(p) for p in poly],
+                "h": round(fl * 3.0 + 1.5, 1),
+                "kind": "apartments",
+                "style": 2,
+                "colour": sch[0],
+                "trim": sch[1],
+                "cpd": cid,
+                "arch": ak,
+            }
+            if comp is not None:
+                b["name"] = comp["name"]
+            return b
+
+        # 洋房 (6-11F hipped-roof mid-rise)
+        ak = comp["arch_key"] if comp is not None else "garden_yangfang"
+        b = {
+            "pts": [rnd(p) for p in poly],
+            "h": round(yfl * 3.0 + 1.2, 1),
+            "kind": "apartments",
+            "style": 2,
+            "colour": sch[0],
+            "trim": sch[1],
+            "cpd": cid,
+            "arch": ak,
+        }
+        if roof_ok:
+            b["yangfang"] = True
+            b["roof"] = pitched_roof_dict(px, py, b_ang, hl, hw + (0.28 if len(poly) == 12 else 0.0), "hipped")
+            b["roof_colour"] = rc_default if comp is not None else ["#3a3f46", "#46403b", "#333840"][cid % 3]
+        if comp is not None:
+            b["name"] = comp["name"]
+            b["_roof_pinned"] = True
+        return apply_google_earth_roof(b, poly, px, py, b_ang, hl, hw, False)
+
+    # --- B. 100% REAL Satellite-Extracted Jiaxing Buildings (TUM GlobalBuildingAtlas LoD1, ZERO random infill!) ---
+    # Every building footprint below is an actual real-world structure observed in satellite imagery of Jiaxing,
+    # enriched with its real LoD1 height, real Google Maps compound identity & palette, and Google Earth roof color!
+    def calibrate_real_height(gba_h, area_m2, comp, cx, cy):
+        """Convert PlanetScope 3m LoD1 building height (which compresses mid/high-rise heights) into realistic
+        Jiaxing building heights while strictly preserving real height differences between low podiums,
+        walk-ups, 洋房, and high-rise towers."""
+        if comp is not None:
+            arch = comp["arch"]
+            ak = comp["arch_key"]
+            # Real 1-2F gatehouses, substations, or commercial podiums inside a compound stay low
+            if gba_h < 4.6 or (area_m2 < 125.0 and gba_h < 6.0):
+                return round(max(4.5, min(8.2, gba_h * 1.45)), 1), "podium"
+            f_lo, f_hi = arch["floors"]
+            if ak == "mixed_modern":
+                # Separate real towers vs real 洋房 inside mixed compounds by their real satellite LoD1 height!
+                if gba_h >= 12.2:
+                    t = max(0.0, min(1.0, (gba_h - 12.2) / 14.0))
+                    fl = round(f_lo + t * (f_hi - f_lo))
+                    return round(fl * 3.0 + 1.5, 1), "tower"
+                y_lo, y_hi = arch.get("y_floors", (6, 11))
+                t = max(0.0, min(1.0, (gba_h - 5.5) / 6.7))
+                fl = round(y_lo + t * (y_hi - y_lo))
+                return round(fl * 3.0 + 1.2, 1), "yangfang"
+            if ak in ("old_walkup_red", "old_walkup_slate", "old_jiangnan"):
+                t = max(0.0, min(1.0, (gba_h - 5.0) / 8.5))
+                fl = round(f_lo + t * (f_hi - f_lo))
+                return round(fl * 3.0 + 1.0, 1), "walkup"
+            if ak == "garden_yangfang":
+                t = max(0.0, min(1.0, (gba_h - 6.0) / 9.5))
+                fl = round(f_lo + t * (f_hi - f_lo))
+                return round(fl * 3.0 + 1.2, 1), "yangfang"
+            # Modern high-rise / Art-Deco tower compounds
+            t = max(0.0, min(1.0, (gba_h - 6.5) / 17.0))
+            fl = round(f_lo + t * (f_hi - f_lo))
+            return round(fl * 3.0 + 1.5, 1), "tower"
+
+        # Outside surveyed named compounds: calibrate directly from real GBA LoD1 height + footprint area
+        if area_m2 >= 2800.0 and gba_h < 14.5:
+            return round(max(7.5, min(16.0, gba_h * 1.15)), 1), "industrial"
+        if gba_h < 4.5:
+            return round(max(4.4, gba_h * 1.45), 1), "low"
+        if gba_h < 11.5:
+            return round(gba_h * 1.85, 1), "walkup"
+        if gba_h < 22.0:
+            return round(gba_h * 2.05, 1), "midrise"
+        return round(min(115.0, gba_h * 2.25), 1), "tower"
+
+    # Build quick landuse lookup for classifying non-compound industrial / commercial zones & rural farmland
+    lu_ind_grid = Grid(160.0)
+    lu_com_grid = Grid(160.0)
+    for lu_k, lu_ring in landuse_zones:
+        lxs = [p[0] for p in lu_ring]
+        lys = [p[1] for p in lu_ring]
+        if lu_k == "industrial":
+            lu_ind_grid.add(lu_ring, min(lxs), min(lys), max(lxs), max(lys))
+        elif lu_k in ("commercial", "retail", "governmental"):
+            lu_com_grid.add(lu_ring, min(lxs), min(lys), max(lxs), max(lys))
+
+    # Authentic sunlit 1980s-early-1990s "老破小" weathered concrete / faded-tile palettes & bright rural Jiangnan villa palettes
+    LAOPOXIAO_PALETTES = [
+        ("#e0dace", "#5c5852"),
+        ("#e8dec6", "#665e52"),
+        ("#d8ddd8", "#555a56"),
+        ("#e8d0ba", "#6a5a4d"),
+        ("#d5dbe2", "#525862"),
+        ("#e5d7be", "#625a4e"),
+    ]
+    LAOPOXIAO_NAMED_KEYS = (
+        "勤俭", "三水湾", "吉水", "新嘉", "春波", "禾兴", "瓶山", "府南", "建国",
+        "东升", "百花", "文昌", "栅堰", "菜花泾", "杉青闸", "烟雨", "南杨", "紫阳",
+        "翠柳", "桂苑", "梅湾", "纺工", "城南", "竹桥", "松鹤", "光明", "荷花堤",
+    )
+    RURAL_PALETTES = [
+        ("#f6f2e8", "#e2dfd8"),
+        ("#f8f4ec", "#e6e3dc"),
+        ("#f2e8d2", "#dfd9ce"),
+        ("#eef1ed", "#dce0dc"),
+        ("#f5e9d0", "#e2dcd0"),
+        ("#f0e1ce", "#ded7cc"),
+    ]
+    RURAL_ROOFS = ["#3a3f48", "#8a4232", "#395574", "#45423e"]
+
+    real_sat_cnt = 0
+    rural_sb_cnt = 0
+    laopoxiao_cnt = 0
+    for rb in gba_real_buildings:
+        src = rb.get("s", "")
+        # Skip stale OSM entries that already exist in our fresher jiaxing_osm.json (or were fixed to landuse=residential!)
+        if src == "osm":
+            k_id = str(rb.get("k", ""))[3:-3]
+            if k_id.isdigit() and int(k_id) in ways:
+                continue
+        gba_h = float(rb.get("h", 0.0))
+        raw_pts = rb.get("pts", [])
+        if len(raw_pts) < 3:
+            continue
+        pts = simplify_ring([(float(p[0]), float(p[1])) for p in raw_pts], 0.65)
+        if len(pts) < 3:
+            pts = [(float(p[0]), float(p[1])) for p in raw_pts]
+        area = abs(poly_area(pts))
+        if area < 24.0:
+            continue
+        # Restore real low-rise rural village self-built houses (1.4m..2.8m GBA LoD1 heights, 36..280 m2)
+        if gba_h < 2.8 and not (1.4 <= gba_h and 36.0 <= area <= 280.0):
+            continue
+        cx, cy = centroid(pts)
+        if not in_active((cx, cy)):
+            continue
+        # Guard against rare erroneous mega-compound polygons (>25,000 m2 inside residential zones)
+        comp = find_compound(cx, cy)
+        if area > 25000.0 and (comp is not None or in_zhonghuan(cx, cy)):
+            continue
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        bb = (min(xs), min(ys), max(xs), max(ys))
+        # Gently pull back any real street-front 沿街商铺 vertices that slightly touch a widened road carriageway
+        # (up to 6.5m behind kerb) so we NEVER delete real 100-220m street-front commercial strips!
+        near_rds = road_grid.query(bb[0] - 18, bb[1] - 18, bb[2] + 18, bb[3] + 18)
+        if near_rds:
+            nudged_pts = []
+            moved = False
+            for (px, py) in pts:
+                nx_p, ny_p = px, py
+                for (rax, ray, rbx, rby, rhw) in near_rds:
+                    dd, tt = seg_dist(nx_p, ny_p, rax, ray, rbx, rby)
+                    if dd < rhw + 0.65:
+                        qx = rax + (rbx - rax) * tt
+                        qy = ray + (rby - ray) * tt
+                        vx, vy = nx_p - qx, ny_p - qy
+                        vl = math.hypot(vx, vy)
+                        if vl < 1e-4:
+                            vx, vy = cx - qx, cy - qy
+                            vl = math.hypot(vx, vy) or 1.0
+                        push = min(10.5, (rhw + 0.95) - dd)
+                        if push > 0.0:
+                            nx_p += (vx / vl) * push
+                            ny_p += (vy / vl) * push
+                            moved = True
+                nudged_pts.append((nx_p, ny_p))
+            if moved and abs(poly_area(nudged_pts)) >= 24.0:
+                pts = nudged_pts
+                xs = [p[0] for p in pts]
+                ys = [p[1] for p in pts]
+                bb = (min(xs), min(ys), max(xs), max(ys))
+                cx, cy = centroid(pts)
+        if not can_place(pts, bb, allow_in_park=False, water_margin=1.5, real_bldg=True):
+            continue
+
+        zt, _tfl, _yfl, sch, cid, comp_z, rc_default = zone_profile(cx, cy)
+        cal_h, role = calibrate_real_height(gba_h, area, comp_z, cx, cy)
+        in_ind = any(point_in_poly(cx, cy, lr) for lr in lu_ind_grid.query(cx - 5, cy - 5, cx + 5, cy + 5))
+        in_com = any(point_in_poly(cx, cy, lr) for lr in lu_com_grid.query(cx - 5, cy - 5, cx + 5, cy + 5))
+        o = obb(pts)
+        b_ang = o[2] if o else 0.0
+        hl = o[3] if o else math.sqrt(area) * 0.5
+        hw = o[4] if o else math.sqrt(area) * 0.5
+        fill_ratio = area / max(1e-6, 4.0 * hl * hw)
+        roof_fit = (o is not None) and (fill_ratio >= 0.87) and (hw >= 2.6) and (hl <= 48.0)
+
+        # Detect real Jiangnan Rural Self-Built Villa Houses (农村自建房: compact 2-3F footprints outside old-city core!)
+        is_rural_house = (
+            comp_z is None
+            and not in_ind
+            and not in_com
+            and not in_zhonghuan(cx, cy)
+            and 36.0 <= area <= 290.0
+            and gba_h <= 7.8
+            and hl <= 14.5
+            and hw <= 10.5
+        )
+
+        # Sample Google Earth satellite hue so non-named buildings match real satellite colors!
+        ge_hue = GE_SAMPLER.sample_wall_hue(pts) if (comp_z is None and GE_SAMPLER.available) else None
+        if ge_hue is not None and ge_hue in GE_HUE_PALETTES:
+            hue_list = GE_HUE_PALETTES[ge_hue]
+            sch = hue_list[(cid + int(abs(cx) * 0.05)) % len(hue_list)]
+
+        # Classify authentic architectural kind, style, wall/trim colors, and roof
+        if is_rural_house:
+            r_h = round(max(6.4, min(10.5, gba_h * 1.25 + 3.2)), 1)
+            r_wall, r_trim = RURAL_PALETTES[(cid + int(abs(cx) * 0.13 + abs(cy) * 0.17)) % len(RURAL_PALETTES)]
+            b = {
+                "pts": [rnd(p) for p in pts],
+                "h": r_h,
+                "kind": "house",
+                "style": 3,
+                "colour": r_wall,
+                "trim": r_trim,
+                "arch": "rural_selfbuilt",
+            }
+            if roof_fit:
+                rshape = "gabled" if ((int(abs(cx)) + int(abs(cy))) % 3 != 0) else "hipped"
+                b["roof"] = pitched_roof_dict(o[0], o[1], o[2], o[3], o[4], rshape)
+                b["roof_colour"] = RURAL_ROOFS[(cid + int(abs(cx) * 0.1)) % len(RURAL_ROOFS)]
+            is_tw = False
+            rural_sb_cnt += 1
+        elif role == "industrial" or (in_ind and comp_z is None and cal_h <= 18.0):
+            # Bright concrete/steel factory halls matching Google Earth (blue corrugated steel roofs / bright silver / brick!)
+            ind_wall = "#e8ecf0" if ge_hue != "terracotta" else "#e2cab8"
+            b = {
+                "pts": [rnd(p) for p in pts],
+                "h": min(cal_h, 15.0),
+                "kind": "industrial",
+                "style": 1,
+                "colour": ind_wall,
+                "trim": "#5a6470",
+            }
+            if roof_fit and ge_hue == "blue_roof":
+                b["roof"] = pitched_roof_dict(o[0], o[1], o[2], o[3], o[4], "gabled")
+                b["roof_colour"] = "#4f86cc"
+            is_tw = False
+        elif in_com and comp_z is None and (cal_h >= 24.0 or area >= 1100.0):
+            b = {
+                "pts": [rnd(p) for p in pts],
+                "h": cal_h,
+                "kind": "office" if cal_h >= 40.0 else "commercial",
+                "style": 0 if cal_h >= 42.0 else 1,
+                "colour": PALETTE_TOWER[cid % len(PALETTE_TOWER)] if cal_h >= 42.0 else (sch[0] if ge_hue else PALETTE_MODERN[cid % len(PALETTE_MODERN)]),
+            }
+            is_tw = cal_h >= 30.0
+        elif role == "podium" or (role == "low" and area < 260.0 and cal_h <= 9.5):
+            # Real 1-2F Jiangnan house / compound gatehouse / low street commercial shop
+            is_jn = (comp_z is not None and comp_z["arch_key"] == "old_jiangnan") or (in_zhonghuan(cx, cy) and area < 220.0)
+            b = {
+                "pts": [rnd(p) for p in pts],
+                "h": cal_h,
+                "kind": "house" if is_jn else "commercial",
+                "style": 3 if is_jn else 1,
+                "colour": PALETTE_JIANGNAN[cid % len(PALETTE_JIANGNAN)] if is_jn else sch[0],
+                "trim": sch[1],
+            }
+            if is_jn and roof_fit:
+                b["roof"] = pitched_roof_dict(o[0], o[1], o[2], o[3], o[4], "gabled")
+                b["roof_colour"] = "#2f343b"
+            is_tw = False
+        elif role == "tower" or cal_h >= 34.0:
+            ak = comp_z["arch_key"] if comp_z is not None else "modern_warm_slab"
+            b = {
+                "pts": [rnd(p) for p in pts],
+                "h": cal_h,
+                "kind": "apartments",
+                "style": 2,
+                "colour": sch[0],
+                "trim": sch[1],
+                "cpd": cid,
+                "arch": ak,
+            }
+            is_tw = True
+        elif role == "yangfang" or (role == "midrise" and not in_zhonghuan(cx, cy)):
+            ak = comp_z["arch_key"] if comp_z is not None else "garden_yangfang"
+            b = {
+                "pts": [rnd(p) for p in pts],
+                "h": cal_h,
+                "kind": "apartments",
+                "style": 2,
+                "colour": sch[0],
+                "trim": sch[1],
+                "cpd": cid,
+                "arch": ak,
+            }
+            if roof_fit and cal_h <= 34.0:
+                b["yangfang"] = True
+                b["roof"] = pitched_roof_dict(o[0], o[1], o[2], o[3], o[4], "hipped")
+                b["roof_colour"] = rc_default if comp_z is not None else ["#3a3f46", "#46403b", "#333840"][cid % 3]
+                if comp_z is not None:
+                    b["_roof_pinned"] = True
+            is_tw = False
+        else:
+            # Real 3-7F Jiaxing walk-up / 1980s-90s "老破小" old-town residential building
+            in_old_core = in_zhonghuan(cx, cy) or (-2600.0 <= cx <= 2600.0 and -3000.0 <= cy <= 2200.0)
+            is_lpx_named = (comp_z is not None and any(k in comp_z["name"] for k in LAOPOXIAO_NAMED_KEYS) and comp_z["arch_key"] in ("old_walkup_red", "old_walkup_slate"))
+            is_lpx = (
+                11.0 <= cal_h <= 22.0
+                and area <= 1250.0
+                and (is_lpx_named or (comp_z is None and in_old_core and (cid % 5 in (0, 2, 4))))
+            )
+            if is_lpx:
+                lw_c, lt_c = LAOPOXIAO_PALETTES[cid % len(LAOPOXIAO_PALETTES)]
+                b = {
+                    "pts": [rnd(p) for p in pts],
+                    "h": cal_h,
+                    "kind": "apartments",
+                    "style": 2,
+                    "colour": lw_c,
+                    "trim": lt_c,
+                    "cpd": cid,
+                    "arch": "laopoxiao",
+                }
+                # ~65% 平改坡 weathered pitched roof, ~35% authentic 1980s flat concrete roof + solar heaters!
+                if roof_fit and cal_h <= 21.5 and (cid % 3 != 2):
+                    b["roof"] = pitched_roof_dict(o[0], o[1], o[2], o[3], o[4], "gabled")
+                    b["roof_colour"] = "#45484c" if (cid % 2 == 0) else "#744438"
+                laopoxiao_cnt += 1
+            else:
+                ak = comp_z["arch_key"] if comp_z is not None else ("old_walkup_red" if (cid % 3 == 0) else "old_walkup_slate")
+                b = {
+                    "pts": [rnd(p) for p in pts],
+                    "h": cal_h,
+                    "kind": "apartments",
+                    "style": 3 if (ak == "old_jiangnan" and cal_h <= 11.0) else 2,
+                    "colour": sch[0] if comp_z is not None else PALETTE_RES[cid % len(PALETTE_RES)],
+                    "trim": sch[1] if comp_z is not None else "#554c44",
+                    "cpd": cid,
+                    "arch": ak,
+                }
+                if roof_fit and cal_h <= 25.0 and (comp_z is not None or cid % 4 != 3):
+                    rshape = (comp_z["arch"]["roof_shape"] or "gabled") if comp_z is not None else "gabled"
+                    b["roof"] = pitched_roof_dict(o[0], o[1], o[2], o[3], o[4], rshape)
+                    b["roof_colour"] = rc_default
+                    if comp_z is not None:
+                        b["_roof_pinned"] = True
+            is_tw = False
+
+        if comp_z is not None:
+            b["name"] = comp_z["name"]
+        # Refine roof material/color directly from Google Earth z16 satellite pixels over this real footprint!
+        if o is not None:
+            b = apply_google_earth_roof(b, pts, o[0], o[1], o[2], o[3], o[4], is_tw)
+        out.append(b)
+        taken.add((bb[0], bb[1], bb[2], bb[3], pts), *bb)
+        real_sat_cnt += 1
+
+    # --- B2. Authentic Dense Continuous 1-2 Story Yuehe Historic Quarter (月河历史街区 专属水乡地标区) ---
     yuehe_cnt = 0
     yh_foot_segs = []
     for wid, (refs, t) in ways.items():
@@ -2009,7 +2523,6 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
                 bb = (min(pxs), min(pys), max(pxs), max(pys))
                 if can_place(poly, bb, allow_in_park=False, water_margin=1.4, tight=True, allow_yuehe=True):
                     h = rng.choice([4.4, 5.2, 6.0, 6.6, 7.2])
-                    # front faces the alley (the house stands at side * n from it)
                     shop = rng.choice(YH_SIGNS) if rng.random() < 0.55 else ""
                     YH_HOUSES.append({"c": rnd((cx, cy)), "a": round(ang, 4), "l": round(hl, 2), "w": round(hw, 2), "h": h,
                                       "f": [round(-nx * side, 3), round(-ny * side, 3)], "s": shop, "g": 1 if rng.random() < 0.45 else 0})
@@ -2022,7 +2535,6 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
     while yh_y <= -1856.0:
         yh_x = -892.0 + (3.5 if (row_i % 2 == 1) else 0.0)
         while yh_x <= -388.0:
-            # Leave clean 4.2m stone pedestrian alleys clear
             near_alley = any(seg_dist(yh_x, yh_y, fa, fb, fc, fd)[0] < 4.5 for (fa, fb, fc, fd) in yh_foot_segs)
             if not near_alley:
                 hl = rng.uniform(4.2, 6.0)
@@ -2034,7 +2546,6 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
                 bb = (min(pxs), min(pys), max(pxs), max(pys))
                 if can_place(poly, bb, allow_in_park=False, water_margin=1.5, tight=True, allow_yuehe=True):
                     h = rng.choice([4.2, 5.0, 5.8, 6.4, 7.0])
-                    # infill courtyard houses face south (Jiangnan houses open to the south)
                     fx, fy = -math.sin(ang), math.cos(ang)
                     if fy < 0.0:
                         fx, fy = -fx, -fy
@@ -2046,172 +2557,123 @@ def build_buildings(nodes, ways, rels, road_grid, water_grid, park_grid, rail_gr
         yh_y += 9.0
         row_i += 1
 
-    # --- C. Street-Front Urban Fabric Infill along ALL roads (Old Town Jiangnan + Modern Avenues + HSR Corridor) ---
-    street_cnt = 0
-    for ed in edges:
-        if ed.get("bridge") or ed.get("underground"):
-            continue
-        pts = ed["pts"]
-        hw_road = float(ed["width"]) * 0.5
-        for k in range(len(pts) - 1):
-            ax, ay = pts[k]
-            bx, by = pts[k + 1]
-            seg_l = math.hypot(bx - ax, by - ay)
-            if seg_l < 24.0:
+    # --- B3. Auto-cluster Unnamed Visible Real Residential Compounds (地图上可见的无名真实小区) ---
+    # Group nearby real unnamed residential buildings into cohesive real compounds with unified developer
+    # facade palettes, trim & roof colors, and pass their convex hulls to build_gated_compounds()!
+    UNNAMED_COMPOUND_HULLS.clear()
+    unnamed_idxs = [
+        i for i, b in enumerate(out)
+        if b.get("kind") == "apartments" and not b.get("name") and b.get("arch") != "rural_selfbuilt" and not b.get("lm")
+    ]
+    if unnamed_idxs:
+        u_cen = {i: centroid(out[i]["pts"]) for i in unnamed_idxs}
+        u_grid = Grid(68.0)
+        for i in unnamed_idxs:
+            cx_u, cy_u = u_cen[i]
+            u_grid.add(i, cx_u - 4, cy_u - 4, cx_u + 4, cy_u + 4)
+        parent_uf = {i: i for i in unnamed_idxs}
+        def uf_find(x):
+            while parent_uf[x] != x:
+                parent_uf[x] = parent_uf[parent_uf[x]]
+                x = parent_uf[x]
+            return x
+        def uf_union(a, b_id):
+            ra, rb = uf_find(a), uf_find(b_id)
+            if ra != rb:
+                parent_uf[ra] = rb
+        for i in unnamed_idxs:
+            cx_i, cy_i = u_cen[i]
+            hi = float(out[i]["h"])
+            for j in u_grid.query(cx_i - 62, cy_i - 62, cx_i + 62, cy_i + 62):
+                if j <= i:
+                    continue
+                cx_j, cy_j = u_cen[j]
+                if math.hypot(cx_i - cx_j, cy_i - cy_j) > 60.0:
+                    continue
+                if abs(hi - float(out[j]["h"])) > 20.0:
+                    continue
+                # Do not merge compounds across a wide arterial road!
+                crossed_arterial = False
+                for (rax, ray, rbx, rby, rhw) in road_grid.query(min(cx_i, cx_j) - 6, min(cy_i, cy_j) - 6, max(cx_i, cx_j) + 6, max(cy_i, cy_j) + 6):
+                    if rhw >= 7.5 and seg_intersection((cx_i, cy_i), (cx_j, cy_j), (rax, ray), (rbx, rby)) is not None:
+                        crossed_arterial = True
+                        break
+                if not crossed_arterial:
+                    uf_union(i, j)
+        clusters = defaultdict(list)
+        for i in unnamed_idxs:
+            clusters[uf_find(i)].append(i)
+        # Pre-index named road midpoints so unnamed compounds get real street-anchored names (e.g. 昌盛南路·住宅小区)
+        named_roads = []
+        for e in edges:
+            rnm = e.get("name", "")
+            if rnm and not any(sk in rnm for sk in ("支路", "隧道", "坡道", "引道", "辅道", "辅路")) and e.get("pts"):
+                mid_p = e["pts"][len(e["pts"]) // 2]
+                named_roads.append((mid_p[0], mid_p[1], rnm))
+        DEV_PALETTES_MODERN = [
+            ("#f7f7f5", "#4a525e"), ("#f5dfb4", "#785e42"), ("#d2e5f5", "#3d4e62"),
+            ("#f0be8e", "#7a523c"), ("#f6eed8", "#665848"), ("#c8e2dc", "#3e5852"),
+            ("#e8a882", "#744a36"), ("#f4d498", "#7a5c3e"), ("#e0ebf6", "#425264"),
+            ("#f2e4c4", "#6e5a44"),
+        ]
+        DEV_PALETTES_WALKUP = [
+            ("#f5dfb6", "#7a5e44"), ("#f4efe4", "#5c5954"), ("#efbc8c", "#7c523c"),
+            ("#d4e6da", "#4c5f54"), ("#f6ecd4", "#6a5a48"), ("#e5a47e", "#744834"),
+            ("#d6e6f4", "#445466"), ("#f2d69c", "#765a40"),
+        ]
+        uc_idx = 0
+        for _root, idxs in clusters.items():
+            if len(idxs) < 3:
                 continue
-            ang = math.atan2(by - ay, bx - ax)
-            ux, uy = (bx - ax) / seg_l, (by - ay) / seg_l
-            nx, ny = -uy, ux
-            s = 16.0
-            while s < seg_l - 14.0:
-                for side in (-1.0, 1.0):
-                    # Two depth rows on wide blocks (front commercial/residential + second-row apartment block)
-                    for row in (0, 1):
-                        px_base = ax + ux * s
-                        py_base = ay + uy * s
-                        dist_old = math.hypot(px_base - OLD_CITY_CENTER[0], py_base - OLD_CITY_CENTER[1])
-                        dist_nanhu = math.hypot(px_base - NANHU_ORIGIN[0], py_base - NANHU_ORIGIN[1])
-                        dist_hsr = math.hypot(px_base - SOUTH_STA_POS[0], py_base - SOUTH_STA_POS[1])
-                        in_old_core = dist_old < 1250.0
-                        in_cbd = (dist_nanhu < 1600.0 or dist_hsr < 750.0) and hw_road >= 6.5
-
-                        if row == 0:
-                            hl = rng.uniform(8.5, 13.5) if in_old_core else rng.uniform(11.0, 16.5)
-                            hw = rng.uniform(5.2, 7.2) if in_old_core else rng.uniform(6.5, 9.0)
-                            setback = hw_road + hw + rng.uniform(5.5, 9.5)
-                        else:
-                            if in_old_core and rng.random() < 0.35:
-                                continue
-                            hl = rng.uniform(12.0, 18.0)
-                            hw = rng.uniform(6.5, 8.5)
-                            setback = hw_road + 24.0 + hw + rng.uniform(4.0, 10.0)
-
-                        cx = px_base + nx * side * setback
-                        cy = py_base + ny * side * setback
-                        b_ang = ang if row == 0 else (0.0 if abs(math.sin(ang)) > 0.5 else ang)
-                        poly = make_rect_poly(cx, cy, b_ang, hl, hw)
-                        pxs = [p[0] for p in poly]
-                        pys = [p[1] for p in poly]
-                        bb = (min(pxs), min(pys), max(pxs), max(pys))
-                        if not can_place(poly, bb):
-                            continue
-
-                        if in_old_core and row == 0 and hw_road < 6.5:
-                            # Classic Jiangnan white-wall black-tile 2-3 story townhouses (粉墙黛瓦)
-                            h = rng.choice([7.2, 9.5, 11.0])
-                            b = {
-                                "pts": [rnd(p) for p in poly], "h": h, "kind": "house", "style": 3,
-                                "colour": rng.choice(PALETTE_JIANGNAN),
-                                "roof": pitched_roof_dict(cx, cy, b_ang, hl, hw, "gabled"),
-                                "roof_colour": "#2e333a",
-                            }
-                        elif in_cbd and row == 0 and rng.random() < 0.48:
-                            # Modern CBD / Nanhu New District / Jiaxing South Station towers
-                            h = rng.choice([28.0, 38.0, 52.0, 68.0, 86.0])
-                            b = {
-                                "pts": [rnd(p) for p in poly], "h": h, "kind": "office" if h >= 42 else "commercial",
-                                "style": 0 if h >= 42 else 1,
-                                "colour": rng.choice(PALETTE_TOWER if h >= 42 else PALETTE_MODERN),
-                            }
-                        else:
-                            # Standard Chinese urban mid/high-rise apartment or mixed-use block
-                            if dist_old < 1800.0 or (in_zhonghuan(cx, cy) and zone_profile(cx, cy)[0] == "walkup"):
-                                h = rng.choice([14.0, 18.0, 22.0, 28.0]) if dist_old < 1800.0 else rng.choice([16.0, 19.0, 19.0, 22.0])
-                                use_pitch = h <= 18.0 and rng.random() < 0.55
-                                b = {
-                                    "pts": [rnd(p) for p in poly], "h": h, "kind": "apartments",
-                                    "style": 3 if use_pitch else 2,
-                                    "colour": rng.choice(PALETTE_RES),
-                                }
-                                if use_pitch:
-                                    b["roof"] = pitched_roof_dict(cx, cy, b_ang, hl, hw, "hipped" if hl < hw * 1.35 else "gabled")
-                                    b["roof_colour"] = rng.choice(["#3b4149", "#693e32"])
-                            else:
-                                if row == 1 and zone_profile(cx, cy)[0] == "tower" and rng.random() < 0.6:
-                                    continue  # high-rise rows need their sunlight spacing
-                                b = profile_building(poly, cx, cy, row, b_ang, hl, hw)
-                        out.append(b)
-                        taken.add((bb[0], bb[1], bb[2], bb[3], poly), *bb)
-                        street_cnt += 1
-                s += rng.uniform(28.0, 38.0)
-
-    # --- D. Sparse Eastern & Northeastern Urban Block Compound Infill (fills interior blocks like SW Jiaxing!) ---
-    east_cnt = 0
-    for ezone in (
-        (1650.0, -3720.0, MAIN_RECT[2] - 70.0, MAIN_RECT[3] - 70.0),
-        (SAMS_SHUANGXI_RECT[0] + 70.0, SAMS_SHUANGXI_RECT[1] + 70.0, SAMS_SHUANGXI_RECT[2] - 70.0, SAMS_SHUANGXI_RECT[3] - 70.0),
-    ):
-        ey = ezone[1] + 24.0
-        while ey < ezone[3] - 24.0:
-            ex = ezone[0] + 24.0
-            while ex < ezone[2] - 24.0:
-                # Only fill blocks that sit within 210m of a real/completed street (keeps urban fabric grounded)
-                near_rd = False
-                for (rax, ray, rbx, rby, rhw) in road_grid.query(ex - 210, ey - 210, ex + 210, ey + 210):
-                    if seg_dist(ex, ey, rax, ray, rbx, rby)[0] < 210.0:
-                        near_rd = True
-                        break
-                if near_rd:
-                    # Leave realistic landscaped compound courtyards (~16% open space)
-                    if rng.random() > 0.16:
-                        hl = rng.uniform(14.5, 20.5)
-                        hw = rng.uniform(6.6, 8.8)
-                        ang = rng.uniform(-0.03, 0.03)  # Authentic south-facing Chinese 小区板楼
-                        poly = make_rect_poly(ex, ey, ang, hl, hw)
-                        pxs = [p[0] for p in poly]
-                        pys = [p[1] for p in poly]
-                        bb = (min(pxs), min(pys), max(pxs), max(pys))
-                        zt = zone_profile(ex, ey)[0]
-                        sparse_row = zt == "tower" and int(math.floor(ey / 40.0)) % 2 == 1
-                        if not sparse_row and can_place(poly, bb, allow_in_park=False, water_margin=3.0):
-                            out.append(profile_building(poly, ex, ey, 1, ang, hl, hw))
-                            taken.add((bb[0], bb[1], bb[2], bb[3], poly), *bb)
-                            east_cnt += 1
-                ex += 48.0
-            ey += 40.0
-
-    # --- E. Block interiors inside the 中环 ring: the old city is packed with east-west walk-up rows (Amap satellite,
-    # Nov 2026), not street-front buildings around empty lots. Rows of 5-7 storey slabs fill whatever the blocks still
-    # have free (roads, water, parks, landmarks and earlier buildings are respected by can_place); towers / 洋房 where
-    # the block's development profile says so, with their wider spacing.
-    ring_cnt = 0
-    ry = -3250.0 + 16.0
-    row_i = 0
-    while ry < 1450.0 - 16.0:
-        rx = -2900.0 + (21.0 if row_i % 2 else 0.0)
-        while rx < 2250.0 - 16.0:
-            zt = zone_profile(rx, ry)[0]
-            if zt == "walkup":
-                hl = rng.uniform(19.0, 27.0)
-                hw = rng.uniform(5.6, 6.6)
-                adv = 2.0 * hl + rng.uniform(9.0, 14.0)
+            hs = sorted(float(out[i]["h"]) for i in idxs)
+            med_h = hs[len(hs) // 2]
+            all_pts = [p for i in idxs for p in out[i]["pts"]]
+            ux0 = min(p[0] for p in all_pts) - 5.0
+            uy0 = min(p[1] for p in all_pts) - 5.0
+            ux1 = max(p[0] for p in all_pts) + 5.0
+            uy1 = max(p[1] for p in all_pts) + 5.0
+            if (ux1 - ux0) > 340.0 or (uy1 - uy0) > 340.0:
+                continue
+            ccx, ccy = (ux0 + ux1) * 0.5, (uy0 + uy1) * 0.5
+            is_lpx_cl = (med_h <= 21.5 and in_zhonghuan(ccx, ccy) and (uc_idx % 2 == 0))
+            cl_hue = GE_SAMPLER.sample_wall_hue([(ux0, uy0), (ux1, uy0), (ux1, uy1), (ux0, uy1)]) if GE_SAMPLER.available else None
+            if is_lpx_cl:
+                w_c, t_c = LAOPOXIAO_PALETTES[uc_idx % len(LAOPOXIAO_PALETTES)]
+                cl_arch = "laopoxiao"
+            elif cl_hue is not None and cl_hue in GE_HUE_PALETTES and (uc_idx % 2 == 0):
+                hp = GE_HUE_PALETTES[cl_hue]
+                w_c, t_c = hp[uc_idx % len(hp)]
+                cl_arch = "modern_warm_slab" if med_h >= 24.0 else "old_walkup_slate"
+            elif med_h >= 24.0:
+                w_c, t_c = DEV_PALETTES_MODERN[uc_idx % len(DEV_PALETTES_MODERN)]
+                cl_arch = "modern_warm_slab"
             else:
-                hl = rng.uniform(14.5, 19.0)
-                hw = rng.uniform(6.8, 8.2)
-                adv = 2.0 * hl + rng.uniform(16.0, 24.0)
-                if zt == "tower" and row_i % 2 == 1:
-                    rx += adv
-                    continue  # high-rise rows need their sunlight spacing
-            if rng.random() < 0.88:
-                ang = rng.uniform(-0.03, 0.03)
-                poly = make_rect_poly(rx + hl, ry, ang, hl, hw)
-                pxs = [p[0] for p in poly]
-                pys = [p[1] for p in poly]
-                bb = (min(pxs), min(pys), max(pxs), max(pys))
-                near_rd = False
-                for (rax, ray, rbx, rby, rhw) in road_grid.query(rx - 160, ry - 160, rx + 160, ry + 160):
-                    if seg_dist(rx + hl, ry, rax, ray, rbx, rby)[0] < 160.0:
-                        near_rd = True
-                        break
-                if near_rd and in_active((rx + hl, ry)) and can_place(poly, bb, allow_in_park=False, water_margin=3.0):
-                    out.append(profile_building(poly, rx + hl, ry, 1, ang, hl, hw))
-                    taken.add((bb[0], bb[1], bb[2], bb[3], poly), *bb)
-                    ring_cnt += 1
-            rx += adv
-        ry += 27.0
-        row_i += 1
+                w_c, t_c = DEV_PALETTES_WALKUP[uc_idx % len(DEV_PALETTES_WALKUP)]
+                cl_arch = "old_walkup_slate"
+            # Apply unified developer palette across the entire unnamed compound!
+            for i in idxs:
+                out[i]["cpd"] = 7000 + uc_idx
+                out[i]["colour"] = w_c
+                out[i]["trim"] = t_c
+                if is_lpx_cl and float(out[i]["h"]) <= 22.0:
+                    out[i]["arch"] = "laopoxiao"
+            # Find nearest real street name for authentic local compound signage
+            best_rd = ""
+            best_dd = 1e9
+            for rx, ry, rnm in named_roads:
+                dd = (rx - ccx) * (rx - ccx) + (ry - ccy) * (ry - ccy)
+                if dd < best_dd:
+                    best_dd = dd
+                    best_rd = rnm
+            sfx = ("新村", "小区", "雅苑", "嘉苑", "花苑", "名苑")[uc_idx % 6]
+            cl_nm = f"{best_rd}·{sfx}" if (best_rd and best_dd < 420.0 * 420.0) else ""
+            # Build clean convex hull padded slightly outward for compound fence & lawn
+            hull_pts = [(ux0, uy0), (ux1, uy0), (ux1, uy1), (ux0, uy1)]
+            UNNAMED_COMPOUND_HULLS.append((hull_pts, cl_nm))
+            uc_idx += 1
 
-    print(f"Buildings: {len(out)} total ({osm_cnt} real OSM + {lu_cnt} landuse compounds + {yuehe_cnt} Yuehe dry-land houses + {street_cnt} street-front + {east_cnt} eastern block compounds + {ring_cnt} 中环 block interiors)")
+    print(f"Buildings: {len(out)} total ({osm_cnt} real OSM + {real_sat_cnt} real satellite LoD1; "
+          f"{rural_sb_cnt} 农村自建房, {laopoxiao_cnt} 老破小, {len(UNNAMED_COMPOUND_HULLS)} 无名真实小区; +{yuehe_cnt} Yuehe heritage houses)")
     return out
 
 
@@ -2433,32 +2895,53 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
 
         p0, p1 = pts[0], pts[-1]
         L = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
-        if L < 22.0:
-            continue
-        dx, dz = (p1[0] - p0[0]) / L, (p1[1] - p0[1]) / L
-        nx, nz = -dz, dx
-        if deg[ed["a"]] >= 3:
-            cws.append({"pos": [round(p0[0] + dx * 7.8, 2), round(p0[1] + dz * 7.8, 2)], "dir": [round(dx, 4), round(dz, 4)], "width": w})
-        if deg[ed["b"]] >= 3:
-            cws.append({"pos": [round(p1[0] - dx * 7.8, 2), round(p1[1] - dz * 7.8, 2)], "dir": [round(dx, 4), round(dz, 4)], "width": w})
+        if L >= 22.0:
+            dx, dz = (p1[0] - p0[0]) / L, (p1[1] - p0[1]) / L
+            nx, nz = -dz, dx
+            if deg[ed["a"]] >= 3:
+                cws.append({"pos": [round(p0[0] + dx * 7.8, 2), round(p0[1] + dz * 7.8, 2)], "dir": [round(dx, 4), round(dz, 4)], "width": w})
+            if deg[ed["b"]] >= 3:
+                cws.append({"pos": [round(p1[0] - dx * 7.8, 2), round(p1[1] - dz * 7.8, 2)], "dir": [round(dx, 4), round(dz, 4)], "width": w})
 
-        # Streetlamps every 48m & lush Jiangnan avenue trees (香樟/法桐) every 24m
-        s = 16.0
-        while s < L - 12.0:
-            for side in (-1.0, 1.0):
-                lamps.append([round(p0[0] + dx * s + nx * side * (w * 0.5 + 1.4), 2),
-                              round(p0[1] + dz * s + nz * side * (w * 0.5 + 1.4), 2),
-                              round(-nx * side, 3), round(-nz * side, 3)])
-            s += 48.0
-
-        if not ed.get("bridge"):
-            st = 14.0
-            while st < L - 14.0:
+            # Streetlamps every 48m
+            s = 16.0
+            while s < L - 12.0:
                 for side in (-1.0, 1.0):
-                    tx = p0[0] + dx * st + nx * side * (w * 0.5 + 2.6)
-                    ty = p0[1] + dz * st + nz * side * (w * 0.5 + 2.6)
-                    trees.append((tx, ty))
-                st += 24.0 if w >= 12.0 else 32.0
+                    lamps.append([round(p0[0] + dx * s + nx * side * (w * 0.5 + 1.4), 2),
+                                  round(p0[1] + dz * s + nz * side * (w * 0.5 + 1.4), 2),
+                                  round(-nx * side, 3), round(-nz * side, 3)])
+                s += 48.0
+
+        # Satellite-guided dense Jiangnan street trees (行道树: 香樟/法桐/银杏) along EVERY polyline segment!
+        # Samples Google Earth z16 canopy along BOTH sidewalks AND computes true widened carriageway half-width
+        # from road_grid so T1 boulevards (纺工路/庆丰路/由拳路/中山东路) get lush outer-sidewalk trees too!
+        if not ed.get("bridge"):
+            is_major_rd = (w >= 11.0 or bool(ed.get("tram_median")) or bool(ed.get("name")))
+            for pa, pb in zip(pts, pts[1:]):
+                sl = math.hypot(pb[0] - pa[0], pb[1] - pa[1])
+                if sl < 8.0:
+                    continue
+                sdx, sdz = (pb[0] - pa[0]) / sl, (pb[1] - pa[1]) / sl
+                snx, snz = -sdz, sdx
+                mid_x, mid_y = (pa[0] + pb[0]) * 0.5, (pa[1] + pb[1]) * 0.5
+                # Determine true widened half-width at this segment (handles T1 40m avenues & widened trunks!)
+                eff_hw = w * 0.5
+                for (rax, ray, rbx, rby, rhw) in road_grid.query(mid_x - 24, mid_y - 24, mid_x + 24, mid_y + 24):
+                    if seg_dist(mid_x, mid_y, rax, ray, rbx, rby)[0] < 4.5:
+                        eff_hw = max(eff_hw, rhw)
+                for side in (-1.0, 1.0):
+                    has_sat_trees = GE_SAMPLER.has_roadside_trees(pa[0], pa[1], pb[0], pb[1], eff_hw, side)
+                    if not (has_sat_trees or is_major_rd):
+                        continue
+                    step_t = 11.5 if (has_sat_trees or eff_hw >= 7.0) else 15.0
+                    # Start cleanly past intersection corners
+                    st = 6.5 if sl >= 16.0 else sl * 0.5
+                    end_s = sl - 5.5 if sl >= 16.0 else sl * 0.5 + 0.1
+                    while st < end_s:
+                        tx = pa[0] + sdx * st + snx * side * (eff_hw + 2.35)
+                        ty = pa[1] + sdz * st + snz * side * (eff_hw + 2.35)
+                        trees.append((tx, ty))
+                        st += step_t
 
     # Add real OSM trees + lush scenic groves in Nanhu Scenic Area & Xiangjiadang Wetland Park!
     for nid, t in poi_nodes.items():
@@ -2536,12 +3019,12 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
 
     seen_t, d_trees = set(), []
     for tx, ty in trees:
-        c = (int(tx // 8), int(ty // 8))
+        c = (int(tx // 6.5), int(ty // 6.5))
         if c in seen_t or not in_active((tx, ty)):
             continue
         ok = True
         for (ax, ay, bx, by, hw) in road_grid.query(tx - 15, ty - 15, tx + 15, ty + 15):
-            if seg_dist(tx, ty, ax, ay, bx, by)[0] < hw + 1.4:
+            if seg_dist(tx, ty, ax, ay, bx, by)[0] < hw + 1.2:
                 ok = False
                 break
         if ok:
@@ -2575,6 +3058,10 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
                 if seg_dist(tx, ty, ax, ay, bx, by)[0] < fhw + 4.4:
                     ok = False
                     break
+        if ok:
+            # Keep MAD Jiaxing Station South Plaza bespoke circular pavilions clear of stray street trees
+            if 655.0 <= tx <= 944.0 and -1392.0 <= ty <= -1046.0 and ty > (-tx - 485.0):
+                ok = False
         if ok:
             if in_airport_precinct((tx, ty)) and math.hypot(tx - AIRPORT_TERM_POS[0], ty - AIRPORT_TERM_POS[1]) > 240.0:
                 ok = False
@@ -2709,13 +3196,13 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
                 used_b_edges.add((best_bi, ei))
                 break
 
-    # Pass 2: High-density flush wall-to-wall continuous street-front retail rows (连排底商) across ALL Jiaxing streets!
-    # Collect up to 2 street-facing facades per building (handles corner buildings!) sorted closest & widest avenues first!
+    # Pass 2: High-density flush wall-to-wall continuous street-front retail rows (沿街商铺 / 连排底商) across ALL Jiaxing streets!
+    # Collect up to 4 street-facing facades per building (handles corner & L-shaped 沿街商铺 strips!) sorted closest & widest avenues first!
     b_candidates = []
     for bi, b in enumerate(blds):
-        if b["h"] < 5.5 or len(b["pts"]) < 3:
+        if b["h"] < 3.6 or len(b["pts"]) < 3:
             continue
-        if b.get("kind") == "industrial":
+        if b.get("kind") == "industrial" or b.get("arch") == "rural_selfbuilt":
             continue
         poly = b["pts"]
         ccw = poly_area(poly) > 0.0
@@ -2725,25 +3212,26 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
                 continue
             a, c = poly[ei], poly[(ei + 1) % len(poly)]
             el = math.hypot(c[0] - a[0], c[1] - a[1])
-            if el < 4.6:
+            if el < 4.4:
                 continue
             mx, my = (a[0] + c[0]) * 0.5, (a[1] + c[1]) * 0.5
             best_d = 1e9
             best_hw = 4.0
-            for (rax, ray, rbx, rby, hw) in road_grid.query(mx - 32, my - 32, mx + 32, my + 32):
+            for (rax, ray, rbx, rby, hw) in road_grid.query(mx - 44, my - 44, mx + 44, my + 44):
                 dd = seg_dist(mx, my, rax, ray, rbx, rby)[0] - hw
                 if dd < best_d:
                     best_d = dd
                     best_hw = hw
-            if best_d <= 22.0:
+            if best_d <= 29.0:
                 face_hits.append((best_d, best_hw, ei, a, c, el, ccw))
         face_hits.sort(key=lambda it: it[0])
-        for fh in face_hits[:3]:
+        # Keep EVERY street-facing edge (not capped at 4!) so long multi-segment / L-shaped 沿街商铺 strips
+        # receive continuous wall-to-wall storefronts along BOTH intersecting avenues!
+        for fh in face_hits:
             b_candidates.append((fh[0] - fh[1] * 0.70, bi, fh))
     b_candidates.sort(key=lambda it: it[0])
 
     for _prio, bi, (best_d, best_hw, ei, a, c, el, ccw) in b_candidates:
-        # Dense city-wide street-front ground-floor commercial rows (~95,000+ diverse shops across Jiaxing!)
         if len(storefronts) >= 96000:
             break
         if (bi, ei) in used_b_edges:
@@ -2753,54 +3241,60 @@ def build_street_furniture(edges, nodes_list, blds, poi_nodes, osm_nodes, road_g
         dist_nanhu = math.hypot(cen[0] - NANHU_ORIGIN[0], cen[1] - NANHU_ORIGIN[1])
         dist_hsr = math.hypot(cen[0] - SOUTH_STA_POS[0], cen[1] - SOUTH_STA_POS[1])
         dist_yuehe = math.hypot(cen[0] - YUEHE_POS[0], cen[1] - YUEHE_POS[1])
-        in_core_comm = min(dist_center, dist_nanhu) < 3200.0 or dist_hsr < 1400.0 or best_hw >= 4.8
-        # Where Jiaxing actually has street shops (Amap survey of the T1 corridor): ground floors of the old walk-up
-        # blocks and of commercial buildings, and the 底商 podium of new compounds only along the main roads.
-        # 洋房 compounds, schools, hospitals and offices present a wall or a fence; nothing is set back more than
-        # ~14 m behind the kerb.
+        in_core_comm = min(dist_center, dist_nanhu) < 3500.0 or dist_hsr < 1600.0 or best_hw >= 4.8
         bk = blds[bi]
         kind_b = bk.get("kind", "yes")
-        if best_d > 14.0 or kind_b in ("school", "university", "college", "hospital", "civic", "public", "office",
-                                       "government", "church", "train_station", "warehouse"):
+        if kind_b in ("school", "university", "college", "hospital", "civic", "public", "office",
+                      "government", "church", "train_station", "warehouse"):
             continue
-        if bk.get("yangfang"):
+        if bk.get("yangfang") and float(bk["h"]) > 13.5:
             continue
-        if kind_b in ("apartments", "residential") and bk["h"] >= 26.0:
-            # new high-rise compound: podium shops only on a main road, and not on every block
-            prob = 0.55 if best_hw >= 8.0 else 0.0
-        elif kind_b in ("commercial", "retail", "mall"):
-            prob = 0.9
+        # Recognize authentic Chinese 沿街商铺 strips:
+        #   - 1-3F standalone street-hugging commercial strips (h <= 13.5m)
+        #   - commercial/retail/mall frontages
+        #   - long street-parallel podium/arcade strips (el >= 14m facing an avenue/secondary road)
+        is_strip_shop = (
+            kind_b in ("commercial", "retail", "mall")
+            or (float(bk["h"]) <= 14.5 and best_d <= 30.0 and best_hw >= 3.8)
+            or (el >= 12.0 and best_d <= 29.0 and best_hw >= 4.5)
+        )
+        max_setback = 30.0 if is_strip_shop else 26.0
+        if best_d > max_setback:
+            continue
+        if is_strip_shop:
+            prob = 1.0
+        elif kind_b in ("apartments", "residential") and bk["h"] >= 26.0:
+            prob = 0.96 if best_hw >= 5.2 else 0.72
         elif kind_b == "apartments" or bk.get("style") == 3:
-            # old walk-up block: shops on the street side, fewer on narrow lanes
-            prob = 0.75 if best_hw >= 5.0 else 0.35
+            prob = 0.98 if best_hw >= 4.5 else 0.78
         else:
-            prob = 0.6 if best_hw >= 5.0 else 0.25
+            prob = 0.94 if best_hw >= 4.5 else 0.72
         if dist_yuehe < 400.0:
             prob = 0.99
         if rng.random() > prob:
             continue
         nx, ny = ((c[1] - a[1]) / el, -(c[0] - a[0]) / el) if ccw else (-(c[1] - a[1]) / el, (c[0] - a[0]) / el)
-        # the shop face must actually look at the street
+        # the shop face must actually look at the street (allow slight angle on curved/angled avenues!)
         mx_f, my_f = (a[0] + c[0]) * 0.5, (a[1] + c[1]) * 0.5
         look_ok = False
-        for (rax, ray, rbx, rby, hw) in road_grid.query(mx_f - 32, my_f - 32, mx_f + 32, my_f + 32):
+        for (rax, ray, rbx, rby, hw) in road_grid.query(mx_f - 44, my_f - 44, mx_f + 44, my_f + 44):
             dd, tt = seg_dist(mx_f, my_f, rax, ray, rbx, rby)
-            if dd - hw <= best_d + 0.5:
+            if dd - hw <= best_d + 5.5:
                 qx, qy = rax + (rbx - rax) * tt, ray + (rby - ray) * tt
                 ql = math.hypot(qx - mx_f, qy - my_f)
-                if ql > 1e-6 and ((qx - mx_f) * nx + (qy - my_f) * ny) / ql > 0.5:
+                if ql > 1e-6 and ((qx - mx_f) * nx + (qy - my_f) * ny) / ql > 0.25:
                     look_ok = True
                     break
         if not look_ok:
             continue
         ux, uy = (c[0] - a[0]) / el, (c[1] - a[1]) / el
-        # Flush wall-to-wall continuous Chinese ground-floor shop rows (连排底商 — 1 to 6 seamless bays filling the entire facade!)
+        # Flush wall-to-wall continuous Chinese ground-floor shop rows (连排底商 — up to 40 seamless ~4.8m bays!)
         pad_end = 0.18 if el >= 8.0 else 0.10
         usable = el - pad_end * 2.0
-        n_shops = max(1, min(6, int(round(usable / 4.8))))
+        n_shops = max(1, min(40, int(round(usable / 4.8))))
         bay_w = usable / n_shops
-        if bay_w < 3.3:
-            n_shops = max(1, int(usable // 3.5))
+        if bay_w < 3.4:
+            n_shops = max(1, int(usable // 3.6))
             bay_w = usable / n_shops
         for si in range(n_shops):
             lo = pad_end + bay_w * si
@@ -3099,21 +3593,41 @@ def widen_roads_by_class(graph_edges, nodes, ways):
         n_merge += 1
 
     n_w = 0
+    n_ge_rd = 0
     for e in graph_edges:
-        if e.get("hide_road"):
+        if e.get("hide_road") or e.get("underground") or e.get("tunnel"):
             continue
+        ename = e.get("name", "")
+        rspec = road_spec_for_name(ename)
         sec = CLASS_SECTION.get(e.get("cls", ""))
-        if e.get("name", "").startswith("中环"):
-            # 中环路 is a 主辅路 ring: per direction two main lanes plus two side-road lanes (~17 m), with a planted
-            # median between the two directions (Amap satellite)
+        ge_buf = 0.0
+        if rspec is not None:
+            sec = (rspec[0], rspec[1], rspec[2], rspec[3])
+            ge_buf = float(rspec[4])
+            n_ge_rd += 1
+        elif ename.startswith("中环"):
+            # 中环路 is a 主辅路 ring: per direction two main lanes plus two side-road lanes (~17 m)
             sec = (44.0, 4, 17.0, 4)
-        if sec is None or e.get("underground") or e.get("tunnel"):
+        if sec is None:
             continue
         lf, lb = int(e.get("lanes_f", 1)), int(e.get("lanes_b", 1))
         one_way = lf == 0 or lb == 0
         want = sec[2] if one_way else sec[0]
         w0 = float(e["width"])
+        # For explicitly Google-Earth-measured narrow old-town lanes/streets, allow narrowing down to real width too!
+        if rspec is not None and want < w0 - 0.5 and not e.get("tram_median"):
+            e["width"] = round(want, 1)
+            n_new = sec[3] if one_way else sec[1]
+            if one_way:
+                e["lanes_f"] = n_new if lf else 0
+                e["lanes_b"] = n_new if lb else 0
+            else:
+                e["lanes_f"] = n_new
+                e["lanes_b"] = n_new
+            continue
         if want <= w0 + 0.5:
+            if ge_buf > 0.0 and not e.get("bridge") and not one_way and w0 >= 25.0:
+                e["bike_buffer"] = ge_buf
             continue
         pts = e["pts"]
         L = sum(math.hypot(pts[k + 1][0] - pts[k][0], pts[k + 1][1] - pts[k][1]) for k in range(len(pts) - 1))
@@ -3134,7 +3648,7 @@ def widen_roads_by_class(graph_edges, nodes, ways):
                     if along_ok:
                         clear = d
         w1 = min(want, max(w0, 2.0 * (clear - 3.0)))
-        if e.get("name", "").startswith("中环"):
+        if ename.startswith("中环"):
             w1 = want  # the ring road has priority: whatever stands in its real section yields
         if w1 > w0 + 0.5:
             gap = parallel_gap(e)
@@ -3153,6 +3667,8 @@ def widen_roads_by_class(graph_edges, nodes, ways):
             n = sec[1] if w1 >= sec[0] - 1.0 else max(1, min(sec[1], int((w1 - 6.5) / 6.6)))
             e["lanes_f"] = max(lf, n)
             e["lanes_b"] = max(lb, n)
+            if ge_buf > 0.0 and not e.get("bridge") and w1 >= 26.0:
+                e["bike_buffer"] = ge_buf
         n_w += 1
     # 中环南路 as surveyed (Amap satellite + the user's notes): two-way 6 lanes; west of 纺工路 it is the bridge
     # (3 + 3), east of it each direction is a 3-lane main road plus a one-lane 辅路 outside a planted strip
@@ -3177,7 +3693,7 @@ def widen_roads_by_class(graph_edges, nodes, ways):
             cap = max(1, int((w - 2.2) / 3.3 + 0.05))
         e["lanes_f"] = min(lf, cap) if lf else 0
         e["lanes_b"] = min(lb, cap) if lb else 0
-    print(f"Road class cross-sections: {n_merge} stacked twin carriageways drawn as one street, widened {n_w} street edges (kerbs kept 3 m off mapped buildings)")
+    print(f"Road class cross-sections: {n_merge} stacked twin carriageways drawn as one street, widened {n_w} street edges ({n_ge_rd} matched Google Earth road specs, kerbs kept 3 m off mapped buildings)")
 
 
 def resolve_parallel_overlaps(graph_edges, t1_ids):
@@ -3321,6 +3837,35 @@ def hanlin_tower_buildings():
             corners.append(rnd((HANLIN_POS[0] + x * ca + z * sa, HANLIN_POS[1] - x * sa + z * ca)))
         out.append({"pts": corners, "h": sh, "kind": "apartments", "style": 2, "colour": "#e6ddcf", "trim": "#5a4c3c",
                     "name": "瀚林府邸"})
+    # Authentic 2-3 storey street-front commercial complex SOUTH of Hanlin Residence East Gate extending ALL THE WAY
+    # down to 中环南路 (1:1 Google Earth match to user's screenshot: 沿街商铺 strip + large square 瀚林商业广场 +
+    # south 中环南路 commercial wing; residential fence stops cleanly at the west wall of 瀚林商业广场!)
+    def _world_rect(cx_w, cy_w, wx_s, wy_s, yaw_w):
+        cw, sw = math.cos(yaw_w), math.sin(yaw_w)
+        pts_w = []
+        for (ox, oy) in ((-wx_s * 0.5, -wy_s * 0.5), (wx_s * 0.5, -wy_s * 0.5),
+                         (wx_s * 0.5, wy_s * 0.5), (-wx_s * 0.5, wy_s * 0.5)):
+            pts_w.append(rnd((cx_w + ox * cw + oy * sw, cy_w - ox * sw + oy * cw)))
+        return pts_w
+
+    # 1. North 2-storey 沿街商铺 strip hugging 纺工路 west side directly south of Hanlin East Gate
+    out.append({
+        "pts": _world_rect(1386.0, 1476.0, 18.0, 56.0, 0.195),
+        "h": 8.8, "kind": "commercial", "style": 1, "colour": "#e6ddd0", "trim": "#4a525c",
+        "name": "瀚林府邸沿街商铺",
+    })
+    # 2. Prominent 3-storey square commercial plaza building (瀚林商业广场) with central roof garden/skylight
+    out.append({
+        "pts": _world_rect(1374.0, 1536.0, 42.0, 48.0, 0.08),
+        "h": 12.2, "kind": "commercial", "style": 1, "colour": "#d8dee4", "trim": "#3d4650",
+        "name": "瀚林商业广场",
+    })
+    # 3. South 2-storey retail wing extending all the way down to 中环南路 north sidewalk!
+    out.append({
+        "pts": _world_rect(1375.0, 1568.5, 42.0, 14.0, -0.092),
+        "h": 7.8, "kind": "commercial", "style": 1, "colour": "#e4dcd0", "trim": "#4a525c",
+        "name": "瀚林南街商铺",
+    })
     return out
 
 
@@ -3334,7 +3879,7 @@ def apply_t1_survey(blds, storefronts, road_grid, bld_grid):
 
     # Style 3 is the small-house facade (one or two storeys, no window grid): a 5-7 storey walk-up given it renders
     # as a blank box, so anything taller than a house uses the residential facade (pitched roofs are kept)
-    blds.extend(hanlin_tower_buildings())
+    # (hanlin_tower_buildings() are now appended BEFORE build_street_furniture() so their south 沿街商铺 get real storefronts!)
     n_house = 0
     for b in blds:
         if int(b.get("style", 2)) == 3 and float(b["h"]) > 11.5:
@@ -3343,16 +3888,24 @@ def apply_t1_survey(blds, storefronts, road_grid, bld_grid):
     print(f"Walk-up facades: {n_house} multi-storey blocks moved off the small-house facade")
 
     n_campus = 0
+    all_no_shop = list(NO_SHOP_BOXES)
+    for (cnm, x0, y0, x1, y1, hmax, kind, col, no_sh) in REAL_CAMPUSES:
+        if no_sh:
+            all_no_shop.append((x0, y0, x1, y1))
     for b in blds:
+        b.pop("_roof_pinned", None)
         cx, cy = cen(b["pts"])
-        for (x0, y0, x1, y1, hmax, kind, col) in CAMPUS_BOXES:
+        for (cnm, x0, y0, x1, y1, hmax, kind, col, _nsh) in REAL_CAMPUSES:
+            if not kind:
+                continue
             if x0 < cx < x1 and y0 < cy < y1 and b.get("kind") in ("apartments", "residential", "yes", "commercial", "office"):
                 if float(b["h"]) > hmax:
-                    b["h"] = round(hmax * (0.55 + 0.45 * ((int(cx * 7 + cy * 13) % 100) / 100.0)), 1)
+                    b["h"] = round(hmax * (0.58 + 0.42 * ((int(abs(cx) * 7 + abs(cy) * 13) % 100) / 100.0)), 1)
                 b["kind"] = kind
                 b["style"] = 1
                 b["colour"] = col
-                for k in ("cpd", "yangfang", "roof", "roof_colour", "trim"):
+                b["name"] = cnm
+                for k in ("cpd", "yangfang", "roof", "roof_colour", "trim", "arch"):
                     b.pop(k, None)
                 n_campus += 1
                 break
@@ -3362,7 +3915,7 @@ def apply_t1_survey(blds, storefronts, road_grid, bld_grid):
 
     n0 = len(storefronts)
     storefronts[:] = [sf for sf in storefronts
-                      if not any(x0 < mid(sf)[0] < x1 and y0 < mid(sf)[1] < y1 for (x0, y0, x1, y1) in NO_SHOP_BOXES)]
+                      if not any(x0 < mid(sf)[0] < x1 and y0 < mid(sf)[1] < y1 for (x0, y0, x1, y1) in all_no_shop)]
     n_cut = n0 - len(storefronts)
 
     sf_grid = Grid(40.0)
@@ -3372,7 +3925,7 @@ def apply_t1_survey(blds, storefronts, road_grid, bld_grid):
 
     def nearest_road(px, py):
         best = None
-        for (ax, ay, bx, by, hw) in road_grid.query(px - 70, py - 70, px + 70, py + 70):
+        for (ax, ay, bx, by, hw) in road_grid.query(px - 95, py - 95, px + 95, py + 95):
             d, _t = seg_dist(px, py, ax, ay, bx, by)
             if best is None or d - hw < best[0]:
                 best = (d - hw, ax, ay, bx, by, hw)
@@ -3384,75 +3937,121 @@ def apply_t1_survey(blds, storefronts, road_grid, bld_grid):
 
     taken = set()
     n_named = n_podium = n_miss = 0
-    for (nm, kind, brand, (tx, ty)) in REAL_SHOPS:
+    for (nm, kind, brand, (tx, ty)) in REAL_SHOPS_GOOGLE:
         r = nearest_road(tx, ty)
         if r is None:
             n_miss += 1
             continue
         s_t = side_of(r, tx, ty)
         best = None
-        for i in sf_grid.query(tx - 45, ty - 45, tx + 45, ty + 45):
+        for i in sf_grid.query(tx - 65, ty - 65, tx + 65, ty + 65):
             if i in taken:
                 continue
             sf = storefronts[i]
             mx, my = mid(sf)
             d = math.hypot(mx - tx, my - ty)
-            if d > 45.0 or side_of(r, mx, my) != s_t:
+            if d > 65.0 or side_of(r, mx, my) != s_t:
                 continue
             if best is None or d < best[0]:
                 best = (d, i)
-        rec = {"name": nm, "kind": kind, "brand": brand or nm, "tier": "local"}
+        rec = {"name": nm, "kind": kind, "brand": brand or nm, "tier": "chain" if brand else "local", "verified": True}
         if best is not None:
             taken.add(best[1])
             storefronts[best[1]].update(rec)
             n_named += 1
             continue
-        # no shop slot on that kerb: a 16 x 10 m two-storey podium set back behind the pavement
+        # No existing storefront slot on that kerb: attach directly onto the nearest REAL building's street-facing
+        # wall (NEVER synthesize fake podium buildings!)
         _d, ax, ay, bx, by, hw = r
-        L = max(1e-6, math.hypot(bx - ax, by - ay))
-        ux, uy = (bx - ax) / L, (by - ay) / L
-        nx, ny = -uy * s_t, ux * s_t  # from the road toward the target's side
-        _dd, t = seg_dist(tx, ty, ax, ay, bx, by)
-        placed = False
-        for shift in (0.0, 9.0, -9.0, 18.0, -18.0):
-            px = ax + (bx - ax) * t + ux * shift + nx * (hw + 10.0)
-            py = ay + (by - ay) * t + uy * shift + ny * (hw + 10.0)
-            ang = math.atan2(uy, ux)
-            poly = make_rect_poly(px, py, ang, 8.0, 5.0)
-            xs = [q[0] for q in poly]
-            ys = [q[1] for q in poly]
-            clash = False
-            for ob in bld_grid.query(min(xs) - 1, min(ys) - 1, max(xs) + 1, max(ys) + 1):
-                if any(point_in_poly(q[0], q[1], ob[4]) for q in poly + [(px, py)]) or \
-                        any(point_in_poly(q[0], q[1], poly) for q in ob[4]):
-                    clash = True
-                    break
-            if not clash:
-                for (rax, ray, rbx, rby, rhw) in road_grid.query(min(xs) - 30, min(ys) - 30, max(xs) + 30, max(ys) + 30):
-                    if any(seg_dist(q[0], q[1], rax, ray, rbx, rby)[0] < rhw + 3.0 for q in poly):
-                        clash = True
-                        break
-            if clash:
+        best_edge = None
+        for bi_cand, bc in enumerate(blds):
+            bpts = bc["pts"]
+            if len(bpts) < 3:
                 continue
-            b = {"pts": [rnd(q) for q in poly], "h": 7.5, "kind": "commercial", "style": 1, "colour": "#e4ded3"}
-            blds.append(b)
-            bi = len(blds) - 1
-            bld_grid.add((min(xs), min(ys), max(xs), max(ys), b["pts"]), min(xs), min(ys), max(xs), max(ys))
-            # shop face on the road side; storefront normal points out to the street, p0 -> p1 turns clockwise to it
-            fx, fy = px - nx * 5.0, py - ny * 5.0
-            onx, ony = -nx, -ny
-            dux, duy = -ony, onx  # so that (du.y, -du.x) == outward normal
-            sf = {"b": bi, "p0": rnd((fx - dux * 3.4, fy - duy * 3.4)), "p1": rnd((fx + dux * 3.4, fy + duy * 3.4)),
-                  "n": [round(onx, 4), round(ony, 4)]}
+            bx0, by0 = cen(bpts)
+            if abs(bx0 - tx) > 85.0 or abs(by0 - ty) > 85.0:
+                continue
+            if side_of(r, bx0, by0) != s_t:
+                continue
+            # Check each wall edge of this real building facing the target road
+            n_v = len(bpts)
+            for ei in range(n_v):
+                p0 = bpts[ei]
+                p1 = bpts[(ei + 1) % n_v]
+                elen = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
+                if elen < 5.0:
+                    continue
+                emx, emy = (p0[0] + p1[0]) * 0.5, (p0[1] + p1[1]) * 0.5
+                d_t = math.hypot(emx - tx, emy - ty)
+                if d_t > 75.0:
+                    continue
+                # Outward normal (ensure it points away from building centroid and toward the street)
+                dux, duy = (p1[0] - p0[0]) / elen, (p1[1] - p0[1]) / elen
+                onx, ony = duy, -dux
+                if onx * (emx - bx0) + ony * (emy - by0) < 0.0:
+                    onx, ony = -onx, -ony
+                    dux, duy = -dux, -duy
+                d_rd, _ = seg_dist(emx, emy, ax, ay, bx, by)
+                if d_rd > hw + 38.0:
+                    continue
+                score = d_t + d_rd * 0.4
+                if best_edge is None or score < best_edge[0]:
+                    best_edge = (score, bi_cand, emx, emy, dux, duy, onx, ony, min(3.4, elen * 0.42))
+        if best_edge is not None:
+            _, bi_cand, emx, emy, dux, duy, onx, ony, half_s = best_edge
+            sf = {
+                "b": bi_cand,
+                "p0": rnd((emx - dux * half_s, emy - duy * half_s)),
+                "p1": rnd((emx + dux * half_s, emy + duy * half_s)),
+                "n": [round(onx, 4), round(ony, 4)],
+            }
             sf.update(rec)
             storefronts.append(sf)
             n_podium += 1
-            placed = True
-            break
-        if not placed:
+        else:
             n_miss += 1
-    print(f"T1 survey: {n_campus} campus buildings re-kinded, {n_cut} made-up shops off campus/compound walls, "
-          f"{n_named} real merchants on existing shop slots, {n_podium} on new podiums, {n_miss} not placed")
+    # Pass 2: Snap THOUSANDS of real Jiaxing street-front merchant names harvested from Amap tiles (Vision OCR)
+    # onto matching real storefront slots city-wide (falling back to generated local names ONLY where no real
+    # merchant exists nearby)!
+    ocr_path = os.path.join(HERE, "osm_cache", "jiaxing_real_shops_ocr.json")
+    n_ocr_matched = 0
+    if os.path.exists(ocr_path):
+        ocr_shops = json.load(open(ocr_path, "r", encoding="utf-8"))
+        # Rebuild sf_grid including any podium-attached shops from Pass 1
+        sf_grid2 = Grid(45.0)
+        for i, sf in enumerate(storefronts):
+            if i in taken or sf.get("verified"):
+                continue
+            mx, my = mid(sf)
+            sf_grid2.add(i, mx, my, mx, my)
+        for it in ocr_shops:
+            tx, ty = float(it["x"]), float(it["y"])
+            nm = str(it["name"]).strip()
+            sk = str(it.get("kind", "convenience"))
+            if not nm or any(x0 < tx < x1 and y0 < ty < y1 for (x0, y0, x1, y1) in all_no_shop):
+                continue
+            best = None
+            for i in sf_grid2.query(tx - 65, ty - 65, tx + 65, ty + 65):
+                if i in taken:
+                    continue
+                mx, my = mid(storefronts[i])
+                d = math.hypot(mx - tx, my - ty)
+                if d <= 65.0 and (best is None or d < best[0]):
+                    best = (d, i)
+            if best is not None:
+                idx_sf = best[1]
+                taken.add(idx_sf)
+                storefronts[idx_sf].update({
+                    "name": nm,
+                    "kind": sk,
+                    "brand": nm,
+                    "tier": "chain" if any(ck in nm for ck in ("银行", "十足", "罗森", "全家", "瑞幸", "星巴克", "蜜雪冰城", "古茗", "霸王茶姬", "肯德基", "麦当劳", "老百姓", "益丰", "海王星辰", "五芳斋", "真真老老", "中国移动", "中国电信", "中国联通", "华为", "小米")) else "local",
+                    "verified": True,
+                })
+                n_ocr_matched += 1
+    print(f"Google Maps/Earth survey: {n_campus} campus buildings re-kinded, {n_cut} made-up shops off campus/compound walls, "
+          f"{n_named} T1 survey merchants + {n_ocr_matched} real map-wide OCR merchants placed, "
+          f"{n_podium} attached to real street buildings (0 synthetic podiums), {n_miss} not placed")
 
 
 def build_t1_starter_network(nodes_list, edges_list):
@@ -3600,12 +4199,62 @@ def build_t1_starter_network(nodes_list, edges_list):
         adj[nid_zsd_e].append((nid_hcd_s, next_eid, L_hz, "环城东路"))
         next_eid += 1
 
-    # Create 2 dedicated B1 underground nodes & 3 subterranean tunnel edges running DEAD CENTER along
-    # JiaxingStationB1Hall's unobstructed central corridor (lx = 0, y = -10.0m) straight under 沪昆铁路 -> 勤俭路!
-    nid_b1_e = next_nid
-    nid_b1_w = next_nid + 1
+    # Create dedicated B1 underground nodes & subterranean tunnel edges:
+    #   1. T1 continues DEAD STRAIGHT NORTH down the center median of 纺工路/东方路 into an open-cut concrete U-trough
+    #      portal ([993.3, -1075.3] -> [998.5, -1195.0], y: 0 -> -10m — 1:1 match to Google Earth!)
+    #   2. Once completely underground at B1 (y = -10.0m), T1 curves smoothly westward under South Plaza
+    #      ([998.5, -1195.0] -> [950.0, -1238.0] -> [795.0, -1185.0]) into JiaxingStationB1Hall's unobstructed
+    #      central corridor (lx = 0, y = -10.0m) straight under 沪昆铁路 -> 勤俭路!
+    # Reshape surface 纺工路 (nid_pinghu_n -> nid_portal_e) so nid_portal_e sits at [993.3, -1075.3] (just north of
+    # People's Park East Gate / 甪里街), and keep surface 东方路 continuing straight north around the portal median!
+    p_portal_e_straight = [993.3, -1075.3]
+    for nd_p in nodes_list:
+        if nd_p["id"] == nid_portal_e:
+            nd_p["pos"] = p_portal_e_straight
+            node_pos_by_id[nid_portal_e] = p_portal_e_straight
+            break
+    p_portal_e = p_portal_e_straight
+    for ed_p in edges_list:
+        a_id, b_id = ed_p["a"], ed_p["b"]
+        if (a_id == nid_pinghu_n and b_id == nid_portal_e) or (b_id == nid_pinghu_n and a_id == nid_portal_e):
+            pa_s = node_pos_by_id[nid_pinghu_n]
+            ed_p["pts"] = [pa_s, p_portal_e] if a_id == nid_pinghu_n else [p_portal_e, pa_s]
+            ed_p["length"] = round(math.hypot(p_portal_e[0] - pa_s[0], p_portal_e[1] - pa_s[1]), 2)
+            ed_p["width"] = 36.0
+            ed_p["name"] = "纺工路"
+        elif a_id == nid_portal_e and not ed_p.get("underground"):
+            ed_p["pts"][0] = p_portal_e
+        elif b_id == nid_portal_e and not ed_p.get("underground"):
+            ed_p["pts"][-1] = p_portal_e
+    # Add wide surface 东方路 continuation flanking the straight center-median concrete U-trough portal north to [1006.2, -1332.0]
+    nid_df_north = nearest_node_xy(1006.2, -1332.0, "东方路")
+    if nid_df_north != nid_portal_e:
+        p_dfn = node_pos_by_id[nid_df_north]
+        pts_df = [p_portal_e, [998.5, -1195.0], [1002.4, -1270.0], p_dfn]
+        L_df = round(sum(math.hypot(pts_df[k + 1][0] - pts_df[k][0], pts_df[k + 1][1] - pts_df[k][1]) for k in range(len(pts_df) - 1)), 2)
+        edges_list.append({
+            "id": next_eid, "a": nid_portal_e, "b": nid_df_north, "name": "东方路",
+            "width": 36.0, "lanes_f": 3, "lanes_b": 3, "tram_median": True, "bike_lane": True,
+            "length": L_df, "pts": pts_df, "cls": "primary",
+        })
+        next_eid += 1
+        # Hide the old overlapping narrow twin carriageway beside this wide unified 东方路 boulevard
+        for ed_h in edges_list:
+            if ed_h.get("name") == "东方路" and not ed_h.get("underground") and float(ed_h.get("width", 0)) < 16.0:
+                ep = ed_h.get("pts", [])
+                if ep and any(-1325.0 <= q[1] <= -1045.0 and 955.0 <= q[0] <= 1015.0 for q in ep):
+                    ed_h["hide_road"] = True
+
+    nid_b1_df = next_nid
+    nid_b1_mid = next_nid + 1
+    nid_b1_e = next_nid + 2
+    nid_b1_w = next_nid + 3
+    p_b1_df = [998.5, -1195.0]
+    p_b1_mid = [950.0, -1238.0]
     p_b1_e = [795.0, -1185.0]
     p_b1_w = [632.0, -1342.0]
+    nodes_list.append({"id": nid_b1_df, "pos": p_b1_df, "name": "纺工路地下隧道入口底"})
+    nodes_list.append({"id": nid_b1_mid, "pos": p_b1_mid, "name": "南广场地下弯道"})
     nodes_list.append({"id": nid_b1_e, "pos": p_b1_e, "name": "嘉兴站地下南端"})
     nodes_list.append({"id": nid_b1_w, "pos": p_b1_w, "name": "嘉兴站地下北端"})
 
@@ -3619,11 +4268,15 @@ def build_t1_starter_network(nodes_list, edges_list):
         edges_list.append(ed)
         return ed
 
-    e_ramp_in = _add_ug_edge(next_eid, nid_portal_e, nid_b1_e, p_portal_e, p_b1_e, "嘉兴站东地下隧道坡道")
-    e_b1_sta = _add_ug_edge(next_eid + 1, nid_b1_e, nid_b1_w, p_b1_e, p_b1_w, "嘉兴火车站地下隧道")
-    e_ramp_out = _add_ug_edge(next_eid + 2, nid_b1_w, nid_portal_w, p_b1_w, p_portal_w, "嘉兴站北地下隧道坡道")
+    e_ramp_in = _add_ug_edge(next_eid, nid_portal_e, nid_b1_df, p_portal_e, p_b1_df, "纺工路直行下穿隧道坡道")
+    e_b1_c1 = _add_ug_edge(next_eid + 1, nid_b1_df, nid_b1_mid, p_b1_df, p_b1_mid, "南广场地下联络隧道")
+    e_b1_c2 = _add_ug_edge(next_eid + 2, nid_b1_mid, nid_b1_e, p_b1_mid, p_b1_e, "嘉兴站南地下联络隧道")
+    e_b1_sta = _add_ug_edge(next_eid + 3, nid_b1_e, nid_b1_w, p_b1_e, p_b1_w, "嘉兴火车站地下隧道")
+    e_ramp_out = _add_ug_edge(next_eid + 4, nid_b1_w, nid_portal_w, p_b1_w, p_portal_w, "嘉兴站北地下隧道坡道")
     ug_elev_map = {
         e_ramp_in["id"]: (0.0, -10.0),
+        e_b1_c1["id"]: (-10.0, -10.0),
+        e_b1_c2["id"]: (-10.0, -10.0),
         e_b1_sta["id"]: (-10.0, -10.0),
         e_ramp_out["id"]: (-10.0, 0.0),
     }
@@ -3661,8 +4314,8 @@ def build_t1_starter_network(nodes_list, edges_list):
         if not nm_b.startswith("__"):
             station_targets.append((nm_b, xb, yb, len(track_eids) - 1, False, None))
 
-    # Trace Part B (Underground B1 Tunnel straight through 嘉兴火车站 & underneath 沪昆铁路 -> 勤俭路!)
-    for ug_ed in (e_ramp_in, e_b1_sta, e_ramp_out):
+    # Trace Part B (Underground B1 Tunnel straight north down 东方路 -> smooth underground curve -> 嘉兴火车站 -> 勤俭路!)
+    for ug_ed in (e_ramp_in, e_b1_c1, e_b1_c2, e_b1_sta, e_ramp_out):
         seen_e.add(ug_ed["id"])
         track_eids.append(ug_ed["id"])
     b1_hint_idx = len(track_eids) - 2
@@ -3926,10 +4579,23 @@ COMPOUND_NAMES_ZH = [
 ]
 
 
-def build_gated_compounds(landuse_zones, ways, nodes, road_grid, water_grid, rail_grid, bld_grid):
+UNNAMED_COMPOUND_HULLS = []
+
+
+def build_gated_compounds(landuse_zones, ways, nodes, road_grid, water_grid, rail_grid, bld_grid, park_grid=None):
     """Build authentic Chinese gated residential compound walls & street-facing gatehouses city-wide."""
     compounds = []
     rng = random.Random(20260530)
+
+    def in_park_or_campus(qx, qy):
+        if park_grid is not None:
+            for pp in park_grid.query(qx - 6, qy - 6, qx + 6, qy + 6):
+                if point_in_poly(qx, qy, pp):
+                    return True
+        for (_cnm, x0, y0, x1, y1, _hm, _kd, _col, _ns) in REAL_CAMPUSES:
+            if x0 < qx < x1 and y0 < qy < y1:
+                return True
+        return False
 
     # Collect ALL named & unnamed OSM residential polygons first!
     res_polys = []
@@ -3954,11 +4620,19 @@ def build_gated_compounds(landuse_zones, ways, nodes, road_grid, water_grid, rai
         seen_c.add(ck)
         res_polys.append((simplify_ring(ring, 4.0), ""))
 
-    # Synthesize block-hugging Chinese gated compounds across the ENTIRE Jiaxing residential fabric
-    # so the overwhelming majority of Chinese residential apartment clusters are enclosed gated 小区!
+    # Add auto-clustered real unnamed visible residential compounds (地图上可见的无名真实小区)
+    for hull_pts, cl_nm in UNNAMED_COMPOUND_HULLS:
+        c = centroid(hull_pts)
+        ck = (int(c[0] // 72), int(c[1] // 72))
+        if ck in seen_c or in_park_or_campus(c[0], c[1]) or in_airport_precinct(c):
+            continue
+        seen_c.add(ck)
+        res_polys.append((hull_pts, cl_nm))
+
+    # Synthesize block-hugging Chinese gated compounds across the ENTIRE active Jiaxing residential fabric
+    # (including outer districts, suburban/newly built 2021-2025 blocks & unnamed visible compounds!)
     synth_zones = [
-        (-3700, -3950, 5700, 4550, 114),
-        (1100, 2400, 4800, 6800, 122),
+        (-6200, -5000, 6500, 7200, 112),
     ]
     for x0, y0, x1, y1, step in synth_zones:
         for ex in range(x0, x1, step):
@@ -3978,9 +4652,9 @@ def build_gated_compounds(landuse_zones, ways, nodes, road_grid, water_grid, rai
                     continue
                 if seg_dist(cx, cy, -445.0, -1065.0, -526.0, -1622.0)[0] < 48.0:
                     continue
-                if in_airport_precinct((cx, cy)):
+                if in_airport_precinct((cx, cy)) or in_park_or_campus(cx, cy):
                     continue
-                half_s = step * 0.46
+                half_s = step * 0.48
                 blk_blds = []
                 for ob in bld_grid.query(cx - half_s, cy - half_s, cx + half_s, cy + half_s):
                     bc = centroid(ob[4])
@@ -3992,17 +4666,129 @@ def build_gated_compounds(landuse_zones, ways, nodes, road_grid, water_grid, rai
                 by0 = min(ob[1] for ob in blk_blds) - 4.0
                 bx1 = max(ob[2] for ob in blk_blds) + 4.0
                 by1 = max(ob[3] for ob in blk_blds) + 4.0
-                if (bx1 - bx0) < 30.0 or (by1 - by0) < 30.0:
+                if (bx1 - bx0) < 26.0 or (by1 - by0) < 26.0:
                     continue
-                if (bx1 - bx0) > 220.0 or (by1 - by0) > 220.0:
+                if (bx1 - bx0) > 260.0 or (by1 - by0) > 260.0:
                     continue
                 rect_r = [(bx0, by0), (bx1, by0), (bx1, by1), (bx0, by1)]
                 seen_c.add(ck)
                 res_polys.append((rect_r, ""))
 
+    # Connected-component convex-hull clustering for ALL remaining un-enclosed residential/apartment buildings
+    # (captures 2021-2025 newly built blocks & irregular road-bounded 无名小区 that square grids miss!)
+    existing_comp_grid = Grid(90.0)
+    for r_poly, _rnm in res_polys:
+        rc = centroid(r_poly)
+        existing_comp_grid.add(r_poly, rc[0] - 85, rc[1] - 85, rc[0] + 85, rc[1] + 85)
+
+    unenc_res = []
+    for ob in bld_grid.items if hasattr(bld_grid, "items") else []:
+        pass
+    # Gather all unique building items from bld_grid cells
+    seen_ob_ids = set()
+    for cell_list in bld_grid.cells.values():
+        for ob in cell_list:
+            oid = id(ob)
+            if oid in seen_ob_ids:
+                continue
+            seen_ob_ids.add(oid)
+            bc = centroid(ob[4])
+            if not in_active(bc, -35.0) or in_airport_precinct(bc) or in_park_or_campus(bc[0], bc[1]):
+                continue
+            if math.hypot(bc[0] - YUEHE_POS[0], bc[1] - YUEHE_POS[1]) < 340.0:
+                continue
+            if math.hypot(bc[0] - NANHU_ORIGIN[0], bc[1] - NANHU_ORIGIN[1]) < 460.0:
+                continue
+            if math.hypot(bc[0] - HANLIN_POS[0], bc[1] - HANLIN_POS[1]) < 150.0:
+                continue
+            if math.hypot(bc[0] - JIAXING_NO1_POS[0], bc[1] - JIAXING_NO1_POS[1]) < 245.0:
+                continue
+            # Skip if already inside any existing residential compound polygon
+            already = False
+            for ep in existing_comp_grid.query(bc[0], bc[1], bc[0], bc[1]):
+                if point_in_poly(bc[0], bc[1], ep):
+                    already = True
+                    break
+            if not already:
+                unenc_res.append((bc[0], bc[1], ob))
+
+    if len(unenc_res) >= 2:
+        u_parent = list(range(len(unenc_res)))
+        def uf_find(i):
+            while u_parent[i] != i:
+                u_parent[i] = u_parent[u_parent[i]]
+                i = u_parent[i]
+            return i
+        u_bins = defaultdict(list)
+        for i, (ux, uy, _) in enumerate(unenc_res):
+            u_bins[(int(ux // 60), int(uy // 60))].append(i)
+        for i, (ux, uy, _) in enumerate(unenc_res):
+            bx, by = int(ux // 60), int(uy // 60)
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    for j in u_bins.get((bx + dx, by + dy), ()):
+                        if j <= i:
+                            continue
+                        vx, vy, _ = unenc_res[j]
+                        if math.hypot(ux - vx, uy - vy) <= 56.0:
+                            # Do not merge across a major road!
+                            mx_u, my_u = (ux + vx) * 0.5, (uy + vy) * 0.5
+                            cross_rd = False
+                            for (rax, ray, rbx, rby, rhw) in road_grid.query(mx_u - 12, my_u - 12, mx_u + 12, my_u + 12):
+                                if rhw >= 4.5 and seg_intersection((ux, uy), (vx, vy), (rax, ray), (rbx, rby)) is not None:
+                                    cross_rd = True
+                                    break
+                            if not cross_rd:
+                                ri, rj = uf_find(i), uf_find(j)
+                                if ri != rj:
+                                    u_parent[ri] = rj
+        u_groups = defaultdict(list)
+        for i in range(len(unenc_res)):
+            u_groups[uf_find(i)].append(unenc_res[i])
+        n_cc_added = 0
+        for grp in u_groups.values():
+            if len(grp) < 2 or len(grp) > 28:
+                continue
+            all_pts = []
+            for _ux, _uy, ob in grp:
+                all_pts.extend(ob[4])
+            # Simple padded convex hull around this un-enclosed residential cluster
+            pts_s = sorted(set((round(p[0], 1), round(p[1], 1)) for p in all_pts))
+            if len(pts_s) < 3:
+                continue
+            def _cross(o, a, b):
+                return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+            lo_h, hi_h = [], []
+            for p in pts_s:
+                while len(lo_h) >= 2 and _cross(lo_h[-2], lo_h[-1], p) <= 0:
+                    lo_h.pop()
+                lo_h.append(p)
+            for p in reversed(pts_s):
+                while len(hi_h) >= 2 and _cross(hi_h[-2], hi_h[-1], p) <= 0:
+                    hi_h.pop()
+                hi_h.append(p)
+            hull = lo_h[:-1] + hi_h[:-1]
+            if len(hull) < 4:
+                continue
+            hc = centroid(hull)
+            padded = []
+            for p in hull:
+                vx, vy = p[0] - hc[0], p[1] - hc[1]
+                L = math.hypot(vx, vy)
+                if L > 1.0:
+                    padded.append((p[0] + vx / L * 4.5, p[1] + vy / L * 4.5))
+                else:
+                    padded.append(p)
+            hs = simplify_ring(padded, 4.0)
+            if len(hs) >= 4 and 1200.0 <= abs(poly_area(hs)) <= 120000.0:
+                res_polys.append((hs, ""))
+                n_cc_added += 1
+        print(f"Auto-clustered unnamed residential compounds (无名小区): +{n_cc_added} new clusters")
+
     name_idx = 0
+    used_compound_names = defaultdict(int)
     for ring, raw_nm in res_polys:
-        if len(compounds) >= 1650:
+        if len(compounds) >= 2800:
             break
         if len(ring) < 4 or len(ring) > 36:
             continue
@@ -4084,15 +4870,29 @@ def build_gated_compounds(landuse_zones, ways, nodes, road_grid, water_grid, rai
                     final_segs.append([rnd(sa), rnd(g_left)])
                 if math.hypot(sb[0] - g_right[0], sb[1] - g_right[1]) >= 2.5:
                     final_segs.append([rnd(g_right), rnd(sb)])
-        nm = raw_nm if raw_nm else COMPOUND_NAMES_ZH[name_idx % len(COMPOUND_NAMES_ZH)]
-        name_idx += 1
+        # Assign authentic real Jiaxing residential compound name from OSM -> Google Maps survey
+        # (with natural Chinese sub-zone suffixes when a large compound spans multiple gated blocks)
+        real_nm, real_style = (raw_nm, None) if raw_nm else nearest_real_compound_name(c[0], c[1])
+        if real_nm:
+            used_cnt = used_compound_names[real_nm]
+            used_compound_names[real_nm] = used_cnt + 1
+            if used_cnt == 0:
+                nm = real_nm
+            else:
+                suffixes = ("东区", "西区", "南区", "北区", "二期", "三期", "锦苑", "雅苑", "丽苑", "华庭", "新苑", "景苑")
+                nm = f"{real_nm}·{suffixes[(used_cnt - 1) % len(suffixes)]}"
+            g_style = real_style if real_style is not None else rng.randint(0, 2)
+        else:
+            nm = COMPOUND_NAMES_ZH[name_idx % len(COMPOUND_NAMES_ZH)]
+            name_idx += 1
+            g_style = rng.randint(0, 2)
         compounds.append({
             "_ring": shrunk,
             "name": nm,
             "segs": final_segs,
             "gate_pos": rnd((gx, gy)),
             "gate_angle": round(-math.atan2(gny, gnx) + math.pi * 0.5, 4),
-            "style": rng.randint(0, 2),
+            "style": g_style,
         })
 
     print(f"Chinese gated compounds: {len(compounds)} enclosed 小区 with perimeter walls, gatehouses & boom barriers")
@@ -4602,6 +5402,7 @@ def main():
 
     cleaned_blds = []
     removed_t1_blds = 0
+    nudged_t1_blds = 0
     for b in blds:
         bpts = b.get("pts", [])
         if not bpts:
@@ -4613,24 +5414,50 @@ def main():
         if cands:
             cx = sum(xs) / len(xs)
             cy = sum(ys) / len(ys)
-            chk_pts = [(cx, cy)] + [(p[0], p[1]) for p in bpts] + [
-                ((bpts[k][0] + bpts[(k + 1) % len(bpts)][0]) * 0.5, (bpts[k][1] + bpts[(k + 1) % len(bpts)][1]) * 0.5)
-                for k in range(len(bpts))
-            ]
-            for (ax, ay, bx, by, clr_r) in cands:
-                for (px, py) in chk_pts:
-                    if seg_dist(px, py, ax, ay, bx, by)[0] < clr_r:
-                        blocked = True
+            # Only delete if the building's centroid itself sits inside the widened T1 boulevard!
+            if any(seg_dist(cx, cy, ax, ay, bx, by)[0] < clr_r - 2.0 for (ax, ay, bx, by, clr_r) in cands):
+                blocked = True
+            else:
+                # Otherwise gently pull any front-facing vertices behind the T1 sidewalk kerb (preserves all 沿街商铺 strips!)
+                new_pts = []
+                did_nudge = False
+                for (px, py) in bpts:
+                    nx_p, ny_p = float(px), float(py)
+                    for (ax, ay, bx, by, clr_r) in cands:
+                        dd, tt = seg_dist(nx_p, ny_p, ax, ay, bx, by)
+                        if dd < clr_r - 0.6:
+                            qx = ax + (bx - ax) * tt
+                            qy = ay + (by - ay) * tt
+                            vx, vy = nx_p - qx, ny_p - qy
+                            vl = math.hypot(vx, vy)
+                            if vl < 1e-4:
+                                vx, vy = cx - qx, cy - qy
+                                vl = math.hypot(vx, vy) or 1.0
+                            push = (clr_r - 0.2) - dd
+                            if push > 11.0:
+                                blocked = True
+                                break
+                            nx_p += (vx / vl) * push
+                            ny_p += (vy / vl) * push
+                            did_nudge = True
+                    if blocked:
                         break
-                if blocked:
-                    break
+                    new_pts.append(rnd((nx_p, ny_p)))
+                if not blocked and did_nudge:
+                    if abs(poly_area(new_pts)) < 24.0:
+                        blocked = True
+                    else:
+                        b["pts"] = new_pts
+                        b.pop("roof", None)
+                        b.pop("yangfang", None)
+                        nudged_t1_blds += 1
         if blocked:
             removed_t1_blds += 1
             continue
         cleaned_blds.append(b)
     blds = cleaned_blds
-    if removed_t1_blds > 0:
-        print(f"T1 corridor building clearance: removed {removed_t1_blds} buildings encroaching on widened T1 boulevards")
+    if removed_t1_blds > 0 or nudged_t1_blds > 0:
+        print(f"T1 corridor building clearance: nudged {nudged_t1_blds} 沿街商铺 strips behind kerb, removed {removed_t1_blds} deeply encroaching buildings")
         bld_grid = Grid(45.0)
         for b in blds:
             bpts = b["pts"]
@@ -4654,12 +5481,19 @@ def main():
             ys = [p[1] for p in bpts]
             bld_grid.add((min(xs), min(ys), max(xs), max(ys), bpts), min(xs), min(ys), max(xs), max(ys))
 
+    # Append Hanlin Residence towers + authentic south 沿街商业 buildings BEFORE build_street_furniture()
+    # so the Hanlin south commercial buildings facing 纺工路 & 中环南路 receive continuous wall-to-wall storefronts!
+    for hb in hanlin_tower_buildings():
+        blds.append(hb)
+        hxs = [q[0] for q in hb["pts"]]
+        hys = [q[1] for q in hb["pts"]]
+        bld_grid.add((min(hxs), min(hys), max(hxs), max(hys), hb["pts"]), min(hxs), min(hys), max(hxs), max(hys))
     resolve_parallel_overlaps(graph_edges, t1_edge_ids)
     roads, cws, lamps, trees, storefronts = build_street_furniture(
         graph_edges, graph_nodes, blds, poi_nodes, nodes, road_grid, water_grid, rail_grid, bld_grid, freeway_grid, raw_islands
     )
     apply_t1_survey(blds, storefronts, road_grid, bld_grid)
-    gated_compounds = build_gated_compounds(landuse_zones, ways, nodes, road_grid, water_grid, rail_grid, bld_grid)
+    gated_compounds = build_gated_compounds(landuse_zones, ways, nodes, road_grid, water_grid, rail_grid, bld_grid, park_grid)
 
     # 底商 face the street from OUTSIDE the compound: wherever a compound fence would pass in front of a building
     # with shopfronts (within 12 m of its street side), the fence is cut there and the shop building itself forms
@@ -4688,7 +5522,37 @@ def main():
                     return True
         return False
 
+    # Build an exact surface-road spatial index matching Godot's rendered widths (clamped to [3.2, 22.0])
+    # so EVERY 1.0m of compound fence & EVERY gatehouse footprint is guaranteed strictly clear of ALL road asphalt & curbs!
+    final_road_grid = Grid(40.0)
+    for r_e in graph_edges:
+        if r_e.get("underground") or int(r_e.get("layer", 0)) != 0:
+            continue
+        rhw_e = max(3.2, min(22.0, float(r_e.get("width", 12.0)) * 0.5))
+        rpts_e = r_e.get("pts", [])
+        for ri_e in range(len(rpts_e) - 1):
+            ax_e, ay_e = float(rpts_e[ri_e][0]), float(rpts_e[ri_e][1])
+            bx_e, by_e = float(rpts_e[ri_e + 1][0]), float(rpts_e[ri_e + 1][1])
+            pad_e = rhw_e + 6.0
+            final_road_grid.add((ax_e, ay_e, bx_e, by_e, rhw_e),
+                                min(ax_e, bx_e) - pad_e, min(ay_e, by_e) - pad_e,
+                                max(ax_e, bx_e) + pad_e, max(ay_e, by_e) + pad_e)
+
+    def fence_pt_hits_road_or_rail(px, py, margin=2.2):
+        # Hanlin Residence SE commercial plaza & parking forecourt (x >= 1352, y in 1435..1605):
+        # residential compound fence along 中环南路 MUST stop cleanly at the west edge of 瀚林商业广场 (never cross to 纺工路!)
+        if px >= 1351.0 and 1435.0 <= py <= 1605.0 and px <= 1445.0:
+            return True
+        for (rax, ray, rbx, rby, rhw) in final_road_grid.query(px - 2, py - 2, px + 2, py + 2):
+            if seg_dist(px, py, rax, ray, rbx, rby)[0] < rhw + margin:
+                return True
+        for (rax, ray, rbx, rby, rw) in rail_grid.query(px - 2, py - 2, px + 2, py + 2):
+            if seg_dist(px, py, rax, ray, rbx, rby)[0] < rw + 1.2:
+                return True
+        return False
+
     cut_m = 0.0
+    road_cut_m = 0.0
     n_gate_moved, n_gate_dropped = 0, 0
     for comp in gated_compounds:
         new_segs = []
@@ -4699,7 +5563,9 @@ def main():
             for k in range(n + 1):
                 f = k / n
                 px, py = sa[0] + (sb[0] - sa[0]) * f, sa[1] + (sb[1] - sa[1]) * f
-                keep = not in_front_of_shop(px, py)
+                hit_shop = in_front_of_shop(px, py)
+                hit_rd = fence_pt_hits_road_or_rail(px, py, 2.2)
+                keep = (not hit_shop) and (not hit_rd)
                 if keep and run_start is None:
                     run_start = f
                 if (not keep or k == n) and run_start is not None:
@@ -4709,17 +5575,19 @@ def main():
                     if math.hypot(b[0] - a[0], b[1] - a[1]) >= 2.2:
                         new_segs.append([rnd(a), rnd(b)])
                     run_start = None
-                if not keep:
+                if hit_shop:
                     cut_m += L / n
+                elif hit_rd:
+                    road_cut_m += L / n
         comp["segs"] = new_segs
-        # the gatehouse must not stand in front of the shops either: move it to the remaining fence stretch that
-        # best faces a street (or drop it when the compound has none)
+        # the gatehouse must not stand in front of shops OR encroach onto any widened road/curb:
         gp = comp.get("gate_pos", [])
         if len(gp) == 2:
             gx0, gy0 = gp
             near_shop = in_front_of_shop(gx0, gy0) or any(
                 math.hypot(q[0] - gx0, q[1] - gy0) < 9.0 for (bp, _nv) in shop_grid.query(gx0 - 9, gy0 - 9, gx0 + 9, gy0 + 9) for q in bp)
-            if near_shop:
+            gate_on_road = fence_pt_hits_road_or_rail(gx0, gy0, 2.6)
+            if near_shop or gate_on_road:
                 n_gate_moved += 1
                 ring = comp.get("_ring") or []
                 cx_c, cy_c = centroid(ring) if len(ring) >= 3 else (gx0, gy0)
@@ -4735,10 +5603,11 @@ def main():
                         nx, ny = -nx, -ny  # outward
                     if in_front_of_shop(mx, my):
                         continue
-                    # gatehouse footprint (13 m canopy, 3.3 m inside .. 2.6 m outside the fence) clear of every building
-                    # footprint (true polygons: the gap between two rotated shop buildings is a fine spot)
+                    # gatehouse footprint (13 m canopy, 3.3 m inside .. 2.6 m outside the fence) clear of buildings & roads!
                     clear = True
                     probes = [(mx + ux * a + nx * b, my + uy * a + ny * b) for a in (-6.6, -4.4, -2.2, 0.0, 2.2, 4.4, 6.6) for b in (-3.3, 0.0, 2.6)]
+                    if any(fence_pt_hits_road_or_rail(fx, fy, 2.0) for (fx, fy) in probes):
+                        continue
                     for ob in bld_grid.query(mx - 10, my - 10, mx + 10, my + 10):
                         if any(point_in_poly(fx, fy, ob[4]) for (fx, fy) in probes):
                             clear = False
@@ -4746,9 +5615,9 @@ def main():
                     if not clear:
                         continue
                     d_road = 1e9
-                    for (rax, ray, rbx, rby, rhw) in road_grid.query(mx - 40, my - 40, mx + 40, my + 40):
+                    for (rax, ray, rbx, rby, rhw) in final_road_grid.query(mx - 40, my - 40, mx + 40, my + 40):
                         d_road = min(d_road, seg_dist(mx + nx * 2.0, my + ny * 2.0, rax, ray, rbx, rby)[0] - rhw)
-                    if d_road < 1.0 or d_road > 45.0:
+                    if d_road < 2.2 or d_road > 45.0:
                         continue
                     if best is None or d_road < best[0]:
                         best = (d_road, si, mx, my, ux, uy, nx, ny, sa, sb)
@@ -4767,8 +5636,9 @@ def main():
                     comp["segs"] = new_segs[:si] + pieces + new_segs[si + 1:]
                     comp["gate_pos"] = rnd((mx, my))
                     comp["gate_angle"] = round(-math.atan2(ny, nx) + math.pi * 0.5, 4)
-    print(f"底商 outside compounds: {cut_m / 1000.0:.1f} km of compound fence removed in front of shopfronts; "
-          f"{n_gate_moved} gatehouses off shop frontages ({n_gate_dropped} compounds without a clear spot keep a plain opening)")
+    print(f"底商 & road-clearance compound audit: {cut_m / 1000.0:.1f} km cut for shops, "
+          f"{road_cut_m / 1000.0:.2f} km cut off roads/curbs; "
+          f"{n_gate_moved} gatehouses relocated ({n_gate_dropped} dropped)")
 
     # 小区绿化: the courtyard of every gated compound is landscaped lawn (buildings stand on it) with trees in the
     # gaps between blocks. A lawn is only laid where its whole outline keeps clear of roads, rail, water and other
@@ -4849,10 +5719,32 @@ def main():
             gy += 12.0
     print(f"小区绿化: {n_lawn} landscaped compound lawns, {n_ctree} courtyard trees")
 
-    # Undeveloped plots (待开发用地) are rough grass, not bare paving: 50 m squares with no building, road (plus its
-    # pavement), rail, freeway, water or mapped area anywhere near them
+    # Classify open unbuilt plots via Google Earth z16 satellite RGB into REAL Farmland (农田),
+    # REAL Active Construction Sites (在建工地), and urban vacant rough grass!
+    def _in_south_plaza(qx, qy):
+        dx_s = qx - SOUTH_STA_POS[0]
+        dy_s = qy - SOUTH_STA_POS[1]
+        ca_s, sa_s = math.cos(0.4925), math.sin(0.4925)
+        lx_s = dx_s * ca_s - dy_s * sa_s
+        lz_s = dx_s * sa_s + dy_s * ca_s
+        return -245.0 <= lx_s <= 278.0 and -368.0 <= lz_s <= 85.0
+
     CELL = 50.0
     n_vac = 0
+    n_ge_farm = 0
+    ge_const_cells = []   # (cx, cy, r0)
+    farm_gh_cands = []    # (cx, cy, area_m2)
+    # Seed greenhouse candidates from real OSM farmland polygons first
+    for a_item in areas:
+        if a_item.get("kind") == "farmland":
+            apts = [(float(p[0]), float(p[1])) for p in a_item.get("pts", [])]
+            if len(apts) >= 3:
+                aa = abs(poly_area(apts))
+                if aa >= 2600.0:
+                    acx, acy = centroid(apts)
+                    if not in_zhonghuan(acx, acy) and not _in_south_plaza(acx, acy) and not in_airport_precinct((acx, acy)):
+                        farm_gh_cands.append((acx, acy, aa))
+
     bx0, by0, bx1, by1 = BOUNDS
     gy = by0
     while gy < by1:
@@ -4860,7 +5752,7 @@ def main():
         while gx < bx1:
             cx, cy = gx + CELL * 0.5, gy + CELL * 0.5
             gx += CELL
-            if not in_active((cx, cy), -30.0):
+            if not in_active((cx, cy), -30.0) or _in_south_plaza(cx, cy) or in_airport_precinct((cx, cy)):
                 continue
             r0 = (cx - CELL * 0.5, cy - CELL * 0.5, cx + CELL * 0.5, cy + CELL * 0.5)
             if any(not (o[2] < r0[0] - 10 or o[0] > r0[2] + 10 or o[3] < r0[1] - 10 or o[1] > r0[3] + 10)
@@ -4870,18 +5762,18 @@ def main():
                    for o in area_grid.query(r0[0], r0[1], r0[2], r0[3])):
                 continue
             near = False
-            for (rax, ray, rbx, rby, rhw) in road_grid.query(cx - 60, cy - 60, cx + 60, cy + 60):
-                if seg_dist(cx, cy, rax, ray, rbx, rby)[0] < rhw + 5.0 + CELL * 0.71:
+            for (rax, ray, rbx, rby, rhw) in road_grid.query(cx - 56, cy - 56, cx + 56, cy + 56):
+                if seg_dist(cx, cy, rax, ray, rbx, rby)[0] < rhw + 2.5 + CELL * 0.54:
                     near = True
                     break
             if not near:
-                for (rax, ray, rbx, rby, rw) in rail_grid.query(cx - 60, cy - 60, cx + 60, cy + 60):
-                    if seg_dist(cx, cy, rax, ray, rbx, rby)[0] < rw + CELL * 0.71:
+                for (rax, ray, rbx, rby, rw) in rail_grid.query(cx - 56, cy - 56, cx + 56, cy + 56):
+                    if seg_dist(cx, cy, rax, ray, rbx, rby)[0] < rw + CELL * 0.54:
                         near = True
                         break
             if not near:
-                for (fax, fay, fbx, fby, fhw) in freeway_grid.query(cx - 70, cy - 70, cx + 70, cy + 70):
-                    if seg_dist(cx, cy, fax, fay, fbx, fby)[0] < fhw + 6.0 + CELL * 0.71:
+                for (fax, fay, fbx, fby, fhw) in freeway_grid.query(cx - 65, cy - 65, cx + 65, cy + 65):
+                    if seg_dist(cx, cy, fax, fay, fbx, fby)[0] < fhw + 4.0 + CELL * 0.54:
                         near = True
                         break
             if not near:
@@ -4891,13 +5783,184 @@ def main():
                         break
             if near or in_zs_rect(cx, cy) or in_nh_rect(cx, cy):
                 continue
-            areas.append({"kind": "vacant_green", "pts": [rnd((r0[0], r0[1])), rnd((r0[2], r0[1])), rnd((r0[2], r0[3])), rnd((r0[0], r0[3]))]})
-            n_vac += 1
-            # a few self-seeded trees / scrub clumps break up the open ground
-            for _t in range(rng_cg.choice([0, 0, 1, 1, 2, 3])):
-                trees.append([round(cx + rng_cg.uniform(-20.0, 20.0), 2), round(cy + rng_cg.uniform(-20.0, 20.0), 2)])
+            sq_pts = [(r0[0], r0[1]), (r0[2], r0[1]), (r0[2], r0[3]), (r0[0], r0[3])]
+            pcls = GE_SAMPLER.classify_open_plot(sq_pts) if GE_SAMPLER.available else "vacant"
+            if pcls == "farmland" and not in_zhonghuan(cx, cy):
+                areas.append({"kind": "farmland", "pts": [rnd(p) for p in sq_pts]})
+                n_ge_farm += 1
+                farm_gh_cands.append((cx, cy, CELL * CELL))
+                if rng_cg.random() < 0.18:
+                    trees.append([round(r0[0] + rng_cg.uniform(2.0, 6.0), 2), round(r0[1] + rng_cg.uniform(2.0, 6.0), 2)])
+            elif pcls == "construction":
+                ge_const_cells.append((cx, cy, r0))
+            else:
+                areas.append({"kind": "vacant_green", "pts": [rnd(p) for p in sq_pts]})
+                n_vac += 1
+                for _t in range(rng_cg.choice([0, 0, 1, 1, 2, 3])):
+                    trees.append([round(cx + rng_cg.uniform(-20.0, 20.0), 2), round(cy + rng_cg.uniform(-20.0, 20.0), 2)])
         gy += CELL
-    print(f"待开发用地: {n_vac} rough-grass plots")
+
+    # --- Build REAL 3D Construction Sites (OSM landuse=construction + Google Earth bare-earth clusters) ---
+    construction_sites = []
+    used_const_centers = []
+
+    def _const_clear(ccx, ccy, ring):
+        if not in_active((ccx, ccy), -25.0) or _in_south_plaza(ccx, ccy) or in_airport_precinct((ccx, ccy)):
+            return False
+        if any(math.hypot(ccx - ox, ccy - oy) < 72.0 for ox, oy in used_const_centers):
+            return False
+        if any(point_in_poly(ccx, ccy, wp) for wp in water_grid.query(ccx - 6, ccy - 6, ccx + 6, ccy + 6)):
+            return False
+        if any(point_in_poly(ccx, ccy, pp) for pp in park_grid.query(ccx - 6, ccy - 6, ccx + 6, ccy + 6)):
+            return False
+        # Do not place construction on top of existing real buildings OR overlapping any road asphalt/curb!
+        xs_c = [p[0] for p in ring]
+        ys_c = [p[1] for p in ring]
+        hit_b = sum(1 for ob in bld_grid.query(min(xs_c), min(ys_c), max(xs_c), max(ys_c)) if point_in_poly(*centroid(ob[4]), ring))
+        if hit_b > 1:
+            return False
+        for ci_r in range(len(ring)):
+            pa_r = ring[ci_r]
+            pb_r = ring[(ci_r + 1) % len(ring)]
+            el_r = math.hypot(pb_r[0] - pa_r[0], pb_r[1] - pa_r[1])
+            n_st = max(2, int(el_r / 3.0) + 1)
+            for k_r in range(n_st + 1):
+                tf = k_r / n_st
+                px_r = pa_r[0] + (pb_r[0] - pa_r[0]) * tf
+                py_r = pa_r[1] + (pb_r[1] - pa_r[1]) * tf
+                if fence_pt_hits_road_or_rail(px_r, py_r, 2.0):
+                    return False
+        return True
+
+    # Source 1: Real OSM landuse=construction / building=construction polygons
+    for wid, (refs, t) in ways.items():
+        if (t.get("landuse") == "construction" or t.get("building") == "construction") and len(refs) >= 4 and refs[0] == refs[-1]:
+            pts_c = [nodes[r] for r in refs if r in nodes][:-1]
+            ring_c = simplify_ring(pts_c, 3.0)
+            if len(ring_c) < 3:
+                continue
+            ac = abs(poly_area(ring_c))
+            if ac < 1200.0 or ac > 120000.0:
+                continue
+            ccx, ccy = centroid(ring_c)
+            if not _const_clear(ccx, ccy, ring_c):
+                continue
+            oc = obb(ring_c)
+            if oc is None:
+                continue
+            construction_sites.append({
+                "pts": [rnd(p) for p in ring_c],
+                "c": rnd((oc[0], oc[1])),
+                "a": round(oc[2], 4),
+                "hl": round(min(oc[3], 95.0), 1),
+                "hw": round(min(oc[4], 65.0), 1),
+                "name": t.get("name", "在建工程项目"),
+            })
+            used_const_centers.append((ccx, ccy))
+
+    # Source 2: Group adjacent Google Earth bare-earth 50m cells into cohesive multi-cell active construction sites
+    if ge_const_cells:
+        c_parent = list(range(len(ge_const_cells)))
+        def cf_find(i):
+            while c_parent[i] != i:
+                c_parent[i] = c_parent[c_parent[i]]
+                i = c_parent[i]
+            return i
+        for i in range(len(ge_const_cells)):
+            xi, yi, _ = ge_const_cells[i]
+            for j in range(i + 1, len(ge_const_cells)):
+                xj, yj, _ = ge_const_cells[j]
+                if abs(xi - xj) <= 55.0 and abs(yi - yj) <= 55.0:
+                    ri, rj = cf_find(i), cf_find(j)
+                    if ri != rj:
+                        c_parent[ri] = rj
+        c_groups = defaultdict(list)
+        for i in range(len(ge_const_cells)):
+            c_groups[cf_find(i)].append(ge_const_cells[i])
+        # Sort by largest contiguous bare-earth area; promote up to 120 real Google Earth active sites (incl. standalone >= 2500 m² urban sites!)
+        ranked = sorted(c_groups.values(), key=len, reverse=True)
+        promoted_cells = set()
+        for grp in ranked:
+            if len(construction_sites) >= 120:
+                break
+            if len(grp) < 1:
+                continue
+            gx0 = min(item[2][0] for item in grp)
+            gy0 = min(item[2][1] for item in grp)
+            gx1 = max(item[2][2] for item in grp)
+            gy1 = max(item[2][3] for item in grp)
+            hl_c = min((gx1 - gx0) * 0.5, 85.0)
+            hw_c = min((gy1 - gy0) * 0.5, 60.0)
+            ccx = (gx0 + gx1) * 0.5
+            ccy = (gy0 + gy1) * 0.5
+            rect_c = [(ccx - hl_c, ccy - hw_c), (ccx + hl_c, ccy - hw_c), (ccx + hl_c, ccy + hw_c), (ccx - hl_c, ccy + hw_c)]
+            # If bounding box touches a road edge, inset gently up to 2 steps so the construction hoarding stays 100% off asphalt!
+            ok_c = _const_clear(ccx, ccy, rect_c)
+            if not ok_c and hl_c >= 22.0 and hw_c >= 22.0:
+                for shrink_f in (0.86, 0.74):
+                    hl_s, hw_s = hl_c * shrink_f, hw_c * shrink_f
+                    rect_s = [(ccx - hl_s, ccy - hw_s), (ccx + hl_s, ccy - hw_s), (ccx + hl_s, ccy + hw_s), (ccx - hl_s, ccy + hw_s)]
+                    if _const_clear(ccx, ccy, rect_s):
+                        hl_c, hw_c, rect_c = hl_s, hw_s, rect_s
+                        ok_c = True
+                        break
+            if ok_c:
+                ang_c = 0.0 if hl_c >= hw_c else math.pi * 0.5
+                construction_sites.append({
+                    "pts": [rnd(p) for p in rect_c],
+                    "c": rnd((ccx, ccy)),
+                    "a": round(ang_c, 4),
+                    "hl": round(max(hl_c, hw_c), 1),
+                    "hw": round(min(hl_c, hw_c), 1),
+                    "name": "嘉兴在建工地",
+                })
+                used_const_centers.append((ccx, ccy))
+                for item in grp:
+                    promoted_cells.add((item[0], item[1]))
+        # Any un-promoted bare-earth cell falls back cleanly to vacant_green
+        for cx_u, cy_u, r0_u in ge_const_cells:
+            if (cx_u, cy_u) not in promoted_cells:
+                areas.append({"kind": "vacant_green", "pts": [rnd((r0_u[0], r0_u[1])), rnd((r0_u[2], r0_u[1])), rnd((r0_u[2], r0_u[3])), rnd((r0_u[0], r0_u[3]))]})
+                n_vac += 1
+
+    # --- Place neat Jiangnan vegetable polytunnel greenhouses (蔬菜大棚) on ~28 well-spaced real farmland plots ---
+    farmland_greenhouses = []
+    gh_centers = []
+    farm_gh_cands.sort(key=lambda it: -it[2])
+    for fcx, fcy, _faa in farm_gh_cands:
+        if len(farmland_greenhouses) >= 32:
+            break
+        if any(math.hypot(fcx - ox, fcy - oy) < 185.0 for ox, oy in gh_centers):
+            continue
+        if any(math.hypot(fcx - ox, fcy - oy) < 120.0 for ox, oy in used_const_centers):
+            continue
+        # Ensure greenhouse cluster footprint (~42m x 36m) is completely clear of buildings, roads, rail & water
+        if any(True for _ in bld_grid.query(fcx - 26, fcy - 26, fcx + 26, fcy + 26)):
+            continue
+        if any(seg_dist(fcx, fcy, rax, ray, rbx, rby)[0] < rhw + 26.0 for (rax, ray, rbx, rby, rhw) in road_grid.query(fcx - 45, fcy - 45, fcx + 45, fcy + 45)):
+            continue
+        if any(point_in_poly(fcx, fcy, wp) for wp in water_grid.query(fcx - 24, fcy - 24, fcx + 24, fcy + 24)):
+            continue
+        farmland_greenhouses.append({
+            "c": rnd((fcx, fcy)),
+            "a": round(rng_cg.choice([0.08, 0.14, 0.22, -0.06, 1.52]), 3),
+            "n": rng_cg.choice([3, 4, 5]),
+            "len": round(rng_cg.uniform(26.0, 38.0), 1),
+        })
+        gh_centers.append((fcx, fcy))
+
+    # Strip any stray street/vacant trees that fall inside active construction site pads!
+    if construction_sites:
+        cs_polys = [[(float(p[0]), float(p[1])) for p in s["pts"]] for s in construction_sites]
+        cs_bbs = [(min(p[0] for p in r), min(p[1] for p in r), max(p[0] for p in r), max(p[1] for p in r), r) for r in cs_polys]
+        trees = [
+            t for t in trees
+            if not any(b0 <= t[0] <= b2 and b1 <= t[1] <= b3 and point_in_poly(t[0], t[1], r) for (b0, b1, b2, b3, r) in cs_bbs)
+        ]
+
+    n_osm_farm = sum(1 for a_it in areas if a_it.get("kind") == "farmland") - n_ge_farm
+    print(f"农田与在建工地: {n_osm_farm} OSM + {n_ge_farm} Google Earth farmland plots, "
+          f"{len(farmland_greenhouses)} 蔬菜大棚 clusters, {len(construction_sites)} 3D construction sites, {n_vac} vacant plots")
 
     # Exact HSR station angle from real OSM platform orientation (~27 deg ENE-WSW)
     hsr_p0 = proj(30.69175, 120.79370)
@@ -5241,6 +6304,8 @@ def main():
         "commercial_signs": commercial_signs,
         "canal_bridges": canal_bridges,
         "rail_crossings": rail_crossings,
+        "construction_sites": construction_sites,
+        "farmland_greenhouses": farmland_greenhouses,
     }
 
     out = {
