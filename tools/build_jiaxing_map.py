@@ -4273,9 +4273,11 @@ def build_t1_starter_network(nodes_list, edges_list):
     e_b1_c2 = _add_ug_edge(next_eid + 2, nid_b1_mid, nid_b1_e, p_b1_mid, p_b1_e, "嘉兴站南地下联络隧道")
     e_b1_sta = _add_ug_edge(next_eid + 3, nid_b1_e, nid_b1_w, p_b1_e, p_b1_w, "嘉兴火车站地下隧道")
     e_ramp_out = _add_ug_edge(next_eid + 4, nid_b1_w, nid_portal_w, p_b1_w, p_portal_w, "嘉兴站北地下隧道坡道")
+    # the straight 纺工路 dive-in ramp is only ~120 m long: it descends to -6.5 m and the south-plaza link carries
+    # the rest down to B1 (all of -10 m over 120 m was 8 %+, past what a tram climbs at normal power)
     ug_elev_map = {
-        e_ramp_in["id"]: (0.0, -10.0),
-        e_b1_c1["id"]: (-10.0, -10.0),
+        e_ramp_in["id"]: (0.0, -6.5),
+        e_b1_c1["id"]: (-6.5, -10.0),
         e_b1_c2["id"]: (-10.0, -10.0),
         e_b1_sta["id"]: (-10.0, -10.0),
         e_ramp_out["id"]: (-10.0, 0.0),

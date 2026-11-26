@@ -2132,6 +2132,13 @@ func _step_ai_driver(
 						desired_notch = 7 # P2
 					else:
 						desired_notch = 6 # P1
+				# Steep climbs (tunnel ramps, bridge approaches): any driver opens up to full power, or the tram
+				# crawls to a stop where gravity matches its P3 traction (~8 % at Normal) and stays there
+				if ai_grade > 0.05 and dv > 0.0:
+					desired_notch = 9 if (ai_grade > 0.06 or spd < 3.0) else maxi(desired_notch, 8)
+				elif ai_grade > 0.018 and dv > 0.0 and spd < 2.5:
+					# pulling away uphill: P1 barely matches gravity on 3 %, so start at P3
+					desired_notch = maxi(desired_notch, 8)
 
 	_apply_ai_notch_command(tr, desired_notch, dt, cmd_urgency)
 
