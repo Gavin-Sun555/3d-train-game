@@ -88,6 +88,12 @@ static func build_city(
 		SeattleV2Landmarks.build(parent, map_data, lm_info["lights"])
 	if map_data.get("landmarks", {}).has("jiaxing_south_station"):
 		JiaxingLandmarks.build(parent, map_data, lm_info["lights"])
+	for lm_nm: String in ["JiaxingLandmarks", "SeattleV2Landmarks", "SeattleLandmarks"]:
+		var lm_root := parent.get_node_or_null(lm_nm)
+		if lm_root != null:
+			# heavy-rail lines run across the whole map in one mesh per layer
+			chunk_named_meshes(lm_root, {"RailSteel": 900.0, "RailSleepers": 500.0, "RailCatenary": 1100.0, "RailBallast": 1600.0})
+			auto_visibility_ranges(lm_root)
 	if parent.has_meta("water_mat"):
 		(lm_info["night_mats"] as Array).append(parent.get_meta("water_mat"))
 	LandmarkFacades.build_plazas(parent, map_data.get("plazas", []), lm_info["lights"])
@@ -2647,15 +2653,12 @@ static func _touched_tiles(clear_idx: Dictionary, bays: Array) -> Dictionary:
 static func apply_track_clearance(city_root: Node3D, clear_idx: Dictionary, bays: Array = []) -> void:
 	if city_root == null:
 		return
-	var rname := str(city_root.name)
-	if rname.begins_with("Tile_"):
-		var rparts := rname.split("_")
-		if rparts.size() == 3:
-			var rtk := Vector2i(int(rparts[1]), int(rparts[2]))
-			var rhit := _touched_tiles(clear_idx, bays).has(rtk)
-			if not rhit and not bool(city_root.get_meta("clear_hidden", false)):
-				return
-			city_root.set_meta("clear_hidden", rhit)
+	var rtk_v = tile_key_of(city_root)
+	if rtk_v != null:
+		var rhit := _touched_tiles(clear_idx, bays).has(rtk_v as Vector2i)
+		if not rhit and not bool(city_root.get_meta("clear_hidden", false)):
+			return
+		city_root.set_meta("clear_hidden", rhit)
 	var tiles := city_root.get_node_or_null("CityTiles")
 	if tiles != null:
 		# Only tiles a track or station bay reaches (or that still hide something from before) need a pass
@@ -2663,9 +2666,8 @@ static func apply_track_clearance(city_root: Node3D, clear_idx: Dictionary, bays
 		for tile: Node in tiles.get_children():
 			if not (tile is Node3D):
 				continue
-			var parts := str(tile.name).split("_")
-			var tk := Vector2i(int(parts[1]), int(parts[2])) if parts.size() == 3 else Vector2i.ZERO
-			var hit := touched.has(tk)
+			var tk_v = tile_key_of(tile)
+			var hit := tk_v != null and touched.has(tk_v as Vector2i)
 			if hit or bool(tile.get_meta("clear_hidden", false)):
 				apply_track_clearance(tile as Node3D, clear_idx, bays)
 				tile.set_meta("clear_hidden", hit)
@@ -2766,14 +2768,24 @@ static func _station_bays_sig(bays: Array) -> String:
 	return "|".join(parts)
 
 
+# A streamed tile's grid key: stored on the node (its name can be changed by the tree: a rebuilt tile is added
+# while the old one of the same name is still being retired), the name as a fallback
+static func tile_key_of(node: Node) -> Variant:
+	if node.has_meta("tile_key"):
+		return node.get_meta("tile_key")
+	var parts := str(node.name).split("_")
+	if parts.size() == 3 and parts[0] == "Tile":
+		return Vector2i(int(parts[1]), int(parts[2]))
+	return null
+
+
 static func _tile_clear_sig(node: Node3D, clear_idx: Dictionary) -> String:
 	var grid: Dictionary = clear_idx.get("grid", {})
 	if grid.is_empty():
 		return ""
-	var nm := str(node.name)
-	var parts := nm.split("_")
-	if parts.size() == 3 and parts[0] == "Tile":
-		var r := Rect2(Vector2(float(parts[1]), float(parts[2])) * CityTiles.TILE, Vector2(CityTiles.TILE, CityTiles.TILE)).grow(24.0)
+	var tk = tile_key_of(node)
+	if tk != null:
+		var r := Rect2(Vector2(tk) * CityTiles.TILE, Vector2(CityTiles.TILE, CityTiles.TILE)).grow(24.0)
 		var x0 := int(floor(r.position.x / TrackBuilder.CLEAR_CELL))
 		var x1 := int(floor(r.end.x / TrackBuilder.CLEAR_CELL))
 		var z0 := int(floor(r.position.y / TrackBuilder.CLEAR_CELL))
@@ -2808,11 +2820,10 @@ static func apply_station_bays(city_root: Node3D, bays: Array, clear_idx: Dictio
 # Station bays that touch a tile (its kerbs are only rebuilt when one of these changes)
 static func _bays_near(tile: Node3D, bays: Array) -> Array:
 	var out: Array = []
-	var nm := str(tile.name)
-	var parts := nm.split("_")
-	if parts.size() != 3:
+	var tk = tile_key_of(tile)
+	if tk == null:
 		return bays
-	var r := Rect2(Vector2(float(parts[1]), float(parts[2])) * CityTiles.TILE, Vector2(CityTiles.TILE, CityTiles.TILE)).grow(60.0)
+	var r := Rect2(Vector2(tk) * CityTiles.TILE, Vector2(CityTiles.TILE, CityTiles.TILE)).grow(60.0)
 	for bay: Dictionary in bays:
 		var bp: Vector3 = bay["pos"]
 		if r.has_point(Vector2(bp.x, bp.z)):
@@ -3357,6 +3368,169 @@ static func _buf_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Ve
 # Low white municipal Chinese bike-lane separation guardrails (机非隔离护栏) on wide bike_lane avenues.
 # Follows the exact curved bike-lane edge smoothly across bends; strictly stops BEFORE intersections,
 # crossing/parallel roads, station bays, and tram motor-lane clearance (never juts into driving lanes!).
+# Distance culling for hand-built parts that have none (landmarks, tracks, stations): each stops being drawn where
+# it would shrink below ~2 pixels on a 1300-pixel-high 70 degree view (464 m per metre of its largest dimension;
+# ranges are measured to its centre). Big masses keep long ranges; railings, lamps, benches and small trims no
+# longer cost draw calls and vertices from kilometres away. Parts that already have a range (LOD pairs, batched
+# detail layers) are left alone.
+static func auto_visibility_ranges(root: Node, per_metre: float = 500.0, min_range: float = 320.0) -> int:
+	var n := 0
+	var stack: Array[Node] = [root]
+	while not stack.is_empty():
+		var cur: Node = stack.pop_back()
+		for ch in cur.get_children():
+			stack.append(ch)
+		if not (cur is GeometryInstance3D):
+			continue
+		var gi := cur as GeometryInstance3D
+		if gi.visibility_range_end > 0.0 or gi.visibility_range_begin > 0.0:
+			continue
+		var ab := gi.get_aabb()
+		if ab.size == Vector3.ZERO:
+			continue
+		var sc := gi.global_transform.basis.get_scale() if gi.is_inside_tree() else gi.transform.basis.get_scale()
+		var s := maxf(ab.size.x * absf(sc.x), maxf(ab.size.y * absf(sc.y), ab.size.z * absf(sc.z)))
+		var r := clampf(s * per_metre, min_range, 8000.0)
+		if r >= 8000.0:
+			continue
+		gi.visibility_range_end = r
+		gi.visibility_range_end_margin = r * 0.05
+		gi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_DISABLED
+		n += 1
+	return n
+
+
+# Network-wide batched meshes (tram rails, contact wire, heavy-rail lines ...) can never be distance-culled: a
+# visibility range is measured to the mesh's centre. Cut such a mesh into CELL-sized pieces by triangle centroid
+# and give each piece the range its content warrants. names: {node name: range in m}. Main thread only (reads
+# the mesh arrays back).
+static func chunk_named_meshes(root: Node, names: Dictionary, cell: float = 400.0, recursive: bool = true) -> int:
+	var found: Array[MeshInstance3D] = []
+	var stack: Array[Node] = [root]
+	while not stack.is_empty():
+		var cur: Node = stack.pop_back()
+		if recursive or cur == root:
+			for ch in cur.get_children():
+				stack.append(ch)
+		if cur is MeshInstance3D and names.has(str(cur.name)) and (cur as MeshInstance3D).mesh != null:
+			found.append(cur as MeshInstance3D)
+	var n := 0
+	for mi in found:
+		n += _chunk_mesh(mi, cell, float(names[str(mi.name)]))
+	return n
+
+
+static func _chunk_mesh(mi: MeshInstance3D, cell: float, far: float) -> int:
+	var mesh := mi.mesh
+	var ab := mi.get_aabb()
+	if maxf(ab.size.x, ab.size.z) <= cell * 1.5 or mesh.get_surface_count() != 1:
+		mi.visibility_range_end = far
+		mi.visibility_range_end_margin = far * 0.05
+		return 0
+	var arr := mesh.surface_get_arrays(0)
+	var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+	var idx: PackedInt32Array = arr[Mesh.ARRAY_INDEX] if arr[Mesh.ARRAY_INDEX] != null else PackedInt32Array()
+	var indexed := not idx.is_empty()
+	var tri_n := (idx.size() if indexed else verts.size()) / 3
+	# bucket of each triangle (by centroid), then the triangle list per bucket
+	var bucket_of := {}
+	var tri_b := PackedInt32Array()
+	tri_b.resize(tri_n)
+	var counts := PackedInt32Array()
+	var bkeys: Array[Vector2i] = []
+	for t in range(tri_n):
+		var i0 := idx[t * 3] if indexed else t * 3
+		var c := (verts[i0] + verts[idx[t * 3 + 1] if indexed else t * 3 + 1] + verts[idx[t * 3 + 2] if indexed else t * 3 + 2]) / 3.0
+		var k := Vector2i(int(floor(c.x / cell)), int(floor(c.z / cell)))
+		var bid: int = bucket_of.get(k, -1)
+		if bid < 0:
+			bid = bkeys.size()
+			bucket_of[k] = bid
+			bkeys.append(k)
+			counts.append(0)
+		tri_b[t] = bid
+		counts[bid] += 1
+	var has_n: bool = arr[Mesh.ARRAY_NORMAL] != null
+	var has_c: bool = arr[Mesh.ARRAY_COLOR] != null
+	var has_u: bool = arr[Mesh.ARRAY_TEX_UV] != null
+	var src_n: PackedVector3Array = arr[Mesh.ARRAY_NORMAL] if has_n else PackedVector3Array()
+	var src_c: PackedColorArray = arr[Mesh.ARRAY_COLOR] if has_c else PackedColorArray()
+	var src_u: PackedVector2Array = arr[Mesh.ARRAY_TEX_UV] if has_u else PackedVector2Array()
+	# per bucket: flat (non-indexed) triangle lists, filled in one pass over the triangles
+	var nvs: Array[PackedVector3Array] = []
+	var nns: Array[PackedVector3Array] = []
+	var ncs: Array[PackedColorArray] = []
+	var nus: Array[PackedVector2Array] = []
+	var fill := PackedInt32Array()
+	for bid in range(bkeys.size()):
+		var pv := PackedVector3Array()
+		pv.resize(counts[bid] * 3)
+		nvs.append(pv)
+		var pn := PackedVector3Array()
+		if has_n:
+			pn.resize(counts[bid] * 3)
+		nns.append(pn)
+		var pc := PackedColorArray()
+		if has_c:
+			pc.resize(counts[bid] * 3)
+		ncs.append(pc)
+		var pu := PackedVector2Array()
+		if has_u:
+			pu.resize(counts[bid] * 3)
+		nus.append(pu)
+		fill.append(0)
+	for t in range(tri_n):
+		var bid := tri_b[t]
+		var o := fill[bid]
+		for cc in range(3):
+			var vi := idx[t * 3 + cc] if indexed else t * 3 + cc
+			nvs[bid][o + cc] = verts[vi]
+			if has_n:
+				nns[bid][o + cc] = src_n[vi]
+			if has_c:
+				ncs[bid][o + cc] = src_c[vi]
+			if has_u:
+				nus[bid][o + cc] = src_u[vi]
+		fill[bid] = o + 3
+	var parent := mi.get_parent()
+	var mat := mi.material_override
+	var sh := mi.cast_shadow
+	var base_name := str(mi.name)
+	var made := 0
+	# the pieces live in a container under the original name, so code that replaces a layer by name
+	# (rebuild_road_layer, _build_kerbs ...) still removes all of it
+	var holder := Node3D.new()
+	holder.transform = mi.transform
+	for bid in range(bkeys.size()):
+		var out := []
+		out.resize(Mesh.ARRAY_MAX)
+		out[Mesh.ARRAY_VERTEX] = nvs[bid]
+		if has_n:
+			out[Mesh.ARRAY_NORMAL] = nns[bid]
+		if has_c:
+			out[Mesh.ARRAY_COLOR] = ncs[bid]
+		if has_u:
+			out[Mesh.ARRAY_TEX_UV] = nus[bid]
+		var am := ArrayMesh.new()
+		am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, out)
+		var piece := MeshInstance3D.new()
+		piece.name = "%s_%d_%d" % [base_name, bkeys[bid].x, bkeys[bid].y]
+		piece.mesh = am
+		piece.material_override = mat
+		piece.cast_shadow = sh
+		piece.visibility_range_end = far
+		piece.visibility_range_end_margin = far * 0.05
+		holder.add_child(piece)
+		made += 1
+	var at := mi.get_index()
+	parent.remove_child(mi)
+	mi.queue_free()
+	holder.name = base_name
+	parent.add_child(holder)
+	parent.move_child(holder, at)
+	return made
+
+
 static func _build_bike_guardrails(
 	parent: Node3D, roads: Array, emit_n: int, seg_grid: Dictionary,
 	bays: Array, clear_idx: Dictionary, has_tracks: bool

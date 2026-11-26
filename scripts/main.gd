@@ -853,6 +853,7 @@ func _build_city_world() -> void:
 		_city_tiles.setup(_effective_land_data(), {"building": _building_mat, "road": _road_mat, "globe": _globe_mat})
 		_city_tiles.set_track_context(_graph.get_meta("track_clear_idx", {}), _graph.get_meta("station_bays", []))
 	_loaded_city_map_key = _current_map_key
+	_cull_core_layers()
 
 
 # A streamed map tile is in: clear it for player tracks / station bays and hook up its night lighting
@@ -969,9 +970,25 @@ func _refresh_land_layers(roads: bool, buildings: bool) -> void:
 		if sm != null:
 			_night_mats.append(sm)
 		_apply_lighting_from_clock()
+	_cull_core_layers()
 	if _city_tiles != null:
 		_city_tiles.update_data(d_full)
 	_built_land_sig = _graph.land_edit_signature()
+
+
+# The city core is built in one piece (not as tiles): its thin street-level layers spanned the whole core as single
+# meshes, which a visibility range (measured to the mesh centre) can never cull, so they were drawn from anywhere.
+# Cut them into 400 m pieces with the same ranges the tiles use.
+const CORE_LAYER_RANGES := {
+	"BikeLaneGuardrails": 650.0, "BikeLaneLines": 650.0, "BuildingFrames3D": 650.0, "Sidewalks": 550.0,
+	"GraniteCurbs": 450.0, "RoadMarkings": 450.0, "RoadCentreLines": 450.0, "BikeBufferStrips": 650.0,
+	"BuildingBalconies": 650.0, "StationKerbBays": 450.0,
+}
+
+
+func _cull_core_layers() -> void:
+	if _city_root != null and is_instance_valid(_city_root):
+		CityBuilder.chunk_named_meshes(_city_root, CORE_LAYER_RANGES, 400.0, false)
 
 
 func _after_land_edit(roads: bool, buildings: bool) -> void:
@@ -1524,11 +1541,19 @@ func _rebuild_tracks_and_operations(seed_pax: bool = false, defer_ops: bool = fa
 	if _pax_sim != null:
 		_pax_sim.rebind_station_views(_station_views)
 	_put_tracks_on_terrain()
+	# stations' small props (benches, bins, posts, signs ...) stop drawing once under ~2 px; rails, OCS and
+	# platforms are long batched meshes and keep their range
+	CityBuilder.chunk_named_meshes(_track_root, {
+		"PolishedSteelRailHeads": 900.0, "RailWebFootAndGrooves": 600.0, "ContactWire": 1100.0, "TrackEdgeCurbs": 600.0,
+		"TramLaneEdgeDashes": 500.0, "RailConcreteCollars": 500.0, "GrassTrackBed": 1800.0, "StoneSlabTrackBed": 1200.0,
+		"BallastTrackBed": 1400.0})
+	CityBuilder.auto_visibility_ranges(_track_root)
 	_sync_landmark_monorail()
 	if _city_tiles != null:
 		_city_tiles.set_track_context(_graph.get_meta("track_clear_idx", {}), _graph.get_meta("station_bays", []))
 	CityBuilder.apply_track_clearance(_city_root, _graph.get_meta("track_clear_idx", {}), _graph.get_meta("station_bays", []))
 	CityBuilder.apply_station_bays(_city_root, _graph.get_meta("station_bays", []), _graph.get_meta("track_clear_idx", {}))
+	_cull_core_layers()
 	_sync_portal_cutouts()
 	_apply_underground_track_roof_visibility()
 	_track_lights.clear()
@@ -3588,6 +3613,7 @@ func _rebuild_tracks_only_visual() -> void:
 		_city_tiles.set_track_context(_graph.get_meta("track_clear_idx", {}), _graph.get_meta("station_bays", []))
 	CityBuilder.apply_track_clearance(_city_root, _graph.get_meta("track_clear_idx", {}), _graph.get_meta("station_bays", []))
 	CityBuilder.apply_station_bays(_city_root, _graph.get_meta("station_bays", []), _graph.get_meta("track_clear_idx", {}))
+	_cull_core_layers()
 	_sync_portal_cutouts()
 	_apply_underground_track_roof_visibility()
 	_track_lights.clear()

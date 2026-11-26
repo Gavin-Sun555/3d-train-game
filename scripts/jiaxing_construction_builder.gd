@@ -54,6 +54,13 @@ static func _commit_poly_flat(st: SurfaceTool, poly: PackedVector2Array, y_lvl: 
 			st.add_vertex(Vector3(p.x, y_lvl, p.y))
 
 
+# Sites and greenhouse clusters are batched per 600 m cell, not map-wide: a mesh's visibility range is measured to
+# its centre, so one mesh spanning the whole map could never be culled and drew all 120 sites (1.25M triangles)
+# from anywhere. Each cell's layers get ranges by size: cranes and their beacons stand out far, nets and
+# greenhouse film fade first.
+const CELL := 600.0
+
+
 static func build(parent: Node3D, map_data: Dictionary, _lights: Array) -> void:
 	var lm: Dictionary = map_data.get("landmarks", {})
 	var sites: Array = lm.get("construction_sites", [])
@@ -65,72 +72,92 @@ static func build(parent: Node3D, map_data: Dictionary, _lights: Array) -> void:
 	root.name = "JiaxingConstructionAndAgri"
 	parent.add_child(root)
 
-	var earth_st := SurfaceTool.new()
-	earth_st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var struct_st := SurfaceTool.new()
-	struct_st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var net_st := SurfaceTool.new()
-	net_st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var crane_st := SurfaceTool.new()
-	crane_st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var beacon_st := SurfaceTool.new()
-	beacon_st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var gh_st := SurfaceTool.new()
-	gh_st.begin(Mesh.PRIMITIVE_TRIANGLES)
-
+	var cells := {} # Vector2i -> {"s": [idx], "g": [idx]}
 	for s_idx in range(sites.size()):
-		var s: Dictionary = sites[s_idx]
-		_emit_construction_site(earth_st, struct_st, net_st, crane_st, beacon_st, s, s_idx)
-
+		var c: Array = (sites[s_idx] as Dictionary).get("c", [0.0, 0.0])
+		var k := Vector2i(int(floor(float(c[0]) / CELL)), int(floor(float(c[1]) / CELL)))
+		if not cells.has(k):
+			cells[k] = {"s": [], "g": []}
+		(cells[k]["s"] as Array).append(s_idx)
 	for g_idx in range(greenhouses.size()):
-		var g: Dictionary = greenhouses[g_idx]
-		_emit_greenhouse_cluster(gh_st, struct_st, g, g_idx)
+		var c2: Array = (greenhouses[g_idx] as Dictionary).get("c", [0.0, 0.0])
+		var k2 := Vector2i(int(floor(float(c2[0]) / CELL)), int(floor(float(c2[1]) / CELL)))
+		if not cells.has(k2):
+			cells[k2] = {"s": [], "g": []}
+		(cells[k2]["g"] as Array).append(g_idx)
 
+	var mats := _materials()
+	for k: Vector2i in cells.keys():
+		var earth_st := SurfaceTool.new()
+		earth_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		var struct_st := SurfaceTool.new()
+		struct_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		var net_st := SurfaceTool.new()
+		net_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		var crane_st := SurfaceTool.new()
+		crane_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		var beacon_st := SurfaceTool.new()
+		beacon_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		var gh_st := SurfaceTool.new()
+		gh_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		for s_idx: int in cells[k]["s"]:
+			_emit_construction_site(earth_st, struct_st, net_st, crane_st, beacon_st, sites[s_idx], s_idx)
+		for g_idx: int in cells[k]["g"]:
+			_emit_greenhouse_cluster(gh_st, struct_st, greenhouses[g_idx], g_idx)
+		var sfx := "_%d_%d" % [k.x, k.y]
+		_commit_cell(root, "ConstructionEarthPads" + sfx, earth_st, mats["earth"], false, 1500.0)
+		_commit_cell(root, "ConstructionStructures" + sfx, struct_st, mats["struct"], true, 2200.0)
+		_commit_cell(root, "ConstructionSafetyNets" + sfx, net_st, mats["net"], true, 900.0)
+		_commit_cell(root, "ConstructionCranes" + sfx, crane_st, mats["crane"], true, 3200.0)
+		_commit_cell(root, "FarmlandGreenhouses" + sfx, gh_st, mats["gh"], true, 1500.0)
+		_commit_cell(root, "CraneAviationBeacons" + sfx, beacon_st, mats["beacon"], false, 3200.0)
+
+
+static func _commit_cell(parent: Node3D, node_name: String, st: SurfaceTool, mat: Material, shadow: bool, far: float) -> void:
+	var mesh := st.commit()
+	if mesh == null or mesh.get_surface_count() == 0:
+		return
+	var mi := MeshInstance3D.new()
+	mi.name = node_name
+	mi.mesh = mesh
+	mi.material_override = mat
+	if not shadow:
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.visibility_range_end = far
+	mi.visibility_range_end_margin = far * 0.05
+	parent.add_child(mi)
+
+
+static func _vc_mat(rough: float, metal: float) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.roughness = rough
+	mat.metallic = metal
+	mat.metallic_specular = 0.26
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return mat
+
+
+static func _materials() -> Dictionary:
 	# Textured rugged compacted-earth & gravel pad shader (never flat smooth tan!)
-	var earth_mesh := earth_st.commit()
-	if earth_mesh != null and earth_mesh.get_surface_count() > 0:
-		var emi := MeshInstance3D.new()
-		emi.name = "ConstructionEarthPads"
-		emi.mesh = earth_mesh
-		var emat := ShaderMaterial.new()
-		emat.shader = load("res://shaders/construction_earth.gdshader") as Shader
-		emi.material_override = emat
-		emi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		root.add_child(emi)
-	_commit_vc(root, "ConstructionStructures", struct_st, 0.74, 0.12, true)
-	_commit_vc(root, "ConstructionSafetyNets", net_st, 0.86, 0.02, true)
-	_commit_vc(root, "ConstructionCranes", crane_st, 0.42, 0.56, true)
-
+	var emat := ShaderMaterial.new()
+	emat.shader = load("res://shaders/construction_earth.gdshader") as Shader
 	# Translucent plastic agricultural greenhouses (蔬菜大棚)
-	var gh_mesh := gh_st.commit()
-	if gh_mesh != null and gh_mesh.get_surface_count() > 0:
-		var gh_mi := MeshInstance3D.new()
-		gh_mi.name = "FarmlandGreenhouses"
-		gh_mi.mesh = gh_mesh
-		var gh_mat := StandardMaterial3D.new()
-		gh_mat.vertex_color_use_as_albedo = true
-		gh_mat.roughness = 0.28
-		gh_mat.metallic = 0.04
-		gh_mat.metallic_specular = 0.55
-		gh_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-		gh_mi.material_override = gh_mat
-		root.add_child(gh_mi)
-
+	var gh_mat := StandardMaterial3D.new()
+	gh_mat.vertex_color_use_as_albedo = true
+	gh_mat.roughness = 0.28
+	gh_mat.metallic = 0.04
+	gh_mat.metallic_specular = 0.55
+	gh_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	# Glowing red aviation obstruction beacons atop every tower crane
-	var bm := beacon_st.commit()
-	if bm != null and bm.get_surface_count() > 0:
-		var bmi := MeshInstance3D.new()
-		bmi.name = "CraneAviationBeacons"
-		bmi.mesh = bm
-		var bmat := StandardMaterial3D.new()
-		bmat.vertex_color_use_as_albedo = true
-		bmat.emission_enabled = true
-		bmat.emission = Color(1.0, 0.18, 0.10)
-		bmat.emission_energy_multiplier = 2.6
-		bmat.roughness = 0.25
-		bmi.material_override = bmat
-		bmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		root.add_child(bmi)
+	var bmat := StandardMaterial3D.new()
+	bmat.vertex_color_use_as_albedo = true
+	bmat.emission_enabled = true
+	bmat.emission = Color(1.0, 0.18, 0.10)
+	bmat.emission_energy_multiplier = 2.6
+	bmat.roughness = 0.25
+	return {"earth": emat, "struct": _vc_mat(0.74, 0.12), "net": _vc_mat(0.86, 0.02), "crane": _vc_mat(0.42, 0.56),
+		"gh": gh_mat, "beacon": bmat}
 
 
 static func _emit_construction_site(

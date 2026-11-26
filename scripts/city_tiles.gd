@@ -34,6 +34,15 @@ const DRAPE_BUDGET_MS := 2.0
 # (tens of thousands of meshes, signs and lamps) into the scene
 const BUILD_RADIUS := 2600.0
 const UNLOAD_RADIUS := 3300.0
+# Far tiles keep only what can be seen from a distance (building masses, roofs, road surfaces, lawns, trees):
+# street-level detail (sidewalks, kerbs, markings, guardrails, shopfronts, signs, lamps, balconies ...) is only
+# drawn within ~650 m of its tile anyway, but kept in every loaded tile it filled video memory and the per-frame
+# culling lists (a long ride: 110 tiles, 128k objects, 4.6 GB VRAM, 43 -> 28 fps). A tile is stripped beyond
+# STRIP_RADIUS and rebuilt in full when the camera comes back within UNSTRIP_RADIUS (ranges are measured to a
+# mesh's centre, at most ~340 m off the tile centre, so detail is never missing where it would be drawn)
+const STRIP_RADIUS := 1150.0
+const UNSTRIP_RADIUS := 1000.0
+const NEAR_DETAIL_MAX := 700.0
 var _unload_tick := 0
 var _swap_cooldown := 0
 const SWAP_COOLDOWN_FRAMES := 4
@@ -384,6 +393,7 @@ static func build_tile_node(
 	var key: Vector2i = td["key"]
 	var root := Node3D.new()
 	root.name = "Tile_%d_%d" % [key.x, key.y]
+	root.set_meta("tile_key", key)
 	if not (td["fills"] as Array).is_empty():
 		CityBuilder._build_areas(root, td["fills"]) # lawns, plazas, parking, playing fields of this tile
 	var blds: Array = td["buildings"]
@@ -395,6 +405,10 @@ static func build_tile_node(
 	var roads: Array = td["roads"]
 	if not roads.is_empty():
 		CityBuilder._build_roads_and_curbs(root, roads + (td["context"] as Array), td["crosswalks"], mats["road"], roads.size(), bays, clear_idx)
+		# kerbs were just laid with these bays and this clearance: tell apply_station_bays (run by main when the
+		# tile is installed) they are current, or it rebuilt them all again on the main thread (100-400 ms hitch)
+		if root.has_meta("kerb_roads"):
+			root.set_meta("last_bays_sig", CityBuilder._station_bays_sig(bays) + "#" + CityBuilder._tile_clear_sig(root, clear_idx))
 		FreewayBuilder.build_street_bridges(root, roads)
 	if not (td["freeways"] as Array).is_empty():
 		FreewayBuilder.build(root, td["freeways"], mats["road"], roads + (td["context"] as Array), clear_idx)
@@ -450,6 +464,8 @@ static func _apply_visibility_ranges(n: Node) -> void:
 					far = 600.0
 				elif nm == "StreetBridgeStructure":
 					far = 1500.0
+				elif nm in ["BikeLaneGuardrails", "BikeLaneLines"]:
+					far = 650.0 # 1 m rails and 15 cm lines: under a pixel well before this
 				gi.visibility_range_end = far
 				gi.visibility_range_end_margin = far * 0.06
 				gi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_DISABLED
@@ -457,8 +473,51 @@ static func _apply_visibility_ranges(n: Node) -> void:
 			_apply_visibility_ranges(ch)
 
 
-func _thread_build(td: Dictionary, near_bays: Array, clear_idx: Dictionary, ctx_ver: int) -> void:
-	_task_result = build_tile_node(td, _mats, near_bays, clear_idx, ctx_ver)
+func _thread_build(td: Dictionary, near_bays: Array, clear_idx: Dictionary, ctx_ver: int, far: bool) -> void:
+	var root := build_tile_node(td, _mats, near_bays, clear_idx, ctx_ver)
+	if far:
+		root.set_meta("strip_on_install", true) # freed on the main thread (labels, meshes: not from a worker)
+	_task_result = root
+
+
+# Children of a tile (and of its plain grouping nodes) drawn only within NEAR_DETAIL_MAX: everything in them has a
+# visibility range, none longer than that, and they hold no lights (main keeps the tile's lights for the night)
+static func near_detail_nodes(root: Node) -> Array[Node]:
+	var out: Array[Node] = []
+	_collect_near(root, out, 0)
+	return out
+
+
+static func _collect_near(n: Node, out: Array[Node], depth: int) -> void:
+	for ch in n.get_children():
+		var r := _max_range(ch)
+		if r > 0.0 and r <= NEAR_DETAIL_MAX:
+			out.append(ch)
+		elif r < 0.0 and depth < 2 and ch.get_class() == "Node3D":
+			_collect_near(ch, out, depth + 1)
+
+
+# Longest visibility range in a subtree: 0 if anything in it has none, -1 if it holds a light or mixed content
+# that must stay (descend into it instead)
+static func _max_range(n: Node) -> float:
+	if n is Light3D:
+		return -1.0
+	var r := 0.0
+	var any_geo := false
+	if n is GeometryInstance3D:
+		var e := (n as GeometryInstance3D).visibility_range_end
+		if e <= 0.0:
+			return -1.0
+		r = e
+		any_geo = true
+	for ch in n.get_children():
+		var c := _max_range(ch)
+		if c < 0.0:
+			return -1.0
+		if c > 0.0:
+			r = maxf(r, c)
+			any_geo = true
+	return r if any_geo else 0.0
 
 
 # Called every frame by main: finish the tile in flight, then start the nearest tile that needs building
@@ -490,7 +549,8 @@ func step() -> void:
 	_task_key = key
 	_task_sig = int(t["sig"])
 	var near_bays := _bays_near_key(key, _station_bays)
-	_task_id = WorkerThreadPool.add_task(_thread_build.bind(t["data"], near_bays, _clear_idx, track_ctx_ver), false, "city tile")
+	var far := ((Vector2(key) + Vector2(0.5, 0.5)) * TILE).distance_to(Vector2(focus.x, focus.z)) > STRIP_RADIUS
+	_task_id = WorkerThreadPool.add_task(_thread_build.bind(t["data"], near_bays, _clear_idx, track_ctx_ver, far), false, "city tile")
 
 
 # Frees built tiles far outside the view (rebuilt from their data when the camera comes back)
@@ -507,10 +567,20 @@ func _unload_far() -> void:
 		if not _stage.is_empty() and _stage.get("key") == key:
 			continue
 		var c := (Vector2(key) + Vector2(0.5, 0.5)) * TILE
-		if c.distance_squared_to(f) > r2:
+		var d2 := c.distance_squared_to(f)
+		if d2 > r2:
 			_retire(n as Node)
 			t["node"] = null
 			t["built_sig"] = -1
+			continue
+		var tn := n as Node
+		if tn.has_meta("lod_far"):
+			if d2 < UNSTRIP_RADIUS * UNSTRIP_RADIUS and int(t["built_sig"]) == int(t["sig"]):
+				t["built_sig"] = -1 # coming back: rebuild in full (the far version stays up until it swaps in)
+		elif d2 > STRIP_RADIUS * STRIP_RADIUS:
+			for dn: Node in near_detail_nodes(tn):
+				_retire(dn)
+			tn.set_meta("lod_far", true)
 
 
 func _next_tile() -> Vector2i:
@@ -769,6 +839,13 @@ func _complete_task() -> void:
 		if _task_result != null:
 			_task_result.free() # never entered the tree: cheap to drop
 	else:
+		if _task_result != null and _task_result.has_meta("strip_on_install"):
+			_task_result.remove_meta("strip_on_install")
+			# still outside the tree: just detach the near-only detail and free it piecemeal
+			for n: Node in near_detail_nodes(_task_result):
+				n.get_parent().remove_child(n)
+				_free_queue.append(n)
+			_task_result.set_meta("lod_far", true)
 		_install(_task_key, _task_result, _task_sig)
 	_task_result = null
 
