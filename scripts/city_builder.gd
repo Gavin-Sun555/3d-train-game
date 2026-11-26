@@ -3,6 +3,7 @@ extends RefCounted
 
 static var _curb_mat_cache: StandardMaterial3D = null
 static var _sidewalk_mat_cache: ShaderMaterial = null
+static var _roof_tile_mat_cache: ShaderMaterial = null
 
 
 static func build_city(
@@ -97,11 +98,49 @@ static func build_city(
 	for ll in lamp_lights:
 		lm_info["lights"].append(ll)
 
-	# 7. High-detail Seattle parks, Lake Union waterfront, and multi-species sculpted 3D trees!
+	# 7. High-detail city parks, waterfronts, and multi-species sculpted 3D trees!
 	var park_data := map_data
-	if map_data.has("park_areas"):
+	if map_data.has("park_areas") or map_data.get("landmarks", {}).has("jiaxing_station"):
 		park_data = map_data.duplicate(false)
-		park_data["areas"] = map_data["park_areas"]
+		var src_areas: Array = map_data.get("park_areas", map_data.get("areas", []))
+		if map_data.get("landmarks", {}).has("jiaxing_station"):
+			# Handcrafted 1:1 MAD Architects Jiaxing Station South Plaza supplies its own sculpted hills,
+			# open 1-hectare Central Lawn, and curated groves — skip generic OSM grass/gazebo/flowerbed props inside!
+			var filtered_areas: Array = []
+			for a in src_areas:
+				var pts: Array = (a as Dictionary).get("pts", [])
+				var skip_a := false
+				if not pts.is_empty():
+					var asx := 0.0
+					var asz := 0.0
+					for pt in pts:
+						asx += float(pt[0])
+						asz += float(pt[1])
+					var acx := asx / float(pts.size())
+					var acz := asz / float(pts.size())
+					if acx >= 645.0 and acx <= 955.0 and acz >= -1398.0 and acz <= -1036.0 and acz > -acx - 492.0:
+						skip_a = true
+				if not skip_a:
+					filtered_areas.append(a)
+			park_data["areas"] = filtered_areas
+			var src_trees: Array = map_data.get("trees", [])
+			var filtered_trees: Array = []
+			for t in src_trees:
+				var tx := 0.0
+				var tz := 0.0
+				if t is Array and (t as Array).size() >= 2:
+					tx = float((t as Array)[0])
+					tz = float((t as Array)[1])
+				elif t is Dictionary:
+					var tp: Array = (t as Dictionary).get("pos", [0.0, 0.0])
+					tx = float(tp[0])
+					tz = float(tp[1])
+				if tx >= 648.0 and tx <= 950.0 and tz >= -1396.0 and tz <= -1038.0 and tz > -tx - 488.0:
+					continue
+				filtered_trees.append(t)
+			park_data["trees"] = filtered_trees
+		else:
+			park_data["areas"] = src_areas
 	ParkLandscapeBuilder.build_all_parks_and_trees(parent, park_data, lm_info["lights"], globe_mat)
 
 	# 8. Real terrain: put everything built above on the ground (buildings / water already placed)
@@ -174,6 +213,7 @@ static func _build_areas(parent: Node3D, areas: Array) -> void:
 		"plaza": [],
 		"lawn": [],
 		"vacant": [],
+		"farmland": [],
 	}
 	for a in areas:
 		var kind: String = str(a.get("kind", ""))
@@ -189,6 +229,8 @@ static func _build_areas(parent: Node3D, areas: Array) -> void:
 			buckets["lawn"].append(a)
 		elif kind == "vacant_green":
 			buckets["vacant"].append(a)
+		elif kind == "farmland":
+			buckets["farmland"].append(a)
 		else:
 			buckets["plaza"].append(a)
 
@@ -197,6 +239,8 @@ static func _build_areas(parent: Node3D, areas: Array) -> void:
 	_emit_area_group(parent, "CompoundLawns", buckets["lawn"], 0.006, Color(0.20, 0.32, 0.14), 0.92, 0.0)
 	# undeveloped plots: rough, slightly dry grass (kept apart from every other area, same height as the lawns)
 	_emit_area_group(parent, "VacantPlots", buckets["vacant"], 0.006, Color(0.30, 0.34, 0.18), 0.95, 0.0)
+	# real Jiangnan agricultural paddy fields & crop plots (Google Earth / OSM)
+	_emit_area_group(parent, "FarmlandAreas", buckets["farmland"], 0.008, Color(0.26, 0.35, 0.15), 0.90, 0.0)
 	_emit_area_group(parent, "WaterAreas", buckets["water"], 0.026, Color(0.08, 0.22, 0.30), 0.06, 0.35)
 	_emit_area_group(parent, "PlazaAreas", buckets["plaza"], 0.030, Color(0.39, 0.38, 0.36), 0.86, 0.0)
 	_emit_area_group(parent, "BrickPlazas", buckets["brick"], 0.034, Color(0.45, 0.27, 0.22), 0.84, 0.0)
@@ -311,6 +355,13 @@ static func _emit_area_group(
 		mi.material_override = wm
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.set_meta("water_mat", wm)
+		parent.add_child(mi)
+		return
+	if node_name == "FarmlandAreas":
+		var fm := ShaderMaterial.new()
+		fm.shader = load("res://shaders/farmland.gdshader") as Shader
+		mi.material_override = fm
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(mi)
 		return
 	if node_name in ["ParkAreas", "IslandParkAreas", "CompoundLawns", "VacantPlots"]:
@@ -547,7 +598,7 @@ static func _build_roads_and_curbs(
 						for yo: float in [-3.55, 3.55]:
 							var c0 := a + nrm1 * yo
 							var c1 := b + nrm1 * yo
-							var cn := nrm1 * 0.075
+							var cn := nrm1 * 0.105
 							_add_flat_quad(yellow_st, Vector3(c0.x - cn.x, ym2, c0.y - cn.y), Vector3(c0.x + cn.x, ym2, c0.y + cn.y),
 								Vector3(c1.x + cn.x, ym2, c1.y + cn.y), Vector3(c1.x - cn.x, ym2, c1.y - cn.y), Vector3.UP)
 							has_yellow = true
@@ -558,10 +609,10 @@ static func _build_roads_and_curbs(
 							dash_offs.append(-(5.35 + 1.65 + float(k - 1) * 3.3))
 					else:
 						var med := 0.8 if lf + lb >= 4 else 0.0
-						for yo: float in ([-med - 0.1, med + 0.1] if med > 0.0 else [-0.12, 0.12]):
+						for yo: float in ([-med - 0.12, med + 0.12] if med > 0.0 else [-0.15, 0.15]):
 							var c0 := a + nrm1 * yo
 							var c1 := b + nrm1 * yo
-							var cn := nrm1 * 0.06
+							var cn := nrm1 * 0.09
 							_add_flat_quad(yellow_st, Vector3(c0.x - cn.x, ym2, c0.y - cn.y), Vector3(c0.x + cn.x, ym2, c0.y + cn.y),
 								Vector3(c1.x + cn.x, ym2, c1.y + cn.y), Vector3(c1.x - cn.x, ym2, c1.y - cn.y), Vector3.UP)
 							has_yellow = true
@@ -579,7 +630,7 @@ static func _build_roads_and_curbs(
 					for iv: Vector2 in _dash_spans(seg_s0, seg_len, road_len):
 						var d0 := a + dir * iv.x + nrm1 * off
 						var d1 := a + dir * iv.y + nrm1 * off
-						var dn := nrm1 * 0.07
+						var dn := nrm1 * 0.105
 						_add_flat_quad(mark_st, Vector3(d0.x - dn.x, ym2, d0.y - dn.y), Vector3(d0.x + dn.x, ym2, d0.y + dn.y),
 							Vector3(d1.x + dn.x, ym2, d1.y + dn.y), Vector3(d1.x - dn.x, ym2, d1.y - dn.y), Vector3.UP)
 						has_mark = true
@@ -589,7 +640,7 @@ static func _build_roads_and_curbs(
 			for iv: Vector2 in _dash_spans(seg_s0, seg_len, road_len):
 				var m0 := a + dir * iv.x
 				var m1 := a + dir * iv.y
-				var mn := Vector2(-dir.y, dir.x) * 0.08
+				var mn := Vector2(-dir.y, dir.x) * 0.11
 				var ym := y + 0.016
 				_add_flat_quad(
 					mark_st,
@@ -601,7 +652,7 @@ static func _build_roads_and_curbs(
 				)
 				has_mark = true
 
-	# Weathered thermoplastic crosswalk zebra stripes
+	# High-contrast thermoplastic crosswalk zebra stripes (GB 5768 urban crosswalk proportions)
 	for cw in crosswalks:
 		var cp: Array = cw["pos"]
 		var cd: Array = cw["dir"]
@@ -614,10 +665,10 @@ static func _build_roads_and_curbs(
 		var lat := -cw_w + 0.55
 		while lat <= cw_w - 0.55:
 			var bar_c := center + across * lat
-			var b0 := bar_c - along * 1.25 - across * 0.21
-			var b1 := bar_c - along * 1.25 + across * 0.21
-			var b2 := bar_c + along * 1.25 + across * 0.21
-			var b3 := bar_c + along * 1.25 - across * 0.21
+			var b0 := bar_c - along * 1.80 - across * 0.26
+			var b1 := bar_c - along * 1.80 + across * 0.26
+			var b2 := bar_c + along * 1.80 + across * 0.26
+			var b3 := bar_c + along * 1.80 - across * 0.26
 			_add_flat_quad(
 				mark_st,
 				Vector3(b0.x, y_cw, b0.y),
@@ -627,7 +678,7 @@ static func _build_roads_and_curbs(
 				Vector3.UP
 			)
 			has_mark = true
-			lat += 0.98
+			lat += 0.92
 
 	if has_road:
 		var road_mi := MeshInstance3D.new()
@@ -648,8 +699,8 @@ static func _build_roads_and_curbs(
 		mark_mi.mesh = Terrain.commit_draped(mark_st, mark_mi)
 		var m_mat := ShaderMaterial.new()
 		m_mat.shader = load("res://shaders/road_marking.gdshader") as Shader
-		m_mat.set_shader_parameter("paint_col", Color(0.78, 0.77, 0.73))
-		m_mat.set_shader_parameter("rough_val", 0.82)
+		m_mat.set_shader_parameter("paint_col", Color(1.0, 1.0, 0.98))
+		m_mat.set_shader_parameter("rough_val", 0.52)
 		mark_mi.material_override = m_mat
 		mark_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(mark_mi)
@@ -659,8 +710,8 @@ static func _build_roads_and_curbs(
 		y_mi.mesh = Terrain.commit_draped(yellow_st, y_mi)
 		var y_mat := ShaderMaterial.new()
 		y_mat.shader = load("res://shaders/road_marking.gdshader") as Shader
-		y_mat.set_shader_parameter("paint_col", Color(0.86, 0.68, 0.18))
-		y_mat.set_shader_parameter("rough_val", 0.80)
+		y_mat.set_shader_parameter("paint_col", Color(1.0, 0.80, 0.12))
+		y_mat.set_shader_parameter("rough_val", 0.52)
 		y_mi.material_override = y_mat
 		y_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(y_mi)
@@ -858,18 +909,34 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 		if not lm_o.is_empty():
 			base_c = lm_o["color"]
 			trim_c = base_c.lightened(0.10) if style != 0 else trim_c
-		if is_zh and style in [1, 2] and str(b.get("lm", "")) == "" and b.has("cpd") and str(b.get("trim", "")) != "":
-			# One developer scheme per compound (wall + line colour), a hair of per-building weathering
-			base_c = Color.from_string(str(b["colour"]), Color(0.9, 0.88, 0.84))
-			var jt := (float(b_hash % 9) - 4.0) * 0.006
+		var arch_s := str(b.get("arch", ""))
+		if is_zh and style in [1, 2, 3] and str(b.get("lm", "")) == "" and str(b.get("colour", "")) != "":
+			# Respect real Google Earth/Maps surveyed compound, 老破小, and rural self-built facade colours
+			base_c = Color.from_string(str(b["colour"]), Color(0.84, 0.79, 0.71))
+			var jt := (float(b_hash % 9) - 4.0) * 0.007
 			base_c = Color(clampf(base_c.r + jt, 0.0, 1.0), clampf(base_c.g + jt, 0.0, 1.0), clampf(base_c.b + jt, 0.0, 1.0))
-			trim_c = Color.from_string(str(b["trim"]), Color(0.35, 0.36, 0.38))
+			if str(b.get("trim", "")) != "":
+				trim_c = Color.from_string(str(b["trim"]), Color(0.32, 0.30, 0.28))
+			else:
+				trim_c = base_c.darkened(0.28)
 		elif is_zh and style in [1, 2] and str(b.get("lm", "")) == "":
-			# Real Chinese residential colour schemes instead of six near-identical pale greys: neighbouring
-			# blocks (one compound) share a colour family, each building varies a little
+			# Fallback Chinese residential colour schemes: distinct per ~180 m block, rich warm/cool contrast
 			base_c = _zh_facade_colour(Vector2(poly[0].x, poly[0].y), b_hash)
-			trim_c = base_c.lerp(Color(0.92, 0.91, 0.88), 0.45)
-		var seed_i := b_idx % 60
+			trim_c = base_c.darkened(0.28)
+		var is_laopoxiao := is_zh and style == 2 and arch_s == "laopoxiao"
+		var is_rural_sb := is_zh and style == 3 and arch_s == "rural_selfbuilt"
+		var is_old_walkup := is_zh and style == 2 and not is_laopoxiao and (arch_s.begins_with("old_walkup") or (not bool(b.get("yangfang", false)) and h <= 23.0 and not (b.get("roof", {}) as Dictionary).is_empty()))
+		var seed_i: int
+		if is_laopoxiao:
+			seed_i = 48 + (b_idx % 16)
+		elif is_old_walkup:
+			seed_i = 32 + (b_idx % 16)
+		elif is_rural_sb:
+			seed_i = 32 + (b_idx % 32)
+		elif is_zh and style in [2, 3]:
+			seed_i = b_idx % 32
+		else:
+			seed_i = b_idx % 60
 		if not lm_o.is_empty() and bool(lm_o["ashlar"]):
 			seed_i = LandmarkFacades.ASHLAR_SEED
 		var encoded_a := (float(style) * 64.0 + float(seed_i)) / 255.0
@@ -968,9 +1035,12 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 		if not balc.is_empty() and bool(balc.get("used", false)):
 			bal_used = true
 		if not pitched.is_empty():
-			# Pitched tile roof of an older 6-8 storey residential block (老小区坡屋顶)
-			_emit_roof(st, roof_st, pitched, h + 0.3, vcol, pitched["col"])
+			# Pitched tile roof of an older 6-8 storey residential block, 老破小, or 洋房 (sits flush at wall top h!)
+			_emit_roof(st, roof_st, pitched, h, vcol, pitched["col"])
 			has_roofs = true
+			if (is_old_walkup or is_laopoxiao) and (b_hash % 3 != 0):
+				_emit_solar_heaters(frame_st, pitched, h, b_hash)
+				has_frames = true
 		if generic and resid and style == 2 and h >= 24.0 and span.x > 14.0 and span.y > 14.0 and pitched.is_empty():
 			_emit_roof_core(frame_st, top_piece, top_h, base_c, trim_c, seed_i)
 			has_frames = true
@@ -979,14 +1049,24 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 		# King Street Station's campanile
 		var lm_k := str(b.get("lm", ""))
 		var roof_d: Dictionary = b.get("roof", {})
-		if not roof_d.is_empty() and not yang:
+		if not roof_d.is_empty() and not yang and pitched.is_empty():
 			var rcol := Color.from_string(str(b.get("roof_colour", "#4a5552")), Color(0.29, 0.33, 0.32))
-			_emit_roof(st, roof_st, roof_d, h + 0.3, vcol, rcol)
+			_emit_roof(st, roof_st, roof_d, h, vcol, rcol)
 			has_roofs = true
+			if (is_old_walkup or is_laopoxiao or is_rural_sb) and (b_hash % 3 != 0):
+				_emit_solar_heaters(frame_st, roof_d, h, b_hash)
+				has_frames = true
 			if lm_k in ["uw_gothic", "suzzallo", "church"]:
 				_emit_gothic(frame_st, poly, h, roof_d, trim_c.lightened(0.15))
 			if lm_k == "church" and float(roof_d.get("hl", 0.0)) > 9.0:
 				_emit_church_towers(st, roof_st, roof_d, h, bool(b.get("twin_towers", false)), vcol, rcol)
+		elif is_laopoxiao and pitched.is_empty() and roof_d.is_empty() and (b_hash % 3 != 0):
+			# Flat-roofed 1980s 老破小: authentic rows of rooftop evacuated-tube solar water heaters!
+			var obr_lpx := _obb2d(poly)
+			if not obr_lpx.is_empty():
+				var ou_l: Vector2 = obr_lpx[1]
+				_emit_solar_heaters(frame_st, {"c": [obr_lpx[0].x, obr_lpx[0].y], "a": atan2(ou_l.y, ou_l.x), "hl": float(obr_lpx[2]), "hw": float(obr_lpx[3]), "h": 0.0}, h, b_hash)
+				has_frames = true
 		if lm_k == "campanile":
 			_emit_campanile(st, roof_st, frame_st, poly, vcol)
 			has_roofs = true
@@ -1012,8 +1092,9 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 
 		# Rooftop mechanical penthouse, HVAC chillers batched into BuildingFrames3D + skyscraper beacons
 		var top_poly := tower_poly if has_setback else poly
-		var got_core := str(b.get("kind", "")) in ["apartments", "residential", "dormitory"] and style == 2 and h >= 24.0 and span.x > 14.0 and span.y > 14.0 and (b.get("roof", {}) as Dictionary).is_empty() and str(b.get("lm", "")) == ""
-		if not got_core and pitched.is_empty() and Geometry2D.is_point_in_polygon(center2, top_poly) and span.x > 16.0 and span.y > 16.0 and h >= 15.0:
+		var has_any_roof := not pitched.is_empty() or not (b.get("roof", {}) as Dictionary).is_empty()
+		var got_core := str(b.get("kind", "")) in ["apartments", "residential", "dormitory"] and style == 2 and h >= 24.0 and span.x > 14.0 and span.y > 14.0 and not has_any_roof and str(b.get("lm", "")) == ""
+		if not got_core and not has_any_roof and Geometry2D.is_point_in_polygon(center2, top_poly) and span.x > 16.0 and span.y > 16.0 and h >= 15.0:
 			var pw := clampf(span.x * 0.25, 4.2, 11.5)
 			var pd := clampf(span.y * 0.25, 4.2, 11.5)
 			var ph := clampf(h * 0.048 + 2.2, 2.5, 5.2)
@@ -1088,12 +1169,10 @@ static func _build_buildings(parent: Node3D, buildings: Array, building_mat: Sha
 		r_mi.name = "HouseRoofs"
 		r_mi.set_meta("on_terrain", true)
 		r_mi.mesh = Terrain.acc_mesh(acc_rf)
-		var r_mat := StandardMaterial3D.new()
-		r_mat.vertex_color_use_as_albedo = true
-		r_mat.roughness = 0.92
-		r_mat.metallic_specular = 0.18
-		r_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-		r_mi.material_override = r_mat
+		if _roof_tile_mat_cache == null:
+			_roof_tile_mat_cache = ShaderMaterial.new()
+			_roof_tile_mat_cache.shader = load("res://shaders/roof_tile.gdshader") as Shader
+		r_mi.material_override = _roof_tile_mat_cache
 		r_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 		parent.add_child(r_mi)
 
@@ -1546,13 +1625,14 @@ static func _emit_roof(st: SurfaceTool, roof_st: SurfaceTool, roof: Dictionary, 
 			var ec := c + u * (hl * sgn)
 			var n2 := u * sgn
 			var d := Vector2(n2.y, -n2.x)
-			var b0 := Vector3((ec - d * hw).x, h, (ec - d * hw).y)
-			var b1 := Vector3((ec + d * hw).x, h, (ec + d * hw).y)
+			var b0 := Vector3((ec - d * hw).x, h - 0.08, (ec - d * hw).y)
+			var b1 := Vector3((ec + d * hw).x, h - 0.08, (ec + d * hw).y)
 			var ap := Vector3(ec.x, y1 - 0.05, ec.y)
 			var n3 := Vector3(n2.x, 0.0, n2.y)
-			st.set_color(wcol); st.set_normal(n3); st.set_uv(Vector2(0.0, h)); st.add_vertex(b0)
-			st.set_color(wcol); st.set_normal(n3); st.set_uv(Vector2(hw * 2.0, h)); st.add_vertex(b1)
-			st.set_color(wcol); st.set_normal(n3); st.set_uv(Vector2(hw, y1)); st.add_vertex(ap)
+			# Negative UV.y signals a clean gable masonry triangle (no sliced windows!)
+			st.set_color(wcol); st.set_normal(n3); st.set_uv(Vector2(0.0, -0.02)); st.add_vertex(b0)
+			st.set_color(wcol); st.set_normal(n3); st.set_uv(Vector2(hw * 2.0, -0.02)); st.add_vertex(b1)
+			st.set_color(wcol); st.set_normal(n3); st.set_uv(Vector2(hw, -0.02 - maxf(0.1, y1 - h))); st.add_vertex(ap)
 
 
 static func _v3(p: Vector2, y: float) -> Vector3:
@@ -1858,28 +1938,63 @@ static func _emit_zh_tower_lines(fst: SurfaceTool, poly: PackedVector2Array, top
 		_emit_colored_box(fst, Transform3D(basis, Vector3(c0.x, (top + rise) * 0.5, c0.y)), Vector3(0.60, top + rise, 0.34), band_c)
 
 
-# Facade colour of a Chinese residential / mixed-use block: a colour family per ~180 m cell (one compound or
-# street block shares it), per-building variation inside the family
+# Facade colour of a Chinese residential / mixed-use block: rich, realistic warm-stone / terracotta /
+# champagne / silver-grey palettes (calibrated against Jiaxing Google Earth & street photography)
 static func _zh_facade_colour(p: Vector2, b_hash: int) -> Color:
 	var fams: Array = [
-		[Color(0.91, 0.89, 0.84), Color(0.88, 0.86, 0.81)], # warm white 真石漆
-		[Color(0.94, 0.91, 0.86), Color(0.90, 0.87, 0.81)], # ivory
-		[Color(0.86, 0.84, 0.79), Color(0.82, 0.80, 0.75)], # light warm grey
-		[Color(0.85, 0.79, 0.70), Color(0.81, 0.75, 0.66)], # light coffee stone
-		[Color(0.84, 0.83, 0.80), Color(0.79, 0.78, 0.76)], # grey-white
-		[Color(0.89, 0.86, 0.80), Color(0.85, 0.82, 0.75)], # champagne beige
-		[Color(0.80, 0.79, 0.77), Color(0.75, 0.74, 0.72)], # mid grey
-		[Color(0.66, 0.44, 0.36), Color(0.62, 0.41, 0.33)], # brick (older blocks)
+		[Color(0.84, 0.78, 0.69), Color(0.79, 0.73, 0.64)], # warm sandstone 真石漆
+		[Color(0.86, 0.80, 0.70), Color(0.81, 0.75, 0.65)], # champagne ivory
+		[Color(0.78, 0.79, 0.81), Color(0.73, 0.75, 0.78)], # modern silver-grey aluminum
+		[Color(0.79, 0.69, 0.56), Color(0.74, 0.64, 0.51)], # warm coffee-tan stone
+		[Color(0.81, 0.77, 0.71), Color(0.75, 0.71, 0.65)], # warm travertine grey
+		[Color(0.83, 0.75, 0.64), Color(0.77, 0.69, 0.58)], # classic buff ochre
+		[Color(0.73, 0.75, 0.77), Color(0.68, 0.70, 0.73)], # contemporary cool grey
+		[Color(0.68, 0.45, 0.36), Color(0.62, 0.40, 0.32)], # Jiangnan terracotta brick
 	]
 	var cx := int(floor(p.x / 180.0))
 	var cy := int(floor(p.y / 180.0))
 	var fam_i := absi(cx * 73856093 ^ cy * 19349663) % fams.size()
 	if fam_i == 7 and absi(cx * 31 + cy * 17) % 3 != 0:
-		fam_i = 1 # brick only now and then
+		fam_i = 3 # coffee-tan instead of too much red brick
 	var fam: Array = fams[fam_i]
 	var c := (fam[0] as Color).lerp(fam[1], float(b_hash % 7) / 6.0)
 	var jit := (float((b_hash / 7) % 9) - 4.0) * 0.008
 	return Color(clampf(c.r + jit, 0.0, 1.0), clampf(c.g + jit, 0.0, 1.0), clampf(c.b + jit, 0.0, 1.0))
+
+
+# Iconic Jiaxing / Jiangnan 1990s-2000s walk-up rooftop solar water heaters (太阳能热水器):
+# rows of angled deep-blue evacuated-tube collector panels + white horizontal insulated tanks on south slope!
+static func _emit_solar_heaters(fst: SurfaceTool, roof: Dictionary, eave_y: float, b_hash: int) -> void:
+	var cc: Array = roof.get("c", [0.0, 0.0])
+	var c := Vector2(float(cc[0]), float(cc[1]))
+	var ang := float(roof.get("a", 0.0))
+	var u := Vector2(cos(ang), sin(ang))
+	var v := Vector2(-u.y, u.x)
+	# Ensure +v points roughly south (+Z in Godot) so solar heaters face the sun
+	if v.y < 0.0:
+		v = -v
+	var hl := float(roof.get("hl", 8.0))
+	var hw := float(roof.get("hw", 5.0))
+	var rh := float(roof.get("h", 2.4))
+	if hl < 3.6 or hw < 2.8:
+		return
+	var basis := Basis(Vector3(u.x, 0.0, u.y), Vector3.UP, Vector3(v.x, 0.0, v.y))
+	var tilt := Basis(Vector3.RIGHT, deg_to_rad(32.0))
+	var n_units := clampi(int(floor(hl / 3.8)), 1, 5)
+	var panel_c := Color(0.11, 0.17, 0.28)
+	var tank_c := Color(0.90, 0.90, 0.88)
+	for k in range(n_units):
+		if ((b_hash + k * 7) % 5) == 0:
+			continue
+		var t_u := lerpf(-hl * 0.68, hl * 0.68, (float(k) + 0.5) / float(n_units))
+		var s_v := hw * 0.42
+		var y_slope := eave_y + rh * (1.0 - s_v / maxf(hw, 1.0))
+		var pos := c + u * t_u + v * s_v
+		# Dark blue evacuated-tube collector panel
+		_emit_colored_box(fst, Transform3D(basis * tilt, Vector3(pos.x, y_slope + 0.62, pos.y)), Vector3(1.55, 0.09, 1.75), panel_c)
+		# Horizontal white insulated hot-water cylinder tank at upper edge
+		var tank_p := pos - v * 0.58
+		_emit_colored_box(fst, Transform3D(basis, Vector3(tank_p.x, y_slope + 1.18, tank_p.y)), Vector3(1.68, 0.44, 0.44), tank_c)
 
 
 static func _poly_area(poly: PackedVector2Array) -> float:
@@ -3096,10 +3211,10 @@ static func _build_bike_lane_strips(
 				if samp_p[k].distance_to(samp_p[k + 1]) < 0.05:
 					continue
 				# solid white divider along the (possibly narrowed) inner edge
-				var la := samp_p[k] + samp_n[k] * (bside * (sm_in[k] - 0.08))
-				var lb := samp_p[k + 1] + samp_n[k + 1] * (bside * (sm_in[k + 1] - 0.08))
-				var ln_a := samp_n[k] * 0.08
-				var ln_b := samp_n[k + 1] * 0.08
+				var la := samp_p[k] + samp_n[k] * (bside * (sm_in[k] - 0.105))
+				var lb := samp_p[k + 1] + samp_n[k + 1] * (bside * (sm_in[k + 1] - 0.105))
+				var ln_a := samp_n[k] * 0.105
+				var ln_b := samp_n[k + 1] * 0.105
 				_add_flat_quad(line_st, Vector3(la.x - ln_a.x, ym, la.y - ln_a.y), Vector3(la.x + ln_a.x, ym, la.y + ln_a.y),
 					Vector3(lb.x + ln_b.x, ym, lb.y + ln_b.y), Vector3(lb.x - ln_b.x, ym, lb.y - ln_b.y), Vector3.UP)
 				has_line = true
@@ -3150,8 +3265,8 @@ static func _build_bike_lane_strips(
 		l_mi.mesh = Terrain.commit_draped(line_st, l_mi)
 		var l_mat := ShaderMaterial.new()
 		l_mat.shader = load("res://shaders/road_marking.gdshader") as Shader
-		l_mat.set_shader_parameter("paint_col", Color(0.78, 0.77, 0.73))
-		l_mat.set_shader_parameter("rough_val", 0.82)
+		l_mat.set_shader_parameter("paint_col", Color(0.96, 0.96, 0.94))
+		l_mat.set_shader_parameter("rough_val", 0.60)
 		l_mi.material_override = l_mat
 		l_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(l_mi)
@@ -3240,7 +3355,8 @@ static func _buf_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Ve
 
 
 # Low white municipal Chinese bike-lane separation guardrails (机非隔离护栏) on wide bike_lane avenues.
-# Strictly skips intersections, side streets, station bays, and laid tram tracks.
+# Follows the exact curved bike-lane edge smoothly across bends; strictly stops BEFORE intersections,
+# crossing/parallel roads, station bays, and tram motor-lane clearance (never juts into driving lanes!).
 static func _build_bike_guardrails(
 	parent: Node3D, roads: Array, emit_n: int, seg_grid: Dictionary,
 	bays: Array, clear_idx: Dictionary, has_tracks: bool
@@ -3261,44 +3377,117 @@ static func _build_bike_guardrails(
 		var hw := clampf(float(r.get("width", 12.0)) * 0.5, 3.2, 22.0)
 		if hw < 5.75:
 			continue
-		var pts: Array = r.get("pts", [])
-		if pts.size() < 2:
+		var raw_pts: Array = r.get("pts", [])
+		if raw_pts.size() < 2:
 			continue
-		var g_off := hw - 2.12
-		for i in range(pts.size() - 1):
-			var a := Vector2(float(pts[i][0]), float(pts[i][1]))
-			var b := Vector2(float(pts[i + 1][0]), float(pts[i + 1][1]))
-			var d := b - a
-			var sl := d.length()
-			if sl < 32.0:
-				continue
-			var dir := d / sl
+		var poly: Array[Vector2] = []
+		for pp in raw_pts:
+			var v2 := Vector2(float(pp[0]), float(pp[1]))
+			if poly.is_empty() or poly[poly.size() - 1].distance_to(v2) > 0.05:
+				poly.append(v2)
+		if poly.size() < 2:
+			continue
+		var cum: Array[float] = [0.0]
+		for k in range(1, poly.size()):
+			cum.append(cum[k - 1] + poly[k - 1].distance_to(poly[k]))
+		var total := cum[cum.size() - 1]
+		var end_margin := 14.5
+		if total < end_margin * 2.0 + 16.0:
+			continue
+
+		# Sample the smooth curved road centerline & bend-eased normals every 2.0m (matching _build_bike_lane_strips!)
+		var samp_p: Array[Vector2] = []
+		var samp_n: Array[Vector2] = []
+		var seg := 0
+		var sd := end_margin
+		var t1 := total - end_margin
+		while true:
+			var s_cl := minf(sd, t1)
+			while seg < poly.size() - 2 and cum[seg + 1] < s_cl:
+				seg += 1
+			var a := poly[seg]
+			var b := poly[seg + 1]
+			var seg_l := maxf(cum[seg + 1] - cum[seg], 0.001)
+			var f := clampf((s_cl - cum[seg]) / seg_l, 0.0, 1.0)
+			var dir := (b - a).normalized()
 			var nrm := Vector2(-dir.y, dir.x)
-			var u3 := Vector3(dir.x, 0.0, dir.y)
-			var n3 := Vector3(nrm.x, 0.0, nrm.y)
-			var s_start := 13.5
-			var s_end := sl - 13.5
-			for side: float in _bike_sides(r):
-				var run_a := -1.0
-				var s := s_start
-				while s <= s_end + 0.01:
-					var sc := minf(s, s_end)
-					var p2 := a + dir * sc + nrm * (side * g_off)
-					var clear_ok := _other_road_clear(seg_grid, p2, ri) >= 3.2 and not _in_bay(bays, p2)
-					if clear_ok and has_tracks:
-						clear_ok = TrackBuilder.track_clearance_dist(clear_idx, p2) >= 2.8
-					if clear_ok and s <= s_end:
-						if run_a < 0.0:
-							run_a = sc
-					else:
-						if run_a >= 0.0 and sc - run_a >= 4.0:
-							_emit_guardrail_run(gst, a + dir * run_a + nrm * (side * g_off), u3, n3, sc - run_a, rail_white, post_base, accent_blue)
-							has_g = true
-						run_a = -1.0
-					s += 4.5
-				if run_a >= 0.0 and s_end - run_a >= 4.0:
-					_emit_guardrail_run(gst, a + dir * run_a + nrm * (side * g_off), u3, n3, s_end - run_a, rail_white, post_base, accent_blue)
-					has_g = true
+			if f * seg_l > seg_l - 3.5 and seg < poly.size() - 2:
+				var dn := (poly[seg + 2] - b).normalized()
+				var w := 0.5 * (1.0 - ((cum[seg + 1] - s_cl) / 3.5))
+				nrm = nrm.lerp(Vector2(-dn.y, dn.x), clampf(w, 0.0, 0.5)).normalized()
+			elif f * seg_l < 3.5 and seg > 0:
+				var dp := (a - poly[seg - 1]).normalized()
+				var w2 := 0.5 * (1.0 - ((s_cl - cum[seg]) / 3.5))
+				nrm = nrm.lerp(Vector2(-dp.y, dp.x), clampf(w2, 0.0, 0.5)).normalized()
+			samp_p.append(a.lerp(b, f))
+			samp_n.append(nrm)
+			if sd >= t1:
+				break
+			sd += 2.0
+
+		var n_s := samp_p.size()
+		if n_s < 8:
+			continue
+		var bl_w := 2.05
+		for side: float in _bike_sides(r):
+			# Compute exact curved bike-lane inner offset (identical to _build_bike_lane_strips)
+			var samp_in: Array[float] = []
+			for k in range(n_s):
+				var inner_abs := hw - bl_w
+				if has_tracks:
+					for _it in range(2):
+						var pq := samp_p[k] + samp_n[k] * (side * inner_abs)
+						inner_abs += maxf(0.0, NetworkGraph.BIKE_TRACK_CLEAR - TrackBuilder.track_clearance_dist(clear_idx, pq))
+				samp_in.append(inner_abs)
+			var sm_in: Array[float] = []
+			for k in range(n_s):
+				var v := samp_in[k]
+				for kk in range(maxi(0, k - 2), mini(n_s, k + 3)):
+					v = maxf(v, samp_in[kk] - 0.25 * float(absi(kk - k)))
+				sm_in.append(v)
+
+			# Strictly validate every 2m point along the curved guardrail against ALL other roads,
+			# parallel carriageways, tram motor-lane envelope (>= 5.4m), station bays & bike-lane width!
+			var pts_g: Array[Vector2] = []
+			var ok_g: Array[bool] = []
+			pts_g.resize(n_s)
+			ok_g.resize(n_s)
+			for k in range(n_s):
+				var p2 := samp_p[k] + samp_n[k] * (side * (sm_in[k] - 0.10))
+				var p_kerb := samp_p[k] + samp_n[k] * (side * hw)
+				pts_g[k] = p2
+				var good := (hw - 0.14 - sm_in[k]) >= 1.85
+				if good and k > 0 and k < n_s - 1:
+					# Skip sharp polyline kinks/elbows (> 16 deg) so guardrails never poke awkwardly at merge noses!
+					if samp_n[k - 1].dot(samp_n[k + 1]) < 0.96:
+						good = false
+				if good:
+					# Strict clearance at BOTH the guardrail & outer kerb from ALL crossing streets & merge tapers!
+					good = _other_road_clear(seg_grid, p2, ri) >= 8.5 and _other_road_clear(seg_grid, p_kerb, ri) >= 6.5 and not _in_bay(bays, p2)
+				if good and has_tracks:
+					# Guarantee a full unobstructed motor lane (>= 5.4m from track center!) beside the tramway
+					good = TrackBuilder.track_clearance_dist(clear_idx, p2) >= 5.4
+				ok_g[k] = good
+
+			# Emit smooth continuous curved runs (stopping STRICTLY at last valid point, min run length >= 16m!)
+			var k := 0
+			while k < n_s:
+				while k < n_s and not ok_g[k]:
+					k += 1
+				var k_start := k
+				while k < n_s and ok_g[k]:
+					k += 1
+				var k_end := k - 1
+				if k_end - k_start >= 8: # >= 16m continuous unobstructed run (eliminates short floating stubs!)
+					var run_pts: Array[Vector2] = []
+					var run_len := 0.0
+					for rk in range(k_start, k_end + 1):
+						run_pts.append(pts_g[rk])
+						if rk > k_start:
+							run_len += pts_g[rk - 1].distance_to(pts_g[rk])
+					if run_len >= 16.0:
+						_emit_curved_guardrail_run(gst, run_pts, rail_white, post_base, accent_blue)
+						has_g = true
 
 	if not has_g:
 		return
@@ -3315,21 +3504,38 @@ static func _build_bike_guardrails(
 	parent.add_child(mi)
 
 
-static func _emit_guardrail_run(
-	st: SurfaceTool, p0: Vector2, U: Vector3, N: Vector3, run_len: float,
+static func _emit_curved_guardrail_run(
+	st: SurfaceTool, pts: Array[Vector2],
 	rail_c: Color, base_c: Color, accent_c: Color
 ) -> void:
-	var o := Vector3(p0.x, 0.055, p0.y)
-	# Top horizontal rail (y = 0.62..0.72), blue reflective accent strip (0.55..0.62), mid rail (0.28..0.34)
-	_gr_box(st, o, U, N, 0.0, run_len, 0.62, 0.72, -0.045, 0.045, rail_c)
-	_gr_box(st, o, U, N, 0.0, run_len, 0.56, 0.62, -0.038, 0.038, accent_c)
-	_gr_box(st, o, U, N, 0.0, run_len, 0.24, 0.30, -0.035, 0.035, rail_c.darkened(0.06))
-	# Posts every ~4.5m with weighted footplates
-	var n_posts := maxi(2, int(round(run_len / 4.5)) + 1)
-	for pi in range(n_posts):
-		var pu := run_len * float(pi) / float(n_posts - 1)
-		_gr_box(st, o, U, N, pu - 0.12, pu + 0.12, 0.0, 0.10, -0.14, 0.14, base_c)
-		_gr_box(st, o, U, N, pu - 0.04, pu + 0.04, 0.10, 0.74, -0.045, 0.045, rail_c)
+	var n := pts.size()
+	if n < 2:
+		return
+	var post_acc := 0.0
+	for i in range(n - 1):
+		var a := pts[i]
+		var b := pts[i + 1]
+		var d2 := b - a
+		var sl := d2.length()
+		if sl < 0.05:
+			continue
+		var dir := d2 / sl
+		var U := Vector3(dir.x, 0.0, dir.y)
+		var N := Vector3(-dir.y, 0.0, dir.x)
+		var o := Vector3(a.x, 0.055, a.y)
+		# Continuous curved horizontal rails: top white rail, reflective blue strip, lower white rail
+		_gr_box(st, o, U, N, 0.0, sl + 0.03, 0.62, 0.72, -0.045, 0.045, rail_c)
+		_gr_box(st, o, U, N, 0.0, sl + 0.03, 0.56, 0.62, -0.038, 0.038, accent_c)
+		_gr_box(st, o, U, N, 0.0, sl + 0.03, 0.24, 0.30, -0.035, 0.035, rail_c.darkened(0.06))
+		# Weighted post at start, every ~4.0m along the curve, and at the end
+		if i == 0 or post_acc >= 4.0:
+			_gr_box(st, o, U, N, -0.12, 0.12, 0.0, 0.10, -0.14, 0.14, base_c)
+			_gr_box(st, o, U, N, -0.04, 0.04, 0.10, 0.74, -0.045, 0.045, rail_c)
+			post_acc = 0.0
+		post_acc += sl
+		if i == n - 2:
+			_gr_box(st, o, U, N, sl - 0.12, sl + 0.12, 0.0, 0.10, -0.14, 0.14, base_c)
+			_gr_box(st, o, U, N, sl - 0.04, sl + 0.04, 0.10, 0.74, -0.045, 0.045, rail_c)
 
 
 static func _gr_box(

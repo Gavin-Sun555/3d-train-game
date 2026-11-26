@@ -39,6 +39,7 @@ static func build(parent: Node3D, map_data: Dictionary, lights: Array) -> void:
 		var bc: Dictionary = lm["botanical_conservatory"]
 		_botanical_conservatory(root, _p(bc["pos"]), lights)
 	JiaxingCivicLandmarks.build(root, lm, lights)
+	JiaxingConstructionBuilder.build(root, map_data, lights)
 	var bridges: Array = lm.get("canal_bridges", [])
 	for br in bridges:
 		if br is Dictionary:
@@ -420,106 +421,8 @@ static func _jiaxing_south_station(parent: Node3D, center: Vector3, angle: float
 	_add_hsr_train(st, Vector3(-18.0, 3.1, track_zs[1]), 1.0)
 	_add_hsr_train(st, Vector3(26.0, 3.1, track_zs[4]), -1.0)
 
-	# --- F. Station Front Welcome Forecourt, Grand North Civic Plaza & Bus Transit Hub (站前广场 + 公交枢纽站) ---
-	# F1. South Forecourt Lawn Islands, Trees & Covered T1 Transfer Walkway (z = -96..-70, clear of z=-109 T1 tracks!)
-	for side_f: float in [-1.0, 1.0]:
-		var fx_l := side_f * 58.0
-		_add_box(st, Vector3(54.0, 0.42, 16.0), Vector3(fx_l, 0.21, -83.0), granite_dark)
-		_add_box(st, Vector3(51.5, 0.48, 13.8), Vector3(fx_l, 0.26, -83.0), lawn_mat)
-		for ti_f in range(4):
-			var tx_f := fx_l - 18.0 + float(ti_f) * 12.0
-			ParkLandscapeBuilder.plant_tree(st, Vector3(tx_f, 0.5, -83.0), 1, 0.9, ParkLandscapeBuilder.CAMPHOR if (ti_f % 2 == 0) else ParkLandscapeBuilder.CAMPHOR_LT)
-	# Sheltered pedestrian transfer walkway leading directly to T1 Tram Terminal (嘉兴南站)
-	_add_box(st, Vector3(48.0, 0.32, 8.5), Vector3(0.0, 4.8, -92.5), roof_silver)
-	for tx in [-20.0, -7.0, 7.0, 20.0]:
-		_add_box(st, Vector3(0.38, 4.7, 0.38), Vector3(tx, 2.35, -92.5), steel_white)
-	_add_sign_label(st, "有轨电车 T1 线 · 嘉兴南站换乘通道", Vector3(0.0, 5.45, -96.8), PI, 44, 0.022, Color(0.98, 0.86, 0.34))
-
-	# F2. Grand North Civic Square (嘉兴南站北广场, z = -242..-126, strictly NORTH of T1 tramway at z=-109!)
-	var plaza_n := Node3D.new()
-	plaza_n.name = "JiaxingSouthNorthPlaza"
-	st.add_child(plaza_n)
-	_add_box(plaza_n, Vector3(316.0, 0.05, 114.0), Vector3(46.0, -0.015, -184.0), granite, 0.0, 0.0, 0.0, false)
-	# Architectural dark-granite geometric paving bands across the civic square
-	for gz_band: float in [-234.0, -206.0, -172.0, -138.0]:
-		_add_box(plaza_n, Vector3(308.0, 0.06, 2.6), Vector3(46.0, -0.005, gz_band), granite_dark, 0.0, 0.0, 0.0, false)
-	# Central Civic Welcome Sculpture & Circular Reflection Fountain ("红船起航 · 嘉兴欢迎您", local x=-12, z=-172)
-	_add_cyl(plaza_n, 16.5, 17.2, 0.55, Vector3(-12.0, 0.27, -172.0), granite_dark, 24)
-	add_fountain(plaza_n, Vector3(-12.0, 0.0, -172.0), 15.2, 0.58, 10.8, 16, 3.4)
-	_add_box(plaza_n, Vector3(14.0, 1.4, 4.2), Vector3(-12.0, 0.9, -172.0), granite)
-	var red_sail := _mat(Color(0.84, 0.12, 0.14), 0.32, 0.25)
-	_add_box(plaza_n, Vector3(11.5, 6.2, 0.55), Vector3(-12.0, 4.6, -172.0), red_sail, 0.0, 0.14)
-	_add_box(plaza_n, Vector3(7.5, 4.6, 0.50), Vector3(-11.0, 3.9, -170.6), _mat(Color(0.95, 0.78, 0.24), 0.28, 0.45), 0.0, -0.18)
-	_add_sign_label(plaza_n, "嘉 兴 欢 迎 您 · 红 船 起 航", Vector3(-12.0, 8.6, -172.4), PI, 48, 0.024, Color(0.94, 0.22, 0.18))
-	# Landscaped green plaza lawns & lush Jiangnan shade trees framing the civic square
-	for lx_p: float in [-42.0, 18.0]:
-		_add_box(plaza_n, Vector3(22.8, 0.42, 34.8), Vector3(lx_p, 0.21, -172.0), granite_dark)
-		_add_box(plaza_n, Vector3(22.0, 0.35, 34.0), Vector3(lx_p, 0.26, -172.0), lawn_mat)
-		for ti_p in range(3):
-			var tz_p := -184.0 + float(ti_p) * 12.0
-			ParkLandscapeBuilder.plant_tree(plaza_n, Vector3(lx_p, 0.35, tz_p), 1, 0.95, ParkLandscapeBuilder.CAMPHOR if (ti_p % 2 == 0) else ParkLandscapeBuilder.CAMPHOR_LT)
-	# Perimeter avenue tree row along south edge of North Plaza (z = -132, facing T1 tramway!)
-	for tx_row in range(-95, 195, 22):
-		if absf(float(tx_row) + 12.0) < 18.0:
-			continue
-		ParkLandscapeBuilder.plant_tree(plaza_n, Vector3(float(tx_row), 0.0, -132.0), 1, 0.9, ParkLandscapeBuilder.CAMPHOR_LT if (tx_row % 44 == 0) else ParkLandscapeBuilder.CAMPHOR)
-
-	# F3. Jiaxing South Station Bus Transit Hub (嘉兴南站公交枢纽站 — East Plaza, x = +52..+200, z = -234..-136)
-	var bus_hub := Node3D.new()
-	bus_hub.name = "JiaxingSouthBusHub"
-	st.add_child(bus_hub)
-	# Asphalt bus terminal staging yard & lane markings
-	_add_box(bus_hub, Vector3(144.0, 0.06, 94.0), Vector3(126.0, 0.015, -184.0), asphalt_mat, 0.0, 0.0, 0.0, false)
-	for by_l: float in [-206.0, -193.0, -180.0, -167.0, -154.0, -141.0]:
-		_add_box(bus_hub, Vector3(132.0, 0.04, 0.25), Vector3(126.0, 0.055, by_l), yellow_line, 0.0, 0.0, 0.0, false)
-	# 2-Story Bus Hub Dispatch & Passenger Waiting Pavilion (公交枢纽综合服务楼, z = -224)
-	_add_box(bus_hub, Vector3(64.0, 8.6, 13.5), Vector3(126.0, 4.3, -224.0), steel_white)
-	_add_box(bus_hub, Vector3(58.0, 6.2, 10.0), Vector3(126.0, 3.9, -224.0), warm_hall, 0.0, 0.0, 0.0, false)
-	_add_box(bus_hub, Vector3(60.0, 6.8, 13.9), Vector3(126.0, 4.2, -224.0), glass_curtain)
-	_add_box(bus_hub, Vector3(70.0, 0.65, 18.0), Vector3(126.0, 8.9, -223.5), roof_silver)
-	_add_sign_label(bus_hub, "嘉兴南站公交枢纽站", Vector3(126.0, 10.6, -214.4), 0.0, 74, 0.028, Color(0.18, 0.72, 0.98))
-	_add_sign_label(bus_hub, "JIAXING SOUTH BUS TRANSIT HUB", Vector3(126.0, 9.5, -214.4), 0.0, 30, 0.020, Color(0.95, 0.96, 0.98))
-	_add_sign_label(bus_hub, "嘉兴南站公交枢纽站", Vector3(126.0, 10.6, -232.6), PI, 74, 0.028, Color(0.18, 0.72, 0.98))
-
-	# 5 Parallel Covered Bus Boarding Islands with cantilevered steel-glass canopies & route sign totems!
-	var bay_labels: Array[String] = ["1号站台 · K93 / K95", "2号站台 · K96 / K98", "3号站台 · 游1 / 快1", "4号站台 · 城乡公交", "5号站台 · 客运快线"]
-	var bay_zs: Array[float] = [-200.0, -187.0, -174.0, -161.0, -148.0]
-	for bi in range(bay_zs.size()):
-		var bz: float = bay_zs[bi]
-		_add_box(bus_hub, Vector3(76.0, 0.28, 3.4), Vector3(126.0, 0.16, bz), granite)
-		_add_box(bus_hub, Vector3(74.0, 0.05, 0.22), Vector3(126.0, 0.31, bz + 1.45), yellow_line, 0.0, 0.0, 0.0, false)
-		_add_box(bus_hub, Vector3(74.0, 0.26, 4.6), Vector3(126.0, 4.15, bz), roof_silver)
-		_add_box(bus_hub, Vector3(72.0, 0.10, 1.2), Vector3(126.0, 3.98, bz), warm_hall, 0.0, 0.0, 0.0, false)
-		for bcol in range(-3, 4):
-			_add_cyl(bus_hub, 0.16, 0.20, 3.9, Vector3(126.0 + float(bcol) * 11.0, 2.15, bz), steel_white, 8)
-		_add_box(bus_hub, Vector3(0.35, 2.6, 1.3), Vector3(88.5, 1.55, bz), dark_stone)
-		_add_sign_label(bus_hub, bay_labels[bi], Vector3(88.2, 2.95, bz), -PI * 0.5, 34, 0.018, Color(0.45, 0.92, 1.0))
-
-	# 6 Parked Modern Chinese Electric City Buses (嘉兴新能源纯电动公交车) docked cleanly at the boarding bays!
-	_add_electric_city_bus(bus_hub, Vector3(106.0, 0.04, -195.8), Color(0.14, 0.56, 0.88), 0.0)
-	_add_electric_city_bus(bus_hub, Vector3(144.0, 0.04, -195.8), Color(0.16, 0.64, 0.42), 0.0)
-	_add_electric_city_bus(bus_hub, Vector3(114.0, 0.04, -182.8), Color(0.16, 0.64, 0.42), 0.0)
-	_add_electric_city_bus(bus_hub, Vector3(148.0, 0.04, -169.8), Color(0.14, 0.56, 0.88), 0.0)
-	_add_electric_city_bus(bus_hub, Vector3(108.0, 0.04, -156.8), Color(0.84, 0.18, 0.18), 0.0)
-	_add_electric_city_bus(bus_hub, Vector3(142.0, 0.04, -143.8), Color(0.14, 0.56, 0.88), 0.0)
-
-	# F4. West Plaza Taxi & Ride-Hailing Waiting Canopy (出租车 / 网约车候客区, x = -104..-56, z = -216..-146)
-	_add_box(plaza_n, Vector3(48.0, 0.06, 68.0), Vector3(-82.0, 0.01, -182.0), asphalt_mat, 0.0, 0.0, 0.0, false)
-	_add_box(plaza_n, Vector3(10.0, 0.34, 56.0), Vector3(-62.0, 4.4, -182.0), roof_silver)
-	for tcz in range(-206, -154, 12):
-		_add_cyl(plaza_n, 0.18, 0.22, 4.3, Vector3(-62.0, 2.15, float(tcz)), steel_white, 8)
-	_add_sign_label(plaza_n, "出租车 · 网约车上客区  TAXI", Vector3(-56.8, 5.0, -182.0), PI * 0.5, 40, 0.022, Color(1.0, 0.84, 0.26))
-
-	# Warm plaza architectural night spotlights (HSR station + North Plaza + Bus Hub)
-	for lx in [-56.0, 0.0, 56.0, 126.0]:
-		var pl := OmniLight3D.new()
-		pl.position = Vector3(lx, 12.0, -172.0 if lx > 80.0 else -66.0)
-		pl.light_color = Color(1.0, 0.88, 0.68)
-		pl.omni_range = 68.0
-		pl.light_energy = 0.0
-		pl.visible = false
-		st.add_child(pl)
-		lights.append(pl)
+	# --- F. 1:1 Google Earth Calibrated North Plaza, Bus/Taxi Hubs, P2 Parking Garage & Landmark Buildings ---
+	JiaxingSouthPlazaBuilder.build(st, lights)
 
 
 static func _add_electric_city_bus(parent: Node3D, pos: Vector3, accent_col: Color, yaw: float) -> void:
@@ -675,49 +578,43 @@ static func _jiaxing_station(parent: Node3D, center: Vector3, angle: float, ligh
 	var warm_glow := _emissive(Color(1.0, 0.90, 0.70), 0.85)
 
 	# --- A. 3 Covered Rail Platforms along real 沪昆线 tracks (local X = NE-SW track axis) ---
+	# Sleek MAD vaulted platform canopies (dark ribbed crown + crisp white/silver aluminum side fascia beams)
 	for pz: float in [-18.5, 0.0, 18.5]:
-		# Platform slab (290m long, 7.2m wide, 1.25m high)
-		_add_box(jx, Vector3(290.0, 1.25, 7.2), Vector3(0.0, 0.65, pz), granite)
-		_add_box(jx, Vector3(288.0, 0.04, 0.26), Vector3(0.0, 1.30, pz - 3.15), yellow_line, 0.0, 0.0, 0.0, false)
-		_add_box(jx, Vector3(288.0, 0.04, 0.26), Vector3(0.0, 1.30, pz + 3.15), yellow_line, 0.0, 0.0, 0.0, false)
-		# Sleek modern cantilevered platform canopy (warm timber soffit + dark metal roof)
-		_add_box(jx, Vector3(268.0, 0.38, 8.8), Vector3(0.0, 7.6, pz), roof_silver)
-		_add_box(jx, Vector3(266.0, 0.18, 7.6), Vector3(0.0, 7.34, pz), ceiling_wood, 0.0, 0.0, 0.0, false)
-		_add_box(jx, Vector3(264.0, 0.10, 1.1), Vector3(0.0, 7.22, pz), warm_glow, 0.0, 0.0, 0.0, false)
-		for pi in range(-5, 6):
-			var px := float(pi) * 24.0
-			_add_cyl(jx, 0.24, 0.28, 6.2, Vector3(px, 4.3, pz), steel_white, 10)
+		# Platform slab (310m long, 7.4m wide, 1.25m high)
+		_add_box(jx, Vector3(310.0, 1.25, 7.4), Vector3(12.0, 0.65, pz), granite)
+		_add_box(jx, Vector3(308.0, 0.04, 0.26), Vector3(12.0, 1.30, pz - 3.25), yellow_line, 0.0, 0.0, 0.0, false)
+		_add_box(jx, Vector3(308.0, 0.04, 0.26), Vector3(12.0, 1.30, pz + 3.25), yellow_line, 0.0, 0.0, 0.0, false)
+		# Gently vaulted silver-slate ribbed canopy with gleaming white edge beams (ArchDaily #5/#34)
+		_add_box(jx, Vector3(296.0, 0.34, 8.8), Vector3(12.0, 7.65, pz), roof_silver)
+		_add_box(jx, Vector3(294.0, 0.32, 5.4), Vector3(12.0, 7.92, pz), solar_dark)
+		_add_box(jx, Vector3(296.0, 0.44, 0.42), Vector3(12.0, 7.62, pz - 4.35), steel_white)
+		_add_box(jx, Vector3(296.0, 0.44, 0.42), Vector3(12.0, 7.62, pz + 4.35), steel_white)
+		_add_box(jx, Vector3(292.0, 0.14, 7.2), Vector3(12.0, 7.38, pz), steel_white, 0.0, 0.0, 0.0, false)
+		_add_box(jx, Vector3(290.0, 0.08, 1.0), Vector3(12.0, 7.28, pz), warm_glow, 0.0, 0.0, 0.0, false)
+		for pi in range(-6, 7):
+			var px := 12.0 + float(pi) * 22.0
+			_add_cyl(jx, 0.22, 0.28, 6.2, Vector3(px, 4.3, pz), steel_white, 10)
 
-	# Overhead glass-and-wood passenger footbridge connecting all 3 platforms & main station hall
-	_add_box(jx, Vector3(22.0, 4.4, 72.0), Vector3(0.0, 10.6, -12.0), roof_silver)
-	_add_box(jx, Vector3(22.4, 3.0, 68.0), Vector3(0.0, 10.6, -12.0), glass_clear)
+	# Slender dark-steel glazed footbridge near SW end (matches ArchDaily #1/#5/#34 — center stays wide open!)
+	_add_box(jx, Vector3(7.6, 3.4, 52.0), Vector3(-92.0, 9.6, 0.0), _mat(Color(0.18, 0.21, 0.26), 0.38, 0.62))
+	_add_box(jx, Vector3(7.9, 2.2, 49.0), Vector3(-92.0, 9.5, 0.0), glass_clear)
 
 	# --- B. Parked Classic CR200J "复兴号绿巨人" Conventional Passenger Train at Platform 2 ---
 	_add_cr200j_train(jx, Vector3(-12.0, 0.44, -9.2))
 
-	# --- C. MAD "Train Station in the Forest" Floating Roof + Sunken Skylights (North Plaza, z = -48) ---
-	var lawn_slope := lawn_material()
+	# --- C. MAD "Train Station in the Forest" Chamfered Floating Solar Waiting Lobbies (North & South!) ---
 	var b1_floor := _mat(Color(0.76, 0.77, 0.78), 0.65, 0.04)
 	var b1_wall := _mat(Color(0.86, 0.85, 0.82), 0.70, 0.02)
-	var stone_warm := _mat(Color(0.83, 0.80, 0.74), 0.72, 0.03)
 	var dark_frame := _mat(Color(0.20, 0.23, 0.27), 0.48, 0.42)
 
-	# North forecourt granite plaza & sculpted green forest mounds framing the floating solar canopy
-	_add_box(jx, Vector3(136.0, 0.06, 52.0), Vector3(0.0, -0.01, -50.0), granite, 0.0, 0.0, 0.0, false)
-	for mx: float in [-58.0, 58.0]:
-		_add_box(jx, Vector3(36.0, 2.2, 34.0), Vector3(mx, 0.9, -56.0), lawn_slope, 0.0, -signf(mx) * 0.09)
-	# Ultra-low floating photovoltaic roof canopy (MAD signature low-profile timber-soffit roof hovering over sunken hall)
-	_add_box(jx, Vector3(132.0, 0.52, 42.0), Vector3(0.0, 7.8, -46.0), solar_dark)
-	_add_box(jx, Vector3(130.0, 0.30, 40.0), Vector3(0.0, 7.42, -46.0), ceiling_wood)
-	# Sunken glass skylight pavilion descending into the B1 station hall
-	_add_box(jx, Vector3(88.0, 5.4, 24.0), Vector3(0.0, 2.7, -46.0), glass_clear)
-	_add_box(jx, Vector3(82.0, 4.2, 20.0), Vector3(0.0, 2.1, -46.0), warm_glow, 0.0, 0.0, 0.0, false)
-	for ci in range(-6, 7):
-		var cx := float(ci) * 10.2
-		_add_cyl(jx, 0.24, 0.28, 7.4, Vector3(cx, 3.7, -64.0), steel_white, 10)
-		_add_cyl(jx, 0.24, 0.28, 7.4, Vector3(cx, 3.7, -28.0), steel_white, 10)
-	_add_sign_label(jx, "嘉 兴 站", Vector3(0.0, 9.5, -67.2), PI, 108, 0.034, Color(0.92, 0.16, 0.16))
-	_add_sign_label(jx, "JIAXING RAILWAY STATION", Vector3(0.0, 7.8, -67.2), PI, 34, 0.022, Color(0.94, 0.95, 0.98))
+	# North Heritage Forecourt granite promenade framing the 1909 historic station & People's Park
+	_add_box(jx, Vector3(164.0, 0.06, 66.0), Vector3(20.0, -0.01, -60.0), granite, 0.0, 0.0, 0.0, false)
+	# Twin MAD Chamfered-Trapezoid Rounded-Corner Floating Dark Solar Waiting Lobbies (North z=-45, South z=+45)
+	# Built with smooth curved chamfered corners, white aluminum halo rim, 3 recessed oval/square skylights & full glass walls!
+	JiaxingStationPlazaBuilder.build_waiting_lobby(jx, Vector2(20.0, -45.5), 146.0, 106.0, 42.0, true)
+	JiaxingStationPlazaBuilder.build_waiting_lobby(jx, Vector2(20.0, 45.5), 146.0, 106.0, 42.0, false)
+	_add_sign_label(jx, "嘉 兴 站", Vector3(20.0, 8.8, -67.2), PI, 98, 0.032, Color(0.92, 0.16, 0.16))
+	_add_sign_label(jx, "嘉 兴 站", Vector3(20.0, 8.8, 67.2), 0.0, 98, 0.032, Color(0.92, 0.16, 0.16))
 
 	# --- C2. Authentic B1 Underground Station Concourse, Transfer Hub & Sunken Courts (y = -10.0m .. -2.6m) ---
 	# Rich multi-zone underground transit hub: North Sunken Court + B1 Ticket/Security Hall + Central Timber Waiting Hall
@@ -812,84 +709,39 @@ static func _jiaxing_station(parent: Node3D, center: Vector3, angle: float, ligh
 		b1_pl.visible = true
 		b1.add_child(b1_pl)
 
-	# --- D. 1921 Historic Brick Old Jiaxing Station (嘉兴老火车站复建) in North Heritage Plaza ---
+	# --- D. 1909/1921 Historic Brick Old Jiaxing Station (嘉兴老火车站复建) centered at North Heritage Plaza ---
 	var old_st := Node3D.new()
-	old_st.position = Vector3(-48.0, 0.0, -86.0)
+	old_st.position = Vector3(20.0, 0.0, -72.0)
 	jx.add_child(old_st)
-	_add_box(old_st, Vector3(36.0, 10.2, 14.0), Vector3(0.0, 5.1, 0.0), brick_red)
-	_add_box(old_st, Vector3(36.4, 1.4, 14.4), Vector3(0.0, 0.7, 0.0), brick_grey)
-	_add_box(old_st, Vector3(36.4, 0.55, 14.4), Vector3(0.0, 5.4, 0.0), steel_white)
-	_add_box(old_st, Vector3(12.0, 12.6, 15.2), Vector3(0.0, 6.3, 0.0), brick_red)
-	_add_box(old_st, Vector3(38.0, 0.6, 9.2), Vector3(0.0, 11.4, -3.5), tile_grey, 0.0, 0.0, 0.42)
-	_add_box(old_st, Vector3(38.0, 0.6, 9.2), Vector3(0.0, 11.4, 3.5), tile_grey, 0.0, 0.0, -0.42)
-	_add_sign_label(old_st, "嘉 兴 老 站 · 1921", Vector3(0.0, 13.4, -7.8), PI, 56, 0.022, Color(0.96, 0.88, 0.62))
+	_add_box(old_st, Vector3(30.0, 9.6, 13.5), Vector3(0.0, 4.8, 0.0), brick_red)
+	_add_box(old_st, Vector3(30.4, 1.4, 13.9), Vector3(0.0, 0.7, 0.0), brick_grey)
+	_add_box(old_st, Vector3(30.4, 0.45, 13.9), Vector3(0.0, 5.1, 0.0), steel_white)
+	_add_box(old_st, Vector3(30.4, 0.40, 13.9), Vector3(0.0, 9.4, 0.0), steel_white)
+	# Central projecting pavilion + classical pediment gable
+	_add_box(old_st, Vector3(11.0, 11.6, 14.8), Vector3(0.0, 5.8, 0.0), brick_red)
+	_add_box(old_st, Vector3(11.4, 0.55, 15.1), Vector3(0.0, 11.7, 0.0), steel_white)
+	# Classical arched heritage windows & warm lit interior panes across both facades
+	for wx_w: float in [-11.5, -7.8, -3.2, 0.0, 3.2, 7.8, 11.5]:
+		for wy_w: float in [3.1, 7.2]:
+			_add_box(old_st, Vector3(1.5, 2.2, 14.2 if absf(wx_w) > 5.0 else 15.1), Vector3(wx_w, wy_w, 0.0), _mat(Color(0.20, 0.24, 0.28), 0.15, 0.35))
+			_add_box(old_st, Vector3(1.85, 0.28, 14.35 if absf(wx_w) > 5.0 else 15.25), Vector3(wx_w, wy_w + 1.2, 0.0), steel_white)
+	# Twin pitched slate roofs + ridge cresting
+	_add_box(old_st, Vector3(32.0, 0.55, 8.6), Vector3(0.0, 10.6, -3.2), tile_grey, 0.0, 0.0, 0.42)
+	_add_box(old_st, Vector3(32.0, 0.55, 8.6), Vector3(0.0, 10.6, 3.2), tile_grey, 0.0, 0.0, -0.42)
+	_add_sign_label(old_st, "嘉 兴 站 · 1909", Vector3(0.0, 12.8, -7.7), PI, 52, 0.022, Color(0.96, 0.88, 0.62))
 
-	# --- E. Authentic Jiaxing Station South Plaza Complex ("森林中的火车站" 南广场完整建筑群与森林公园) ---
-	var tree_trunk := _mat(Color(0.32, 0.24, 0.17), 0.88, 0.0)
-	var tree_green := _mat(Color(0.20, 0.46, 0.20), 0.82, 0.0)
-	var tree_bright := _mat(Color(0.28, 0.54, 0.24), 0.80, 0.0)
-	var facade_cream := _mat(Color(0.86, 0.83, 0.77), 0.68, 0.03)
-
-	# Full-block South Plaza granite & sunken forest lawn promenade (z = +32 .. +146)
-	_add_box(jx, Vector3(236.0, 0.05, 112.0), Vector3(0.0, -0.01, 88.0), granite, 0.0, 0.0, 0.0, false)
-	# Sweeping floating timber-and-glass South Entrance Pavilion connecting directly down to B1
-	_add_box(jx, Vector3(106.0, 0.50, 30.0), Vector3(0.0, 7.2, 48.0), solar_dark)
-	_add_box(jx, Vector3(104.0, 0.28, 28.0), Vector3(0.0, 6.82, 48.0), ceiling_wood)
-	_add_box(jx, Vector3(76.0, 5.4, 17.0), Vector3(0.0, 2.7, 48.0), glass_clear)
-	_add_box(jx, Vector3(70.0, 4.2, 14.0), Vector3(0.0, 2.1, 48.0), warm_glow, 0.0, 0.0, 0.0, false)
-	for sci in range(-5, 6):
-		_add_cyl(jx, 0.24, 0.28, 6.8, Vector3(float(sci) * 10.0, 3.4, 61.5), steel_white, 10)
-	_add_sign_label(jx, "嘉 兴 站 · 南 广 场", Vector3(0.0, 8.8, 63.4), 0.0, 102, 0.034, Color(0.92, 0.16, 0.16))
-
-	# Circular Sunken Daylight Atrium Dome in central South Plaza (南广场下沉绿岛玻璃中庭)
-	_add_cyl(jx, 15.0, 16.5, 1.4, Vector3(0.0, 0.7, 84.0), lawn_slope, 20)
-	_add_cyl(jx, 11.2, 12.6, 2.8, Vector3(0.0, 2.1, 84.0), glass_clear, 20)
-	_add_cyl(jx, 12.8, 12.8, 0.35, Vector3(0.0, 3.6, 84.0), roof_silver, 20)
-
-	# Full Multi-Wing South Plaza Architectural Ensemble (东西两侧真实红砖/石材商业综合体、酒店、办公楼、文化展馆)
-	for side_s: float in [-1.0, 1.0]:
-		# 1. Inner Heritage Brick Cultural & Commercial Pavilion flanking central plaza (x = ±62, z = 78)
-		var ix_s := side_s * 62.0
-		_add_box(jx, Vector3(44.0, 10.2, 48.0), Vector3(ix_s, 5.1, 78.0), brick_red if side_s < 0.0 else stone_warm)
-		_add_box(jx, Vector3(44.6, 4.4, 44.0), Vector3(ix_s, 2.6, 78.0), glass_clear)
-		_add_box(jx, Vector3(46.0, 0.65, 50.0), Vector3(ix_s, 10.5, 78.0), solar_dark)
-		_add_box(jx, Vector3(32.0, 7.6, 32.0), Vector3(ix_s + side_s * 3.0, 14.3, 80.0), facade_cream)
-		_add_box(jx, Vector3(32.5, 4.6, 28.0), Vector3(ix_s + side_s * 3.0, 14.3, 80.0), glass_clear)
-		_add_box(jx, Vector3(34.0, 0.55, 34.0), Vector3(ix_s + side_s * 3.0, 18.3, 80.0), dark_frame)
-		# 2. Outer Multi-Story Commercial & Station Hotel Complex (x = ±106, z = 74)
-		var ox_s := side_s * 106.0
-		_add_box(jx, Vector3(36.0, 11.0, 56.0), Vector3(ox_s, 5.5, 74.0), stone_warm)
-		_add_box(jx, Vector3(36.6, 4.6, 52.0), Vector3(ox_s, 2.8, 74.0), glass_clear)
-		_add_box(jx, Vector3(26.0, 22.0, 30.0), Vector3(ox_s, 21.0, 68.0), facade_cream if side_s > 0.0 else brick_red)
-		_add_box(jx, Vector3(26.5, 18.0, 26.0), Vector3(ox_s, 21.0, 68.0), glass_clear)
-		_add_box(jx, Vector3(27.6, 0.8, 31.6), Vector3(ox_s, 32.4, 68.0), dark_frame)
-		# 3. South-Wing Retail Arcade & Pedestrian Gallery (x = ±68, z = 124)
-		_add_box(jx, Vector3(52.0, 12.6, 28.0), Vector3(side_s * 68.0, 6.3, 124.0), brick_red if side_s > 0.0 else facade_cream)
-		_add_box(jx, Vector3(52.6, 4.8, 24.0), Vector3(side_s * 68.0, 3.0, 124.0), glass_clear)
-		_add_box(jx, Vector3(54.0, 0.55, 30.0), Vector3(side_s * 68.0, 12.9, 124.0), solar_dark)
-		# 4. South Plaza terraced forest lawns flanking the central pedestrian promenade
-		_add_box(jx, Vector3(24.0, 1.3, 44.0), Vector3(side_s * 28.0, 0.65, 86.0), lawn_slope)
-		# Lush "Forest Station" tree rows lining both plazas
-		for ti in range(5):
-			var tz_tr := 64.0 + float(ti) * 11.5
-			var tx_tr := side_s * (24.0 + float(ti % 2) * 8.0)
-			ParkLandscapeBuilder.plant_tree(jx, Vector3(tx_tr, 0.5, tz_tr), 1, 1.0, ParkLandscapeBuilder.CAMPHOR if (ti % 2 == 0) else ParkLandscapeBuilder.CAMPHOR_LT)
+	# Twin North Plaza Sunken Circular Courtyards + Axial Tree-Lined Promenade (ArchDaily #1/#6)
+	for side_n: float in [-1.0, 1.0]:
 		for nti in range(5):
-			var nx_tr := side_s * (46.0 + float(nti) * 11.0)
-			var nz_tr := -62.0 - float(nti % 2) * 10.0
-			ParkLandscapeBuilder.plant_tree(jx, Vector3(nx_tr, 0.0, nz_tr), 1, 1.05, ParkLandscapeBuilder.CAMPHOR if (nti % 2 == 0) else ParkLandscapeBuilder.CAMPHOR_LT)
+			var nx_tr := 20.0 + side_n * (12.5 + float(nti % 2) * 14.0)
+			var nz_tr := -84.0 - float(nti) * 11.5
+			ParkLandscapeBuilder.plant_tree(jx, Vector3(nx_tr, 0.0, nz_tr), 1, 0.95, ParkLandscapeBuilder.CAMPHOR if (nti % 2 == 0) else ParkLandscapeBuilder.CAMPHOR_LT)
 
-	# South Plaza Bus & Coach Transit Hub (南广场公交与客运换乘枢纽: 6 sheltered bays + waiting hall)
-	_add_box(jx, Vector3(68.0, 0.42, 18.0), Vector3(0.0, 5.4, 122.0), roof_silver)
-	_add_box(jx, Vector3(66.0, 0.20, 16.0), Vector3(0.0, 5.12, 122.0), ceiling_wood, 0.0, 0.0, 0.0, false)
-	_add_box(jx, Vector3(24.0, 4.6, 10.0), Vector3(0.0, 2.3, 122.0), glass_clear)
-	for bci in range(-4, 5):
-		_add_cyl(jx, 0.22, 0.26, 5.2, Vector3(float(bci) * 8.0, 2.6, 114.0), dark_frame, 8)
-		_add_cyl(jx, 0.22, 0.26, 5.2, Vector3(float(bci) * 8.0, 2.6, 130.0), dark_frame, 8)
-	_add_sign_label(jx, "嘉兴站南广场公交枢纽", Vector3(0.0, 6.5, 131.5), 0.0, 58, 0.022, Color(0.92, 0.96, 1.0))
+	# --- E. 1:1 ArchDaily / MAD Architects Jiaxing Station South Plaza (Built natively in jx local space!) ---
+	JiaxingStationPlazaBuilder.build(jx, lights)
 
 	var pl := OmniLight3D.new()
-	pl.position = Vector3(0.0, 9.0, -56.0)
+	pl.position = Vector3(28.0, 9.0, -56.0)
 	pl.light_color = Color(1.0, 0.88, 0.68)
 	pl.omni_range = 55.0
 	pl.light_energy = 0.0
@@ -897,7 +749,7 @@ static func _jiaxing_station(parent: Node3D, center: Vector3, angle: float, ligh
 	jx.add_child(pl)
 	lights.append(pl)
 	var pl_s := OmniLight3D.new()
-	pl_s.position = Vector3(0.0, 9.0, 68.0)
+	pl_s.position = Vector3(36.0, 9.0, 56.0)
 	pl_s.light_color = Color(1.0, 0.90, 0.72)
 	pl_s.omni_range = 65.0
 	pl_s.light_energy = 0.0
