@@ -86,6 +86,8 @@ static func build_city(
 	# Seattle Center (Space Needle, Climate Pledge Arena, MoPOP...) and Elliott Bay waterfront landmarks
 	if map_data.get("landmarks", {}).has("space_needle"):
 		SeattleV2Landmarks.build(parent, map_data, lm_info["lights"])
+	if map_data.get("landmarks", {}).has("construction_sites") and not is_zh:
+		SeattleConstructionBuilder.build(parent, map_data, lm_info["lights"])
 	if map_data.get("landmarks", {}).has("jiaxing_south_station"):
 		JiaxingLandmarks.build(parent, map_data, lm_info["lights"])
 	for lm_nm: String in ["JiaxingLandmarks", "SeattleV2Landmarks", "SeattleLandmarks"]:
