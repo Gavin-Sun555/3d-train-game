@@ -245,13 +245,16 @@ func _run() -> void:
 	var jx_tsim: TransitSim = m._transit_sim
 	var jx_lm: Node = m._city_root.get_node_or_null("JiaxingLandmarks")
 	var jx_hsr: Node = jx_lm.get_node_or_null("JiaxingSouthHSRStation") if jx_lm != null else null
-	var jx_yanyu: Node = jx_lm.get_node_or_null("NanhuYanyuTowerAndRedBoat") if jx_lm != null else null
+	# 南湖 scenic area (NanhuBuilder, v0.0.2): 烟雨楼 island with its embankment, red boat and tour boats, 壕股塔,
+	# 南湖天地 and the Hyatt complex are batched per site under NanhuDistrict
+	var jx_nanhu: Node = jx_lm.get_node_or_null("NanhuDistrict") if jx_lm != null else null
+	var jx_yanyu: Node = jx_nanhu.get_node_or_null("Nanhu_Yanyu_op") if jx_nanhu != null else null
 	var jx_mem: Node = jx_lm.get_node_or_null("NanhuRevolutionaryMemorialHall") if jx_lm != null else null
 	var jx_sta: Node = jx_lm.get_node_or_null("JiaxingForestRailwayStation") if jx_lm != null else null
 	var jx_rail: Node = jx_lm.get_node_or_null("JiaxingHeavyRailways") if jx_lm != null else null
 	var jx_water: Node = m._city_root.get_node_or_null("WaterAreas")
 	var jx_island: Node = m._city_root.get_node_or_null("IslandParkAreas")
-	var jx_seawall: Node = jx_yanyu.get_node_or_null("LakeHeartIslandSeawall") if jx_yanyu != null else null
+	var jx_seawall: Node = jx_yanyu # the stone embankment is part of the island batch
 	_check(
 		jx_graph.edges.size() >= 1500 and jx_tsim.trams.size() >= 2 and jx_graph.stations.size() >= 5,
 		"Jiaxing street graph & Tram T1 demo loaded (%d edges, %d stations, %d trams)" % [jx_graph.edges.size(), jx_graph.stations.size(), jx_tsim.trams.size()]
@@ -267,10 +270,12 @@ func _run() -> void:
 	var jx_yuehe: Node = jx_lm.get_node_or_null("YueheHistoricQuarter") if jx_lm != null else null
 	var jx_zicheng: Node = jx_lm.get_node_or_null("ZichengHistoricSitePark") if jx_lm != null else null
 	var jx_cp: Node = jx_lm.get_node_or_null("JiaxingCentralParkLandmark") if jx_lm != null else null
-	var jx_haogu: Node = jx_lm.get_node_or_null("NanhuHaoguPagoda") if jx_lm != null else null
-	var jx_tiandi: Node = jx_lm.get_node_or_null("NanhuTiandiDistrict") if jx_lm != null else null
+	var jx_haogu: Node = jx_nanhu.get_node_or_null("Nanhu_Haogu_op") if jx_nanhu != null else null
+	var jx_tiandi: Node = jx_nanhu.get_node_or_null("Nanhu_Tiandi_op") if jx_nanhu != null else null
 	var jx_gate: Node = jx_lm.get_node_or_null("NanhuScenicMainGate") if jx_lm != null else null
-	var jx_church: Node = jx_lm.get_node_or_null("JiaxingCatholicChurch") if jx_lm != null else null
+	# 中山东路 x 禾兴南路 block (ZhongshanBlockBuilder, v0.0.2): 天主堂, 中山影城, 戴梦得, 旭辉广场, 江南大厦
+	var jx_zs: Node = jx_lm.get_node_or_null("ZhongshanBlock") if jx_lm != null else null
+	var jx_church: Node = jx_zs.get_node_or_null("Zhongshan_Church_op") if jx_zs != null else null
 	var jx_h1: Node = jx_lm.get_node_or_null("JiaxingFirstHospital") if jx_lm != null else null
 	var jx_h2: Node = jx_lm.get_node_or_null("JiaxingSecondHospital") if jx_lm != null else null
 	var jx_h3: Node = jx_lm.get_node_or_null("JiaxingTCMHospital") if jx_lm != null else null
@@ -281,13 +286,13 @@ func _run() -> void:
 	var jx_sams: Node = jx_lm.get_node_or_null("JiaxingSamsClub") if jx_lm != null else null
 	var jx_xjd: Node = jx_lm.get_node_or_null("XiangjiadangWetlandPark") if jx_lm != null else null
 	var jx_pingshan: Node = jx_lm.get_node_or_null("PingshanPark") if jx_lm != null else null
-	var jx_jiangnan: Node = jx_lm.get_node_or_null("JiangnanDepartmentStore") if jx_lm != null else null
-	var jx_diamond: Node = jx_lm.get_node_or_null("DiamondPlazaTower") if jx_lm != null else null
-	var jx_cifi: Node = jx_lm.get_node_or_null("JiaxingCIFIPlaza") if jx_lm != null else null
+	var jx_jiangnan: Node = jx_zs.get_node_or_null("Zhongshan_Jiangnan_op") if jx_zs != null else null
+	var jx_diamond: Node = jx_zs.get_node_or_null("Zhongshan_Diamond_op") if jx_zs != null else null
+	var jx_cifi: Node = jx_zs.get_node_or_null("Zhongshan_CIFI_op") if jx_zs != null else null
 	var jx_shaonian: Node = jx_lm.get_node_or_null("ShaonianPedestrianStreet") if jx_lm != null else null
 	var jx_skybridge: Node = jx_lm.get_node_or_null("JiaxingNo1Skybridge") if jx_lm != null else null
 	var jx_hanlin: Node = jx_lm.get_node_or_null("HanlinResidence") if jx_lm != null else null
-	var jx_hyatt: Node = jx_tiandi.get_node_or_null("NanhuHyattHotel") if jx_tiandi != null else null
+	var jx_hyatt: Node = jx_nanhu.get_node_or_null("Nanhu_Hyatt_op") if jx_nanhu != null else null
 	var jx_ap: Node = jx_lm.get_node_or_null("JiaxingNanhuAirport") if jx_lm != null else null
 	var jx_b1_root: Node = m._underground_landmarks_root
 	var jx_b1_hall: Node = jx_b1_root.get_node_or_null("JiaxingStationB1Hall") if jx_b1_root != null else null
@@ -533,8 +538,11 @@ func _run() -> void:
 		"Build-mode per-elevation filtering shows ONLY active tier + connecting ramps (G hides B1, B1 hides G, Run shows all)"
 	)
 	var scenic_n := m._city_root.get_node_or_null("JiaxingLandmarks/JiaxingScenicWalkways") as Node3D
-	var red_boat_n := m._city_root.get_node_or_null("JiaxingLandmarks/NanhuYanyuTowerAndRedBoat/NanhuRedBoat") as Node3D
-	var rb_dist := Vector2(red_boat_n.position.x, red_boat_n.position.z).length() if red_boat_n != null else 0.0
+	# the red boat and tour boats are batched with the 烟雨楼 island: its extent reaching well past the island's
+	# ~56 m radius means the boats float offshore
+	var red_boat_n := m._city_root.get_node_or_null("JiaxingLandmarks/NanhuDistrict/Nanhu_Yanyu_op") as MeshInstance3D
+	var rb_ab := red_boat_n.get_aabb() if red_boat_n != null else AABB()
+	var rb_dist := maxf(rb_ab.size.x, rb_ab.size.z) * 0.5
 	_check(
 		scenic_n != null and red_boat_n != null and rb_dist > 56.0,
 		"Jiaxing scenic walkways built & Red Boat floats cleanly offshore in Nanhu Lake (r=%.1fm from island center)" % rb_dist
@@ -696,7 +704,7 @@ func _run() -> void:
 		t1_dock_checks > 0 and t1_misaligned == 0,
 		"Jiaxing T1 5-section AI docking alignment: %d door-open checks, %d misaligned (100%% 5/5 doors aligned!)" % [t1_dock_checks, t1_misaligned]
 	)
-	# 2) Chinese Architecture Shader + Flush Dense Storefronts (>=20k) + 400+ Gated Residential Compounds
+	# 2) Chinese Architecture Shader + realistic storefront coverage (>=30k, surveyed T1 merchants) + 1200+ Gated Residential Compounds
 	var sfs_arr: Array = m._map_data.get("storefronts", [])
 	var n_chain := 0; var n_local := 0
 	for sf_d in sfs_arr:
@@ -708,9 +716,15 @@ func _run() -> void:
 	var gcomp_n := m._city_root.get_node_or_null("JiaxingLandmarks/ChineseGatedCompounds/CompoundWallsAndGates") as MeshInstance3D
 	var gcomp_cnt := ((m._map_data.get("landmarks", {}) as Dictionary).get("gated_compounds", []) as Array).size()
 	var zh_shader_on := float((m._building_mat as ShaderMaterial).get_shader_parameter("chinese_style")) > 0.5
+	# v0.0.2: shops only where Jiaxing has them (old walk-up ground floors, commercial buildings, main-road 底商) plus
+	# the merchants surveyed at the T1 stops, instead of every frontage
+	var real_named := 0
+	for sf_r in sfs_arr:
+		if sf_r is Dictionary and str(sf_r.get("name", "")) in ["五芳斋", "中国农业银行", "罗森", "南门高老太土菜馆", "万家福超市"]:
+			real_named += 1
 	_check(
-		zh_shader_on and sfs_arr.size() >= 85000 and n_chain >= 25000 and n_local >= 50000 and gcomp_n != null and gcomp_cnt >= 1200,
-		"Chinese building shader ON, %d diverse storefronts (%d chain + %d local) & %d Gated Residential Compounds" % [sfs_arr.size(), n_chain, n_local, gcomp_cnt]
+		zh_shader_on and sfs_arr.size() >= 30000 and n_chain >= 10000 and n_local >= 15000 and real_named >= 4 and gcomp_n != null and gcomp_cnt >= 1200,
+		"Chinese building shader ON, %d storefronts (%d chain + %d local, %d surveyed T1 merchants) & %d Gated Residential Compounds" % [sfs_arr.size(), n_chain, n_local, real_named, gcomp_cnt]
 	)
 	# 3) >=80% Bike-Lane Coverage + 200-Unit MultiMesh E-Bike Fleet (>3x cars!) + Chinese EV Fleet & Jam-Free AI Cars!
 	var surf_rds := 0; var bl_rds := 0

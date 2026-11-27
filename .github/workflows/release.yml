@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (e.g. v0.0.1)'
+        description: 'Release tag (e.g. v0.0.2)'
         required: true
-        default: 'v0.0.1'
+        default: 'v0.0.2'
 
 permissions:
   contents: write
@@ -153,10 +153,12 @@ jobs:
             Standalone 3D streetcar, light rail & monorail simulation built with Godot 4.7.
 
             ### Highlights
-            - **Transit Simulation & Fleet**: Up to 15 trams per line, express/local quad-island passing, headway pacing, manual unscheduled stop boarding, per-line AI mode groups (`No Default` / `Slow` / `Normal` / `Furious`), and two-pass terminal crossover interlocking.
-            - **Weather & Audio**: Sunny, Cloudy, and Rainy weather modes with GPU rain streaks, dynamic sky/fog/lighting, and stereo procedural rain ambience (with cab muffling).
-            - **Bilingual Localization**: Automatic Chinese / English detection from system locale with live in-game language switching.
-            - **Persistence & Performance**: Run-slot persistence for signal priority (TSP), line AI groups, terminal reservations, and weather; smooth startup/mode-switch loading with GPU & tile prewarming.
+            - **New city: Jiaxing (嘉兴)**: Nanhu (南湖 lake, 烟雨楼 island, 壕股塔), the Yuehe (月河) watertown quarter, the Zhongshan Rd (中山东路) downtown, the 南湖天地 shopping district, Jiaxing Station with its B1 underground stop, Jiaxing South HSR Station, the Inner Ring viaduct, canals and HSR lines, plus thousands of real street shops.
+            - **Line T1 as built**: all 16 real stops on the CRRC 南湖号 tram, centre-median boulevards at their surveyed widths, straight running through junctions, and an underground section through Jiaxing Station.
+            - **Street life**: real road cross-sections with side roads (辅路), lane markings, planted bike buffers, e-bikes with two-stage left turns, Chinese EV traffic, gated compounds, road-name plates and overhead guide signs.
+            - **Cab & weather**: rear-view mirrors and glass-mounted wipers on every tram model; rain builds up on the windscreen until you switch the wipers on (`I`); no rain inside tunnels.
+            - **Performance**: far city tiles keep only what is visible from a distance, network-wide meshes are distance-culled (about half the triangles per frame), and the hitches when tiles reload are gone.
+            - **Also**: Quit Game buttons, a Furious AI mode with terminus priority, Operations Board route length / trip time, Seattle construction sites, and many fixes.
 
             ### Downloads
             - **macOS (Universal)**: `3d-train-game-${{ steps.meta.outputs.version }}-macos-universal.zip`
